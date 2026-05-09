@@ -20,3 +20,9 @@ rad.json
 *.flf
 #Test results file
 TestResults.xml
+
+### Python / NLP ###
+.venv/
+__pycache__/
+*.pyc
+outputs/
