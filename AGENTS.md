@@ -1,13 +1,13 @@
 ## Project Goal
 
-* **Description:** AMLK is a Hebrew text summarization research project. The goal is to fine-tune the Qwen 3.5 2B language model on Hebrew summarization datasets, evaluate it with ROUGE, BERTScore, and LLM-based metrics, and produce a research paper and presentation. The project runs locally for development and on HuggingFace infrastructure for training jobs when local compute is insufficient; all scripts are executed as command-line Python scripts.
+* **Description:** AMLK is a Hebrew text summarization research project. The goal is to fine-tune the `Qwen/Qwen3-2B` language model on Hebrew summarization datasets, evaluate it with ROUGE, BERTScore, and LLM-based metrics, and produce a research paper and presentation. The project runs locally for development and on HuggingFace infrastructure for training jobs when local compute is insufficient; all scripts are executed as command-line Python scripts.
 
 ---
 
 ## Project Structure - remember to update it when you make changes
 
 * **Architecture:** The project is divided into three sequential pipelines:
-  1. **Training pipeline** — downloads Hebrew summarization datasets (IAHLT summarization_he, HeSum), loads the Qwen 3.5 2B base model, and fine-tunes it using the HuggingFace `transformers`/`trl` stack. If local GPU is insufficient, the job is submitted to HuggingFace as a remote training job.
+  1. **Training pipeline** — downloads Hebrew summarization datasets (IAHLT summarization_he, HeSum), loads the `Qwen/Qwen3-2B` base model, and fine-tunes it using the HuggingFace `transformers`/`trl` stack. If local GPU is insufficient, the job is submitted to HuggingFace as a remote training job.
   2. **Evaluation pipeline** — takes the fine-tuned checkpoint and runs it against a held-out test set, computing ROUGE scores, BERTScore, and an LLM-as-judge evaluation (via the Gemini API).
   3. **Results & reporting** — aggregated metrics feed into the final paper and presentation.
 
@@ -26,19 +26,37 @@
 /AMLK
 ├── .claude/
 │   └── skills/
-│       └── coding-principles/SKILL.md   # Project-local coding standards
+│       └── coding-principles/SKILL.md    # Project-local coding standards
 ├── data/
 │   ├── __init__.py
-│   └── download.py                      # Pipeline step 1: downloads & normalizes IAHLT+HeSum datasets
+│   ├── download.py                       # Pipeline step 1: downloads & normalizes IAHLT+HeSum datasets
+│   └── preprocess.py                     # Pipeline step 2: formats instruction pairs, splits 80/10/10, saves Arrow datasets
+├── training/
+│   ├── __init__.py
+│   ├── config.py                         # Shared LoRAConfig, TrainingConfig, MODEL_ID, RESPONSE_TEMPLATE
+│   ├── train_qlora.py                    # QLoRA 4-bit fine-tuning (~8 GB VRAM)
+│   ├── train_lora.py                     # LoRA bf16 fine-tuning (~16 GB VRAM)
+│   └── train_full.py                     # Full fine-tuning locally, or --submit-hf for HF Space upload
+├── evaluation/
+│   ├── __init__.py
+│   ├── eval_rouge.py                     # ROUGE-1/2/L scorer (Stage B — NotImplementedError stub)
+│   ├── eval_bertscore.py                 # BERTScore scorer (Stage B — NotImplementedError stub)
+│   └── eval_llm.py                       # Gemini LLM-as-judge scorer (Stage B — NotImplementedError stub)
 ├── tests/
 │   ├── __init__.py
-│   └── test_download.py                 # Unit tests for download.py normalization functions
-├── training/                            # (planned) Fine-tuning scripts
-├── evaluation/                          # (planned) ROUGE / BERTScore / LLM eval scripts
+│   ├── test_download.py                  # Unit tests for normalize_iahlt / normalize_hesum
+│   └── test_preprocess.py               # Unit tests for format_instruction / split_dataset
+├── docs/
+│   └── superpowers/
+│       ├── specs/2026-05-26-training-pipeline-design.md
+│       └── plans/2026-05-26-stage-a-training-pipeline.md
 ├── outputs/
-│   └── data/
-│       └── raw/
-│           └── combined.jsonl           # Merged normalized dataset (gitignored)
+│   ├── data/
+│   │   ├── raw/combined.jsonl            # Merged normalized dataset — 10,000 records (gitignored)
+│   │   └── processed/                   # Arrow dataset splits: train/ val/ test/ (gitignored)
+│   ├── checkpoints/                     # LoRA adapter / full model checkpoints (gitignored)
+│   └── results/                         # Evaluation JSON reports (gitignored)
+├── .venv/                               # Python virtual environment (gitignored)
 ├── .env                                 # HF_TOKEN, GEMINI_API_KEY — never commit
 ├── .gitignore
 ├── AGENTS.md
@@ -48,12 +66,14 @@
 └── TODO.md                              # Milestone tracker
 ```
 
-* `.claude/skills/coding-principles/`: Defines project coding standards — all contributors (human and AI) must follow this skill.
-* `data/download.py`: Downloads Hebrew summarization datasets (biunlp/HeSum, and IAHLT/summarization_he when accessible), normalises to `{text, summary, source}` schema, and writes to `outputs/data/raw/combined.jsonl`.
-* `tests/test_download.py`: Unit tests for the normalization functions in `data/download.py`.
-* `training/`: Fine-tuning entry points and configuration.
-* `evaluation/`: Scripts for each evaluation method (ROUGE, BERTScore, LLM judge).
-* `outputs/`: Checkpoints, generated summaries, metric JSON/CSV files. Gitignored once large artifacts appear.
+* `data/download.py`: Downloads Hebrew summarization datasets (biunlp/HeSum; IAHLT/summarization_he inaccessible with current credentials), normalises to `{text, summary, source}` schema, writes to `outputs/data/raw/combined.jsonl`.
+* `data/preprocess.py`: Reads `combined.jsonl`, formats each example as a Hebrew summarization instruction pair (adds `formatted` column), splits 80/10/10, saves Arrow dataset splits. Does NOT tokenize — SFTTrainer handles that.
+* `training/config.py`: Shared constants and dataclasses used by all three training scripts: `MODEL_ID="Qwen/Qwen3-2B"`, `LoRAConfig` (r=16, alpha=32), `TrainingConfig`.
+* `training/train_qlora.py`: QLoRA 4-bit fine-tuning using `BitsAndBytesConfig` + LoRA. Saves adapter checkpoint, `training_args.json`, and `predictions.jsonl`.
+* `training/train_lora.py`: LoRA bf16 fine-tuning (no quantization). Same outputs as QLoRA variant.
+* `training/train_full.py`: Full fine-tuning of all weights. `--submit-hf --hf-user <name>` uploads data to HF Hub and prints Space training instructions.
+* `evaluation/eval_*.py`: Stage B stubs — correct function signatures and CLI, body raises `NotImplementedError`.
+* `tests/test_download.py` / `tests/test_preprocess.py`: 9 unit tests, all passing.
 
 ---
 
@@ -61,25 +81,54 @@
 
 **Prerequisites:**
 * Python 3.10+
-* `pip install transformers trl datasets accelerate evaluate bert-score rouge-score google-generativeai`
-* Copy `.env.example` → `.env` and fill in:
-  * `HF_TOKEN` — HuggingFace access token (needed for model download and remote jobs)
-  * `GEMINI_API_KEY` — Gemini API key (needed for LLM-based evaluation)
-* Source the env before running any script: `source .env`
+* `uv` package manager (used instead of pip — `uv` is on PATH)
+* Install dependencies: `uv pip install -r requirements.txt` (or `uv sync` if using a lockfile)
+* Fill in `.env`:
+  * `HF_TOKEN` — HuggingFace access token (needed for model download and HF Hub upload)
+  * `GEMINI_API_KEY` — Gemini API key (needed for LLM-based evaluation in Stage B)
+* Source the env and activate venv before running scripts: `source .env && source .venv/bin/activate`
 
-**Build Steps (if applicable):**
-1. Download datasets: scripts in `data/` (planned)
-2. Preprocess / tokenise: output written to `data/processed/`
+**Running the pipeline (Stage A):**
+```bash
+source .env && source .venv/bin/activate
 
-**Running the Application:**
-1. Fine-tune: `python training/train.py` (or submit as HF job — see training README when added)
-2. Evaluate: `python evaluation/evaluate.py --checkpoint outputs/<run-name>`
+# Step 1: Download datasets
+python data/download.py
+
+# Step 2: Preprocess (format + split)
+python data/preprocess.py
+
+# Step 3a: Fine-tune with QLoRA (~8 GB VRAM)
+python training/train_qlora.py --output outputs/checkpoints/run-qlora-01
+
+# Step 3b: Fine-tune with LoRA bf16 (~16 GB VRAM)
+python training/train_lora.py --output outputs/checkpoints/run-lora-01
+
+# Step 3c: Full fine-tune locally (~40 GB VRAM)
+python training/train_full.py --output outputs/checkpoints/run-full-01
+
+# Step 3c (alternative): Upload data to HF Hub and get Space instructions
+python training/train_full.py --submit-hf --hf-user <your-hf-username>
+```
+
+**Running tests:**
+```bash
+source .venv/bin/activate && python -m pytest tests/ -v
+```
 
 ---
 
 ## Status - remember to update it
 
-Dataset download (Task 2) is complete as of 2026-05-26. `data/download.py` downloads and normalizes Hebrew summarization datasets (biunlp/HeSum successfully; IAHLT/summarization_he is inaccessible — requires gating approval or different credentials). The combined dataset has 10,000 records written to `outputs/data/raw/combined.jsonl`. Next step is preprocessing/tokenization (Task 3), followed by model fine-tuning (pipeline A). The presentation deadline is 2026-06-14 and final project submission is 2026-07-31.
+**Stage A complete as of 2026-05-27.** The full training pipeline is implemented:
+- `data/download.py` — 10,000 records from biunlp/HeSum in `outputs/data/raw/combined.jsonl`. IAHLT/summarization_he is inaccessible (not on HF Hub with current credentials).
+- `data/preprocess.py` — 8,000 train / 1,000 val / 1,000 test splits in `outputs/data/processed/`.
+- `training/train_qlora.py`, `train_lora.py`, `train_full.py` — three fine-tuning variants implemented.
+- `evaluation/eval_*.py` — Stage B stubs in place.
+- 9 unit tests, all passing.
+- Known limitation: `DataCollatorForCompletionOnlyLM` was removed in trl 1.5.0; training scripts use full-sequence loss. Can be improved with `SFTConfig(completion_only_loss=True)` + prompt/completion column split.
+
+**Next steps:** Stage B (evaluation pipeline) — implement `eval_rouge.py`, `eval_bertscore.py`, `eval_llm.py`. Presentation deadline: 2026-06-14. Final submission: 2026-07-31.
 
 ---
 
