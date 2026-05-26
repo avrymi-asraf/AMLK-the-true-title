@@ -18,7 +18,7 @@ from pathlib import Path
 import datasets as hf_datasets
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from trl import DataCollatorForCompletionOnlyLM, SFTConfig, SFTTrainer
+from trl import SFTConfig, SFTTrainer
 
 from training.config import (
     DATA_DIR,
@@ -133,8 +133,6 @@ def main():
     print("Loading model (full bf16, no LoRA)...")
     model, tokenizer = build_model_and_tokenizer(hf_token)
 
-    collator = DataCollatorForCompletionOnlyLM(RESPONSE_TEMPLATE, tokenizer=tokenizer)
-
     train_cfg = TrainingConfig()
     train_cfg.per_device_train_batch_size = 1
     train_cfg.gradient_accumulation_steps = 16
@@ -164,7 +162,6 @@ def main():
         train_dataset=train_ds,
         eval_dataset=val_ds,
         tokenizer=tokenizer,
-        data_collator=collator,
     )
 
     print("Starting full fine-tuning...")
