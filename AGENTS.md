@@ -36,7 +36,8 @@
 │   ├── config.py                         # Shared LoRAConfig, TrainingConfig, MODEL_ID, RESPONSE_TEMPLATE
 │   ├── train_qlora.py                    # QLoRA 4-bit fine-tuning (~8 GB VRAM)
 │   ├── train_lora.py                     # LoRA bf16 fine-tuning (~16 GB VRAM)
-│   └── train_full.py                     # Full fine-tuning locally, or --submit-hf for HF Space upload
+│   ├── train_full.py                     # Full fine-tuning locally, or --submit-hf to submit HF Jobs job
+│   └── train_hf_job.py                   # Self-contained UV script run by HF Jobs (submitted by train_full.py --submit-hf)
 ├── evaluation/
 │   ├── __init__.py
 │   ├── eval_rouge.py                     # ROUGE-1/2/L scorer (Stage B — NotImplementedError stub)
@@ -71,7 +72,8 @@
 * `training/config.py`: Shared constants and dataclasses used by all three training scripts: `MODEL_ID="Qwen/Qwen3-2B"`, `LoRAConfig` (r=16, alpha=32), `TrainingConfig`.
 * `training/train_qlora.py`: QLoRA 4-bit fine-tuning using `BitsAndBytesConfig` + LoRA. Saves adapter checkpoint, `training_args.json`, and `predictions.jsonl`.
 * `training/train_lora.py`: LoRA bf16 fine-tuning (no quantization). Same outputs as QLoRA variant.
-* `training/train_full.py`: Full fine-tuning of all weights. `--submit-hf --hf-user <name>` uploads data to HF Hub and prints Space training instructions.
+* `training/train_full.py`: Full fine-tuning of all weights. `--submit-hf --hf-user <name>` uploads dataset to HF Hub and submits a real QLoRA training job via `HfApi.run_uv_job()`. Add `--smoke-test` for a quick 10-step verification run.
+* `training/train_hf_job.py`: Self-contained PEP 723 UV script submitted inline by `train_full.py --submit-hf`. Downloads dataset from HF Hub, trains Qwen3-2B with QLoRA on the cloud GPU, and pushes the LoRA adapter to Hub. Never run directly.
 * `evaluation/eval_*.py`: Stage B stubs — correct function signatures and CLI, body raises `NotImplementedError`.
 * `tests/test_download.py` / `tests/test_preprocess.py`: 9 unit tests, all passing.
 
@@ -107,8 +109,11 @@ python training/train_lora.py --output outputs/checkpoints/run-lora-01
 # Step 3c: Full fine-tune locally (~40 GB VRAM)
 python training/train_full.py --output outputs/checkpoints/run-full-01
 
-# Step 3c (alternative): Upload data to HF Hub and get Space instructions
+# Step 3c (alternative): Submit QLoRA training job to HuggingFace Jobs
 python training/train_full.py --submit-hf --hf-user <your-hf-username>
+
+# Quick smoke-test (10 steps, a10g-small, ~$0.05) to verify the pipeline end-to-end
+python training/train_full.py --submit-hf --hf-user <your-hf-username> --smoke-test
 ```
 
 **Running tests:**
@@ -120,12 +125,15 @@ source .venv/bin/activate && python -m pytest tests/ -v
 
 ## Status - remember to update it
 
-**Stage A complete as of 2026-05-27.** The full training pipeline is implemented:
+**Stage A complete as of 2026-05-27.** HF Jobs submission verified 2026-05-27.
 - `data/download.py` — 10,000 records from biunlp/HeSum in `outputs/data/raw/combined.jsonl`. IAHLT/summarization_he is inaccessible (not on HF Hub with current credentials).
 - `data/preprocess.py` — 8,000 train / 1,000 val / 1,000 test splits in `outputs/data/processed/`.
 - `training/train_qlora.py`, `train_lora.py`, `train_full.py` — three fine-tuning variants implemented.
+- `training/train_hf_job.py` — QLoRA remote training script for HF Jobs infrastructure.
 - `evaluation/eval_*.py` — Stage B stubs in place.
 - 9 unit tests, all passing.
+- HF Jobs dataset: `avreymi/amlk-training-data` (private). Model output: `avreymi/amlk-qwen3-2b-sft`.
+- Known limitation: QLoRA `push_to_hub` saves the LoRA adapter only (not merged). Evaluation scripts must load base + adapter together via `PeftModel.from_pretrained`.
 - Known limitation: `DataCollatorForCompletionOnlyLM` was removed in trl 1.5.0; training scripts use full-sequence loss. Can be improved with `SFTConfig(completion_only_loss=True)` + prompt/completion column split.
 
 **Next steps:** Stage B (evaluation pipeline) — implement `eval_rouge.py`, `eval_bertscore.py`, `eval_llm.py`. Presentation deadline: 2026-06-14. Final submission: 2026-07-31.
