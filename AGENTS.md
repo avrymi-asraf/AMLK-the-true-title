@@ -100,20 +100,45 @@ python data/download.py
 # Step 2: Preprocess (format + split)
 python data/preprocess.py
 
-# Step 3a: Fine-tune with QLoRA (~8 GB VRAM)
+# Step 3 — choose one training option:
+
+# Option A: QLoRA locally (~8 GB VRAM)
 python training/train_qlora.py --output outputs/checkpoints/run-qlora-01
 
-# Step 3b: Fine-tune with LoRA bf16 (~16 GB VRAM)
+# Option B: LoRA bf16 locally (~16 GB VRAM)
 python training/train_lora.py --output outputs/checkpoints/run-lora-01
 
-# Step 3c: Full fine-tune locally (~40 GB VRAM)
+# Option C: Full fine-tune locally (~40 GB VRAM)
 python training/train_full.py --output outputs/checkpoints/run-full-01
 
-# Step 3c (alternative): Submit QLoRA training job to HuggingFace Jobs
-python training/train_full.py --submit-hf --hf-user <your-hf-username>
+# Option D: Submit QLoRA job to HuggingFace Jobs (recommended — no local GPU needed)
+python training/train_full.py --submit-hf --hf-user avreymi
+```
 
-# Quick smoke-test (10 steps, a10g-small, ~$0.05) to verify the pipeline end-to-end
-python training/train_full.py --submit-hf --hf-user <your-hf-username> --smoke-test
+**HuggingFace Jobs — what happens and how to monitor:**
+```bash
+# The --submit-hf command does two things automatically:
+#   1. Uploads outputs/data/processed/ to HF Hub as avreymi/amlk-training-data (private)
+#   2. Submits train_hf_job.py inline to HF Jobs (a10g-large, 4h timeout, QLoRA)
+# It prints a Job ID when done. Use that ID to monitor:
+
+# Check job status
+hf jobs ps
+
+# Stream live logs (replace <job-id> with the printed ID)
+hf jobs logs <job-id>
+
+# Inspect details
+hf jobs inspect <job-id>
+
+# Quick smoke-test (10 steps, a10g-small, ~$0.05) — use first to verify setup
+python training/train_full.py --submit-hf --hf-user avreymi --smoke-test
+
+# After training completes, the LoRA adapter is at:
+#   https://huggingface.co/avreymi/amlk-qwen3-2b-sft  (private)
+# Load it for evaluation:
+#   from peft import PeftModel
+#   model = PeftModel.from_pretrained(base_model, "avreymi/amlk-qwen3-2b-sft")
 ```
 
 **Running tests:**
