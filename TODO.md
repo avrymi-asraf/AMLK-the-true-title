@@ -1,6 +1,7 @@
 # TODO — AMLK Hebrew Summarization
 
-Implements `docs/ANLP Project abstract.md` and `docs/research-proposal.md`. Milestones from the abstract are dated below.
+Implements `docs/ANLP Project abstract.md`, `docs/research-proposal.md`, and the reviewer-revised
+`docs/research-proposal-revised.md` (current plan of record). Milestones from the abstract are dated below.
 
 ## A. Training pipeline — DONE
 - [x] A.1 Download datasets (HeSum 10,000 records; IAHLT inaccessible with current credentials)
@@ -15,6 +16,13 @@ Implements `docs/ANLP Project abstract.md` and `docs/research-proposal.md`. Mile
 - [x] B.4 Advanced-model baseline: Gemini API on the same Hebrew test set + prompt; score with B.1–B.3
 - [x] B.5 Error analysis: failure-type labelling on a ~50–100 sample (`evaluation/error_analysis.py`)
 
+### B'. Reviewer-driven evaluation upgrades
+- [ ] B'.1 Switch LLM judge OFF the Gemini family (avoid self-preference bias vs the Gemini baseline)
+- [ ] B'.2 ROUGE-Hebrew: adopt HeSum's morphological-normalization recommendation; report raw + normalized
+- [ ] B'.3 Add a simple extractive Lead-N baseline (first N sentences) scored with B.1–B.3
+- [ ] B'.4 Data characterization before runs: abstractiveness (novel n-grams, extractive
+      coverage/density, small manual check) + summary↔lead and summary↔body overlap
+
 ## C. Literature & framing — DONE (24.05)
 - [x] C.1 Survey English news summarization (datasets, models, lead bias, metric limits) and map lessons to Hebrew setup
 - [x] C.2 Abstract / research proposal — see `docs/ANLP Project abstract.md`, `docs/research-proposal.md`
@@ -28,11 +36,21 @@ Implements `docs/ANLP Project abstract.md` and `docs/research-proposal.md`. Mile
 - [ ] E.1 Paper draft
 - [ ] E.2 Presentation: QLoRA/LoRA/full vs baselines, news/journalism framing
 
-## F. Truncation / positional-shortcut probe — 30.06
-- [ ] F.1 Preprocess whole / lead / body variants (`--variant`; code ready)
-- [ ] F.2 Train one model per variant with identical hyperparameters
-- [ ] F.3 Evaluate each model on its matching test split (ROUGE / BERTScore / LLM-judge)
-- [ ] F.4 Hypothesis: Body-only drop vs Whole/Lead-only indicates positional shortcuts (lead overlap with reference)
+## F. Positional-shortcut probe — 30.06 (REDESIGNED per reviewer feedback)
+Reframed from "train one model per input slice" (a question about the data) to "train one
+whole-article model, ablate the input at inference" (what the trained model relies on). See
+`docs/research-proposal-revised.md`.
+- [ ] F.1 Train ONE model on whole articles (reuse the main fine-tuned model)
+- [ ] F.2 Inference ablation: evaluate that model on Whole / Lead-only / Body-only inputs
+- [ ] F.3 Control — information availability: restrict the primary probe to a "body-supported"
+      subset (gold summary content present in the body, by summary↔body overlap)
+- [ ] F.4 Control — input length: length-matched cut (remove #tokens == lead length from a random
+      post-lead span) so Body-only is compared at equal length
+- [ ] F.5 Sanity check: confirm the advanced baseline can still summarize the body-supported subset
+      without the lead (otherwise a Body-only drop is uninformative)
+- [ ] F.6 Hypothesis: large Body-only drop + small Lead-only drop (after controls) = lead reliance
+- [ ] F.7 Training-distribution experiment: train two whole-article models (low summary↔lead overlap
+      subset vs matched random subset); run the F.2 ablation on both; compare lead reliance
 
 ## G. Hebrew news / headline control (optional)
 - [ ] G.1 Emphasize journalism subset in analysis (HeSum + IAHLT; stratify or report by source)
