@@ -84,8 +84,12 @@ def wandb_api_key() -> str:
 
 
 def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
-                  smoke_test: bool, mini_test: bool = False):
-    """Upload the processed splits to the Hub and submit train_hf_job.py to HF Jobs."""
+                  smoke_test: bool, mini_test: bool = False, inference_only: bool = False):
+    """Upload the processed splits to the Hub and submit train_hf_job.py to HF Jobs.
+
+    inference_only=True skips dataset re-upload and training; loads the already-pushed
+    adapter and regenerates predictions only (fast: a10g-small, 1h timeout).
+    """
     import warnings
     warnings.filterwarnings("ignore", category=UserWarning)
     from huggingface_hub import HfApi
@@ -93,17 +97,21 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
     api = HfApi(token=hf_token)
     data_repo = dataset_repo(hf_user, variant)
     out_repo = model_repo(hf_user, variant)
-    data_dir = Path(PROCESSED_DIR) / variant
-    if not data_dir.exists():
-        print(f"ERROR: {data_dir} not found. Run: python data/preprocess.py --variant {variant}", file=sys.stderr)
-        sys.exit(1)
 
-    print(f"Uploading {data_dir} to {data_repo}...")
-    api.create_repo(repo_id=data_repo, repo_type="dataset", private=True, exist_ok=True)
-    api.upload_folder(folder_path=str(data_dir), repo_id=data_repo, repo_type="dataset")
+    if not inference_only:
+        data_dir = Path(PROCESSED_DIR) / variant
+        if not data_dir.exists():
+            print(f"ERROR: {data_dir} not found. Run: python data/preprocess.py --variant {variant}", file=sys.stderr)
+            sys.exit(1)
+        print(f"Uploading {data_dir} to {data_repo}...")
+        api.create_repo(repo_id=data_repo, repo_type="dataset", private=True, exist_ok=True)
+        api.upload_folder(folder_path=str(data_dir), repo_id=data_repo, repo_type="dataset")
 
     script_path = Path(__file__).parent / "train_hf_job.py"
-    if smoke_test:
+    if inference_only:
+        # 1h, not 30m: setup ~5 min + 2,000 batched generations ~35-45 min leaves margin
+        flavor, timeout, label = "a10g-small", "1h", "infer"
+    elif smoke_test:
         flavor, timeout, label = "a10g-small", "30m", "smoke"
     elif mini_test:
         # 80 train / 5 epochs / ~25 optimizer steps — validates full pipeline with real loss curves
@@ -127,6 +135,7 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
             "WANDB_PROJECT": WANDB_PROJECT,
             "SMOKE_TEST": "1" if smoke_test else "0",
             "MINI_TEST": "1" if mini_test else "0",
+            "INFERENCE_ONLY": "1" if inference_only else "0",
         },
         token=hf_token,
     )
@@ -232,6 +241,7 @@ def main():
     parser.add_argument("--hf-user", default="", help="HuggingFace username (required with --submit-hf or --push-to-hub)")
     parser.add_argument("--smoke-test", action="store_true", help="With --submit-hf: quick 10-step job on a10g-small")
     parser.add_argument("--mini-test", action="store_true", help="With --submit-hf: 100-example / 5-epoch job on a10g-small — validates full pipeline with real wandb curves")
+    parser.add_argument("--inference-only", action="store_true", help="With --submit-hf: skip training, regenerate predictions from the already-pushed adapter (fast: a10g-small, 1h)")
     args = parser.parse_args()
 
     hf_token = os.environ.get("HF_TOKEN", "")
@@ -244,7 +254,7 @@ def main():
             print("ERROR: --hf-user required with --submit-hf", file=sys.stderr)
             sys.exit(1)
         submit_hf_job(args.method, args.variant, hf_token, args.hf_user,
-                      args.smoke_test, args.mini_test)
+                      args.smoke_test, args.mini_test, args.inference_only)
         return
 
     if args.push_to_hub and not args.hf_user:
