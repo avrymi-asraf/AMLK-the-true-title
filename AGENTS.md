@@ -50,6 +50,7 @@
 │   └── test_evaluation.py                # ROUGE-on-Hebrew, judge-reply parsing, failure rates (live test gated)
 ├── docs/
 │   ├── ANLP Project abstract.md          # The research proposal this project implements
+│   ├── 2026-06-12-qlora-training-job-postmortem.md  # Full-run post-mortem: cost, root cause, probe-run recommendations
 │   └── superpowers/
 │       ├── specs/2026-05-26-training-pipeline-design.md
 │       └── plans/2026-05-26-stage-a-training-pipeline.md
