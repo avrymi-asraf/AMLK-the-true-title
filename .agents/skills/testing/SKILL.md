@@ -1,95 +1,60 @@
 ---
 name: testing
-description: Testing philosophy for this project — behavior tests only, no implementation dictation, heavy tests opt-in.
+description: Testing philosophy for AMLK — behavior tests only, no implementation dictation, heavy tests (model load / live API) opt-in.
 ---
 
 # Testing Philosophy
 
 ## The Rule
 
-Automated tests exist to answer one cheap question: **is everything still wired
-and does the pipeline run end to end after I changed the code?** They do not
-dictate *how* the code works, and they are not where you decide whether the data
-is any good.
+Automated tests answer one cheap question: **is everything still wired and does the
+pipeline run after I changed the code?** They do not dictate *how* the code works, and they
+are not where you judge summary quality.
 
-**The real check is pipeline inspection** (`src/reasoning_pruning/pipeline_inspection.py`
-via `scripts/pipeline_inspection.py` or the notebook). That is where you look
-at actual G output and ask the questions that matter: does G's reasoning make sense?
-Is the unit split clean? Is D removing real filler and picking a real next step?
-A unit test cannot judge any of that — do not try to make it. See the [reasoning-pruning]
-skill for when it is required and how to run it.
+The real check is **looking at actual outputs** — read the Hebrew summaries in
+`predictions.jsonl`, the metric reports in `outputs/results/`, and the wandb curves. A unit
+test cannot tell you whether a summary is faithful or fluent; do not try to make it.
 
-> Keep the automated suite very small. A few comprehensive "it runs / it's
-> connected" tests beat a pile of tiny tests that pin down implementation
-> details nobody cares about. If a test would break on a harmless refactor that
-> keeps the same behavior, it is the wrong test — delete it.
+> Keep the suite very small and fast. A few comprehensive "it's connected / it runs" tests
+> beat a pile of tiny tests pinning down details nobody cares about. If a test would break on
+> a harmless refactor that keeps the same behavior, it is the wrong test — delete it.
+> Default `pytest tests/` must finish in seconds on any machine, even with no GPU or API key.
 
-## What to test (a few comprehensive tests, total — not per feature)
+## What to test (a few behavioral contracts, total)
 
-The behavioral contracts, at the level the caller cares about:
-
-- Does the pipeline produce `input_x -> target_y` rows and convert to training format?
-- Does the next-context invariant hold (`next_context == input_x + "\n" + target_y`)?
-- Does the pipeline stop gracefully / return empty when nothing is prunable?
-- Are bad attempts discarded without polluting the retry context?
-- Does spectrum question assembly never leak answer fields to G?
-- Does a stubbed/live LLM response parse into a usable decision?
-
-## The pipeline inspector must run the production loop — never a copy
-
-The pipeline inspector must execute `build_rows_for_question` (via the
-`PruningObserver` hook), not a hand-copied parallel loop. We learned this the
-hard way: a copied inspection loop silently drifted (production required ≥3 units
-while the inspection copy still allowed ≥2), so the "most important verification"
-was no longer running what production ran. One loop, an observer for printing —
-that is the only acceptable shape. This matches the project's no-parallel-paths
-rule ([feedback_no_backward_compat]).
+- `data/download.py`: normalizers map raw rows to `{text, summary, source}` and skip empties.
+- `data/preprocess.py`: `build_prompt` carries the task + article; `make_variant` makes
+  whole/lead/body that actually differ; the split is a clean 80/10/10 with no overlap.
+- `evaluation/evaluate.py`: ROUGE scores Hebrew non-zero (guards the tokenizer-strips-non-ASCII
+  bug); a messy LLM reply parses into scores.
+- `evaluation/error_analysis.py`: failure-rate aggregation counts each type correctly.
 
 ## What NOT to test
 
-**Implementation details that don't matter to the caller:**
+- Exact prompt wording, internal column names, or JSON report field order.
+- CLI argument structure, config/preset values (those are config, not behavior).
+- Script source contents (`assert "SFTTrainer" in script` — never).
+- Anything that needs the model to actually train well (that's eyeballing outputs, not pytest).
 
-- Exact field names in `metadata` (the caller only needs `input_x`/`target_y`)
-- Internal context string formats (`context_before_generation` exact value)
-- Unit-splitting internals (which strategy produced which list)
-- CLI parser argument structure
-- Script source code contents (`assert "load_dataset" in script.read_text()` — never do this)
-- Config YAML field values (those are config, not behavior)
-- Exact URL formats in HTTP calls
-- Internal attribute names on model clients
+## Heavy tests (model load / live API) — always opt-in
 
-## Heavy tests (model loading) — always opt-in
-
-Any test that loads a transformer model or calls a live API **must** be guarded:
+Any test that loads Qwen3-2B or calls Gemini **must** be gated:
 
 ```python
 @pytest.mark.skipif(
     not (os.getenv("GEMINI_API_KEY") and os.getenv("RUN_LIVE_TESTS")),
     reason="Set GEMINI_API_KEY and RUN_LIVE_TESTS=1 to run live LLM tests",
 )
-def test_live_gemini_pipeline(): ...
+def test_live_gemini_judge_parses_scores(): ...
 ```
 
-Default `uv run pytest` must complete in seconds on any machine, including those without a GPU or API key. If it crashes or hangs, the test suite has a guard missing.
+If the default suite ever needs a GPU, an API key, or more than a few seconds, a guard is missing.
 
-## Fake models for fast tests
+## Test files (split by area, so a change in one part runs its own file)
 
-Shared fakes live in `tests/fakes.py` (`FakeGenerator`, `FakeDecisionModel`,
-`make_config`) and satisfy the generator/decision-model protocols. Import them
-flat (`from fakes import ...`) — pytest's prepend import mode puts `tests/` on
-`sys.path`, so no `__init__.py` is needed. The fake trace has at least 3 units so
-a removal at the front leaves a valid target.
+- `tests/test_download.py` — dataset normalization.
+- `tests/test_preprocess.py` — prompt building, probe variants, splitting.
+- `tests/test_evaluation.py` — ROUGE/Hebrew, judge-reply parsing, failure rates; live Gemini
+  test gated behind `RUN_LIVE_TESTS`.
 
-## Test files — split by area, so a change in one part runs its own file
-
-- `tests/test_data_creation.py` — the core pruning loop (valid rows, next-context
-  invariant, empty-when-nothing-prunable, discard-and-retry).
-- `tests/test_question_source.py` — spectrum question assembly never leaks answers.
-- `tests/test_clients.py` — G/D wiring: stubbed Gemini decision parsing + the live
-  gated end-to-end test.
-- `tests/test_pipeline_inspection.py` — smoke that the inspector runs the
-  production loop and returns rows.
-- `tests/fakes.py` — shared fakes (not a test file).
-
-Do not pile everything back into one file. If you changed only the clients, you
-should be able to run only `tests/test_clients.py`.
+Run: `source .venv/bin/activate && python -m pytest tests/ -v`.

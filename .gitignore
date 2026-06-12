@@ -24,3 +24,6 @@ outputs/
 
 # macOS
 .DS_Store
+
+# Local wandb run logs
+wandb/

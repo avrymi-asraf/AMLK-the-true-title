@@ -10,3 +10,4 @@ rouge-score>=0.1.2
 google-generativeai>=0.8.3
 requests>=2.32.0
 torch>=2.4.0
+wandb>=0.18.0

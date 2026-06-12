@@ -1,31 +1,70 @@
 """
-Pipeline step 2 of 3: instruction formatting and dataset splitting.
-Reads outputs/data/raw/combined.jsonl, formats each example as a Hebrew
-summarization instruction pair (adding a 'formatted' column), splits 80/10/10,
-and saves Arrow dataset splits to outputs/data/processed/.
-Does NOT tokenize — tokenization is handled by SFTTrainer at training time.
+Pipeline step 2 of 3: instruction formatting, probe variants, and dataset splitting.
+Reads outputs/data/raw/combined.jsonl and writes Arrow splits to
+outputs/data/processed/<variant>/{train,val,test}. Each example becomes a
+(prompt, completion) pair so SFTTrainer can train with completion_only_loss=True
+(loss on the summary only). The --variant flag (whole|lead|body) builds the inputs
+for the truncation/positional-shortcut probe. The prompt template and make_variant
+here are the single source of truth, reused at inference time by evaluation/predict.py.
 
-Run: python data/preprocess.py
+Run: python -m data.preprocess --variant whole
 Execution environment: local development machine.
 """
+import argparse
 import json
+import os
+import re
 import sys
 from pathlib import Path
 
 import datasets as hf_datasets
 
+from training.config import MAX_LENGTH, MODEL_ID
+
 
 INPUT_PATH = Path("outputs/data/raw/combined.jsonl")
-OUTPUT_DIR = Path("outputs/data/processed")
+OUTPUT_ROOT = Path("outputs/data/processed")
+VARIANTS = ("whole", "lead", "body")
+# Articles are long (median ~2500 tokens); cap them so the prompt + summary fit in MAX_LENGTH.
+# Without this, right-truncation cuts the summary away and completion-only loss becomes nan.
+ARTICLE_TOKEN_BUDGET = MAX_LENGTH - 256  # 256 reserved for the prompt scaffold + the summary
+
+# The "in Hebrew" instruction matters for the zero-shot baselines (base Qwen, Gemini):
+# without it they summarize in English and score near-zero against the Hebrew references.
+# The fine-tuned model learns Hebrew from the completions regardless.
+PROMPT_TEMPLATE = "Summarize the following Hebrew text. Write the summary in Hebrew:\n\n{text}\n\nSummary:\n"
 
 
-def format_instruction(text: str, summary: str) -> str:
-    """Format a text+summary pair as a causal LM instruction for Hebrew summarization."""
-    return (
-        f"Summarize the following Hebrew text:\n\n"
-        f"{text}\n\n"
-        f"Summary:\n{summary}"
-    )
+def build_prompt(text: str) -> str:
+    """Render the Hebrew summarization instruction prompt for an article."""
+    return PROMPT_TEMPLATE.format(text=text)
+
+
+def _split_lead_body(text: str) -> tuple[str, str]:
+    """Split an article into (lead, body): the first paragraph vs. the rest."""
+    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+    if len(paragraphs) >= 2:
+        return paragraphs[0], "\n\n".join(paragraphs[1:])
+    sentences = [s for s in re.split(r"(?<=[.!?。])\s+", text.strip()) if s]
+    if len(sentences) >= 2:
+        return sentences[0], " ".join(sentences[1:])
+    return text, text  # too short to split — probe falls back to whole text
+
+
+def make_variant(text: str, variant: str) -> str:
+    """Return the article input for a probe variant: whole, lead-only, or body-only."""
+    if variant == "whole":
+        return text
+    lead, body = _split_lead_body(text)
+    return lead if variant == "lead" else body
+
+
+def truncate_to_tokens(text: str, tokenizer, max_tokens: int) -> str:
+    """Cut text to its first max_tokens tokens (keeps the lead — where news summaries live)."""
+    ids = tokenizer(text, add_special_tokens=False).input_ids
+    if len(ids) <= max_tokens:
+        return text
+    return tokenizer.decode(ids[:max_tokens], skip_special_tokens=True)
 
 
 def split_dataset(
@@ -39,8 +78,14 @@ def split_dataset(
 
 
 def main():
-    if OUTPUT_DIR.exists():
-        print(f"Output already exists at {OUTPUT_DIR}. Delete it to re-preprocess.")
+    parser = argparse.ArgumentParser(description="Format and split Hebrew summarization data")
+    parser.add_argument("--variant", choices=VARIANTS, default="whole",
+                        help="Article input for the truncation probe (whole|lead|body)")
+    args = parser.parse_args()
+
+    output_dir = OUTPUT_ROOT / args.variant
+    if output_dir.exists():
+        print(f"Output already exists at {output_dir}. Delete it to re-preprocess.")
         sys.exit(0)
 
     if not INPUT_PATH.exists():
@@ -48,28 +93,32 @@ def main():
         sys.exit(1)
 
     print(f"Reading {INPUT_PATH}...")
-    records = []
     with open(INPUT_PATH, encoding="utf-8") as f:
-        for line in f:
-            records.append(json.loads(line))
+        records = [json.loads(line) for line in f]
     print(f"Loaded {len(records)} records")
 
+    from transformers import AutoTokenizer
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, token=os.environ.get("HF_TOKEN") or None)
+    print(f"Building variant '{args.variant}' and truncating articles to {ARTICLE_TOKEN_BUDGET} tokens...")
+    texts = [truncate_to_tokens(make_variant(r["text"], args.variant), tokenizer, ARTICLE_TOKEN_BUDGET)
+             for r in records]
     dataset = hf_datasets.Dataset.from_dict({
-        "text": [r["text"] for r in records],
+        "text": texts,
         "summary": [r["summary"] for r in records],
         "source": [r["source"] for r in records],
-        "formatted": [format_instruction(r["text"], r["summary"]) for r in records],
+        "prompt": [build_prompt(t) for t in texts],
+        "completion": [r["summary"] for r in records],
     })
 
-    print("Splitting 80/10/10...")
+    print(f"Splitting 80/10/10 (variant={args.variant})...")
     train, val, test = split_dataset(dataset)
     print(f"  train: {len(train)}, val: {len(val)}, test: {len(test)}")
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    train.save_to_disk(str(OUTPUT_DIR / "train"))
-    val.save_to_disk(str(OUTPUT_DIR / "val"))
-    test.save_to_disk(str(OUTPUT_DIR / "test"))
-    print(f"Saved splits to {OUTPUT_DIR}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    train.save_to_disk(str(output_dir / "train"))
+    val.save_to_disk(str(output_dir / "val"))
+    test.save_to_disk(str(output_dir / "test"))
+    print(f"Saved splits to {output_dir}")
 
 
 if __name__ == "__main__":
