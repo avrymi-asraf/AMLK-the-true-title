@@ -37,7 +37,14 @@ source .env && source .venv/bin/activate
 # Verify the whole cloud pipeline cheaply first, then the real run:
 python -m training.train --submit-hf --hf-user avreymi --smoke-test # a10g-small, 10 steps, ~$0.05
 python -m training.train --submit-hf --hf-user avreymi              # a10g-large, 6h, 1-epoch QLoRA
+python -m training.train --submit-hf --hf-user avreymi --inference-only  # regen predictions from pushed adapter (a10g-small, 1h)
 ```
+
+> **Cost note (2026-06-12 post-mortem):** a10g-small and a10g-large have the **same 24 GB
+> A10G GPU** — large only adds vCPUs/RAM ($1.50/h vs $1.00/h). For this GPU-bound 2B job,
+> prefer a10g-small for full runs, and prefer `--method lora` (bf16) over qlora — the 2B
+> model doesn't need quantization on 24 GB and nf4 dequant slows every step ~20-40%.
+> Full analysis: `docs/2026-06-12-qlora-training-job-postmortem.md`.
 
 `train.py` does keep a local code path (`--method ... --output ...`) for machines with a real
 GPU, but it is not used here.
@@ -91,6 +98,22 @@ Monitor URL: `https://huggingface.co/jobs/avreymi/<job-id>`. wandb dashboard:
 - The Hub adapter is the **LoRA adapter only** (not merged into the base). Evaluation loads
   base 4-bit + `PeftModel.from_pretrained(model, adapter)` — see `evaluation/predict.py`.
 - All training and model inference run on HF Jobs — never on the local 8 GB GPU (it freezes).
+- **Qwen3-2B is a HYBRID-attention model** (`model_type: qwen3_5`): 24 text layers = 18
+  linear-attention (Gated DeltaNet: `linear_attn.{in_proj_qkv,in_proj_z,out_proj,...}`) + 6
+  full-attention (`self_attn.{q,k,v,o}_proj`), plus an unused vision tower. The current LoRA
+  `target_modules=["q_proj","k_proj","v_proj","o_proj"]` therefore attaches to **only 6 of 24
+  layers** (1.48 M trainable params, 0.07% — the 2.96 MB adapter is the tell). Before the next
+  training run, extend `target_modules` to include `in_proj_qkv`, `in_proj_z`, `out_proj`,
+  `gate_proj`, `up_proj`, `down_proj` (≈15.6 M params) and A/B it at mini-test scale. Do NOT
+  use PEFT's `"all-linear"` — it can catch the vision tower and `mtp` head. See post-mortem §5.1.
+- The same hybrid layers have an optimized kernel path that needs `flash-linear-attention` and
+  `causal-conv1d` installed — they are missing from the job deps, so transformers logs a
+  "fast path is not available" warning and falls back to slow torch kernels. Add them to the
+  PEP 723 block and benchmark in a mini-test before the probe runs.
+- **Cloud-job crash economics:** any artifact not yet pushed has zero value when the timeout
+  hits. `train_hf_job.py` pushes each `predictions-*.jsonl` immediately after its loop (since
+  d8bf268) — keep it that way. Generation uses `max_new_tokens=256` (p99 of reference summaries
+  is 187 tokens; the old 128 cap truncated ~9%).
 - For wandb specifics (axis alignment, downloading curves), see the global `wandb-for-trl` skill.
 
 ## Completed runs
@@ -100,5 +123,12 @@ Monitor URL: `https://huggingface.co/jobs/avreymi/<job-id>`. wandb dashboard:
   verified train → eval → predict (finetuned + zero-shot base via `disable_adapter`) → push to
   `avreymi/amlk-qwen3-2b-sft`. Surfaced + fixed: secret literal-401, run_uv_job path, eval-batch OOM,
   English-output prompt, and the long-article truncation→nan-eval-loss bug.
-- 2026-06-12 full (qlora-whole, 1 epoch): HF job `6a2bc974822d86c524179991` (a10g-large, 6h).
+- 2026-06-12 full (qlora-whole, 1 epoch): HF job `6a2bc974822d86c524179991` (a10g-large, 6h) —
+  **training succeeded** (500 steps, 3h54m, eval_loss 1.777; adapter on `avreymi/amlk-qwen3-2b-sft`)
+  but the job was CANCELED at the 6h timeout inside an unbatched, push-at-the-end prediction loop,
+  losing all predictions. Post-mortem: `docs/2026-06-12-qlora-training-job-postmortem.md`.
 - 2026-06-12 mini (qlora-whole, 100 examples / 5 epochs): HF job `6a2bcd887c68f455eff13113` (a10g-small, 1h) — validation run; check wandb for real loss curves and finite eval_loss.
+- 2026-06-12 inference-only rerun #1: `6a2c2088871c005b5352b4ac` — canceled at ~24m; its 30-min
+  timeout could not fit 2,000 generations and it still pushed only at the end.
+- 2026-06-12 inference-only rerun #2: `6a2c26ea7c68f455eff13d1c` (a10g-small, 1h) — patched
+  script: incremental per-file pushes, `max_new_tokens=256`, fixed progress prints.
