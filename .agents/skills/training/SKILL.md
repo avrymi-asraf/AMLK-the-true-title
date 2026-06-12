@@ -101,3 +101,4 @@ Monitor URL: `https://huggingface.co/jobs/avreymi/<job-id>`. wandb dashboard:
   `avreymi/amlk-qwen3-2b-sft`. Surfaced + fixed: secret literal-401, run_uv_job path, eval-batch OOM,
   English-output prompt, and the long-article truncation→nan-eval-loss bug.
 - 2026-06-12 full (qlora-whole, 1 epoch): HF job `6a2bc974822d86c524179991` (a10g-large, 6h).
+- 2026-06-12 mini (qlora-whole, 100 examples / 5 epochs): HF job `6a2bcd887c68f455eff13113` (a10g-small, 1h) — validation run; check wandb for real loss curves and finite eval_loss.

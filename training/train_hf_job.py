@@ -42,10 +42,11 @@ VARIANT = os.environ.get("VARIANT", "whole")
 DATASET_REPO = os.environ["DATASET_REPO"]
 OUTPUT_REPO = os.environ["OUTPUT_REPO"]
 SMOKE_TEST = os.environ.get("SMOKE_TEST", "0") == "1"
+MINI_TEST = os.environ.get("MINI_TEST", "0") == "1"
 MODEL_ID = "Qwen/Qwen3-2B"
 os.environ.setdefault("WANDB_PROJECT", os.environ.get("WANDB_PROJECT", "amlk-hebrew-summarization"))
 
-print(f"Method: {METHOD}  Variant: {VARIANT}  Smoke: {SMOKE_TEST}")
+print(f"Method: {METHOD}  Variant: {VARIANT}  Smoke: {SMOKE_TEST}  Mini: {MINI_TEST}")
 print(f"Dataset: {DATASET_REPO}  ->  Output: {OUTPUT_REPO}")
 
 local_data = Path("./data")
@@ -60,6 +61,13 @@ if SMOKE_TEST:
     val_ds = val_ds.select(range(min(20, len(val_ds))))
     test_ds = test_ds.select(range(min(5, len(test_ds))))
     print(f"[Smoke] Truncated to train={len(train_ds)}, val={len(val_ds)}, test={len(test_ds)}")
+elif MINI_TEST:
+    # 80 train + 20 val gives ~25 optimizer steps over 5 epochs (batch=2, grad_accum=8) —
+    # enough to show a real loss curve in wandb without burning full-run budget.
+    train_ds = train_ds.select(range(min(80, len(train_ds))))
+    val_ds = val_ds.select(range(min(20, len(val_ds))))
+    test_ds = test_ds.select(range(min(10, len(test_ds))))
+    print(f"[Mini] Truncated to train={len(train_ds)}, val={len(val_ds)}, test={len(test_ds)}")
 else:
     # Eval on a fixed 200-example slice — full 1000-example eval several times would blow the budget.
     val_ds = val_ds.select(range(min(200, len(val_ds))))
@@ -90,27 +98,46 @@ peft_config = LoraConfig(
     bias="none", task_type="CAUSAL_LM",
 ) if use_lora else None
 
-run_name = f"{METHOD}-{VARIANT}-hfjob" + ("-smoke" if SMOKE_TEST else "")
+if SMOKE_TEST:
+    run_suffix = "-smoke"
+elif MINI_TEST:
+    run_suffix = "-mini"
+else:
+    run_suffix = ""
+run_name = f"{METHOD}-{VARIANT}-hfjob{run_suffix}"
+
+# Mini: 5 epochs over 80 examples → ~25 optimizer steps (batch=2, grad_accum=8);
+# log every step and eval every 5 to get ≥5 eval points visible in wandb.
+if MINI_TEST:
+    n_epochs, max_steps_cfg = 5, -1
+    log_steps, eval_steps_cfg, save_steps_cfg = 1, 5, 20
+elif SMOKE_TEST:
+    n_epochs, max_steps_cfg = 1, 10
+    log_steps, eval_steps_cfg, save_steps_cfg = 5, 5, 5
+else:
+    n_epochs, max_steps_cfg = 1, -1
+    log_steps, eval_steps_cfg, save_steps_cfg = 10, 200, 200
+
 sft_config = SFTConfig(
     output_dir="./output",
     push_to_hub=True,
     hub_model_id=OUTPUT_REPO,
     hub_strategy="every_save",
     hub_private_repo=True,
-    num_train_epochs=1,   # one epoch of QLoRA SFT keeps the a10g run inside its timeout
-    max_steps=10 if SMOKE_TEST else -1,
+    num_train_epochs=n_epochs,
+    max_steps=max_steps_cfg,
     per_device_train_batch_size=2,
     per_device_eval_batch_size=1,   # eval defaults to 8 → OOM at seq-len 2048; keep it small
     gradient_accumulation_steps=8,
     learning_rate=2e-4,
     warmup_ratio=0.05,
     lr_scheduler_type="cosine",
-    logging_steps=5 if SMOKE_TEST else 10,
+    logging_steps=log_steps,
     save_strategy="steps",
-    save_steps=5 if SMOKE_TEST else 200,
+    save_steps=save_steps_cfg,
     save_total_limit=2,
     eval_strategy="steps",
-    eval_steps=5 if SMOKE_TEST else 200,
+    eval_steps=eval_steps_cfg,
     bf16=True,
     gradient_checkpointing=True,
     completion_only_loss=True,
