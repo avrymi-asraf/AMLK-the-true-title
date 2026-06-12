@@ -1,31 +1,42 @@
-# TODO List
+# TODO — AMLK Hebrew Summarization
 
-A. Train pipline
-    A.1 Download the dataset: https://github.com/IAHLT/summarization_he, https://github.com/OnlpLab/HeSum
-    A.2 Download the pretrained model: qwen 3.5 2b
-    A.3 Fine-tune the model on the dataset using Hugging Face, if the compute is not enough, run it on HF job.
-B. Evaluation pipeline
-    B.1 rouge evaluation
-    B.2 bert score evaluation
-    B.3 LLm evaluation
-    B.4 Advanced-model baseline: run a stronger model (e.g. Gemini API) on the same Hebrew test set with the same prompt; score with B.1-B.3 for comparison.
-    B.5 Error analysis: sample ~50-100 predictions; label failure types (hallucination, omission, wrong entity/number, lead copying, fluency); report rates per model.
-C. Literature exploration - 24.05 - unordred tasks
-    C.1 Survey English news summarization (datasets, models, lead bias, metric limits) and map lessons to our Hebrew setup - no English training run required.
-    C.2 wriet abstract for the project
-    C.3 Define goles and milestones for the project
-D. Initial results
-    D.1 real training
-    D.2 Improve the training
-E. Present the results - 14.06
-    E.1 Write a paper
-    E.2 Prepare a presentation
-F. Truncation / positional-shortcut experiment
-    F.1 Add a preprocessing step that splits each article into three input variants: Whole text (baseline), Lead-only (opening segment), Body-only (article with the lead removed).
-    F.2 Train one model per variant (Whole, Lead-only, Body-only) with identical hyperparameters and number of training steps.
-    F.3 Evaluate each model on its matching test variant using ROUGE / BERTScore / LLM-as-judge.
-    F.4 Hypothesis: a significant accuracy drop on Body-only inputs (relative to Whole text and Lead-only) would prove that the model relies on positional shortcuts rather than global context.
-G. Hebrew news / headline control (journalism focus)
-    G.1 Emphasize journalism subset in analysis (HeSum + IAHLT news articles; stratify or report by source).
-    G.2 Optional: train or evaluate with alternate instructions (one-line headline vs multi-sentence summary) and compare metrics.
-H. Finalize the project - 31.07
+Implements `docs/ANLP Project abstract.md` and `docs/research-proposal.md`. Milestones from the abstract are dated below.
+
+## A. Training pipeline — DONE
+- [x] A.1 Download datasets (HeSum 10,000 records; IAHLT inaccessible with current credentials)
+- [x] A.2 Base model: Qwen/Qwen3-2B
+- [x] A.3 Fine-tune via HF `trl` SFT — one `training/train.py` for qlora | lora | full,
+      completion-only loss, wandb logging, local or HF Jobs (`--submit-hf`)
+
+## B. Evaluation pipeline — DONE (Stage B, due 07.06)
+- [x] B.1 ROUGE-1/2/L (Hebrew-aware tokenizer)
+- [x] B.2 BERTScore (xlm-roberta-large)
+- [x] B.3 Gemini LLM-as-judge (faithfulness + fluency, 1-5)
+- [x] B.4 Advanced-model baseline: Gemini API on the same Hebrew test set + prompt; score with B.1–B.3
+- [x] B.5 Error analysis: failure-type labelling on a ~50–100 sample (`evaluation/error_analysis.py`)
+
+## C. Literature & framing — DONE (24.05)
+- [x] C.1 Survey English news summarization (datasets, models, lead bias, metric limits) and map lessons to Hebrew setup
+- [x] C.2 Abstract / research proposal — see `docs/ANLP Project abstract.md`, `docs/research-proposal.md`
+- [x] C.3 Goals and milestones
+
+## D. Initial results — IN PROGRESS
+- [ ] D.1 Full QLoRA run on HF Jobs + evaluation battery (finetuned vs zero-shot vs Gemini)
+- [ ] D.2 Improve training (regime comparison: lora / full FT)
+
+## E. Present results — 14.06
+- [ ] E.1 Paper draft
+- [ ] E.2 Presentation: QLoRA/LoRA/full vs baselines, news/journalism framing
+
+## F. Truncation / positional-shortcut probe — 30.06
+- [ ] F.1 Preprocess whole / lead / body variants (`--variant`; code ready)
+- [ ] F.2 Train one model per variant with identical hyperparameters
+- [ ] F.3 Evaluate each model on its matching test split (ROUGE / BERTScore / LLM-judge)
+- [ ] F.4 Hypothesis: Body-only drop vs Whole/Lead-only indicates positional shortcuts (lead overlap with reference)
+
+## G. Hebrew news / headline control (optional)
+- [ ] G.1 Emphasize journalism subset in analysis (HeSum + IAHLT; stratify or report by source)
+- [ ] G.2 Optional: alternate instructions (one-line headline vs multi-sentence summary) and compare metrics
+
+## H. Finalize — 31.07
+- [ ] Final paper and presentation

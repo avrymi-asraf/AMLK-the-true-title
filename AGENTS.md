@@ -26,56 +26,58 @@
 /AMLK
 ├── .claude/
 │   └── skills/
-│       └── coding-principles/SKILL.md    # Project-local coding standards
+│       ├── coding-principles/SKILL.md    # Project-local coding standards
+│       ├── training/SKILL.md             # AMLK training process (train.py, HF Jobs, wandb)
+│       └── testing/SKILL.md              # AMLK testing philosophy
 ├── data/
 │   ├── __init__.py
 │   ├── download.py                       # Pipeline step 1: downloads & normalizes IAHLT+HeSum datasets
-│   └── preprocess.py                     # Pipeline step 2: formats instruction pairs, splits 80/10/10, saves Arrow datasets
+│   └── preprocess.py                     # Pipeline step 2: prompt/completion pairs + probe variants, 80/10/10 split
 ├── training/
 │   ├── __init__.py
-│   ├── config.py                         # Shared LoRAConfig, TrainingConfig, MODEL_ID, RESPONSE_TEMPLATE
-│   ├── train_qlora.py                    # QLoRA 4-bit fine-tuning (~8 GB VRAM)
-│   ├── train_lora.py                     # LoRA bf16 fine-tuning (~16 GB VRAM)
-│   ├── train_full.py                     # Full fine-tuning locally, or --submit-hf to submit HF Jobs job
-│   └── train_hf_job.py                   # Self-contained UV script run by HF Jobs (submitted by train_full.py --submit-hf)
+│   ├── config.py                         # MODEL_ID, METHOD_PRESETS, LoRAConfig, TrainingConfig, WANDB_PROJECT, repo helpers
+│   ├── train.py                          # Single trainer: --method qlora|lora|full, --variant, wandb, --submit-hf
+│   └── train_hf_job.py                   # Self-contained UV script run by HF Jobs (submitted by train.py --submit-hf)
 ├── evaluation/
 │   ├── __init__.py
-│   ├── eval_rouge.py                     # ROUGE-1/2/L scorer (Stage B — NotImplementedError stub)
-│   ├── eval_bertscore.py                 # BERTScore scorer (Stage B — NotImplementedError stub)
-│   └── eval_llm.py                       # Gemini LLM-as-judge scorer (Stage B — NotImplementedError stub)
+│   ├── predict.py                        # Generate the Gemini advanced-baseline summaries (API only)
+│   ├── evaluate.py                       # ROUGE-1/2/L + BERTScore (xlm-roberta-large) + Gemini judge → one report
+│   └── error_analysis.py                 # Gemini-labelled failure-type rates on a ~50-sample
 ├── tests/
 │   ├── __init__.py
-│   ├── test_download.py                  # Unit tests for normalize_iahlt / normalize_hesum
-│   └── test_preprocess.py               # Unit tests for format_instruction / split_dataset
+│   ├── test_download.py                  # normalize_iahlt / normalize_hesum
+│   ├── test_preprocess.py                # build_prompt / make_variant / split_dataset
+│   └── test_evaluation.py                # ROUGE-on-Hebrew, judge-reply parsing, failure rates (live test gated)
 ├── docs/
+│   ├── ANLP Project abstract.md          # The research proposal this project implements
 │   └── superpowers/
 │       ├── specs/2026-05-26-training-pipeline-design.md
 │       └── plans/2026-05-26-stage-a-training-pipeline.md
 ├── outputs/
 │   ├── data/
 │   │   ├── raw/combined.jsonl            # Merged normalized dataset — 10,000 records (gitignored)
-│   │   └── processed/                   # Arrow dataset splits: train/ val/ test/ (gitignored)
-│   ├── checkpoints/                     # LoRA adapter / full model checkpoints (gitignored)
-│   └── results/                         # Evaluation JSON reports (gitignored)
-├── .venv/                               # Python virtual environment (gitignored)
-├── .env                                 # HF_TOKEN, GEMINI_API_KEY — never commit
+│   │   └── processed/<variant>/          # Arrow splits train/ val/ test/ per probe variant (gitignored)
+│   ├── checkpoints/                      # LoRA adapter / full model checkpoints (gitignored)
+│   └── results/                          # predictions.jsonl + evaluation/error-analysis reports (gitignored)
+├── .venv/                                # Python virtual environment (gitignored)
+├── .env                                  # HF_TOKEN, GEMINI_API_KEY — never commit
 ├── .gitignore
 ├── AGENTS.md
-├── CLAUDE.md                            # Claude Code guidance
+├── CLAUDE.md                             # Symlink → AGENTS.md
 ├── README.md
 ├── requirements.txt
-└── TODO.md                              # Milestone tracker
+└── TODO.md                               # Milestone tracker
 ```
 
-* `data/download.py`: Downloads Hebrew summarization datasets (biunlp/HeSum; IAHLT/summarization_he inaccessible with current credentials), normalises to `{text, summary, source}` schema, writes to `outputs/data/raw/combined.jsonl`.
-* `data/preprocess.py`: Reads `combined.jsonl`, formats each example as a Hebrew summarization instruction pair (adds `formatted` column), splits 80/10/10, saves Arrow dataset splits. Does NOT tokenize — SFTTrainer handles that.
-* `training/config.py`: Shared constants and dataclasses used by all three training scripts: `MODEL_ID="Qwen/Qwen3-2B"`, `LoRAConfig` (r=16, alpha=32), `TrainingConfig`.
-* `training/train_qlora.py`: QLoRA 4-bit fine-tuning using `BitsAndBytesConfig` + LoRA. Saves adapter checkpoint, `training_args.json`, and `predictions.jsonl`.
-* `training/train_lora.py`: LoRA bf16 fine-tuning (no quantization). Same outputs as QLoRA variant.
-* `training/train_full.py`: Full fine-tuning of all weights. `--submit-hf --hf-user <name>` uploads dataset to HF Hub and submits a real QLoRA training job via `HfApi.run_uv_job()`. Add `--smoke-test` for a quick 10-step verification run.
-* `training/train_hf_job.py`: Self-contained PEP 723 UV script submitted inline by `train_full.py --submit-hf`. Downloads dataset from HF Hub, trains Qwen3-2B with QLoRA on the cloud GPU, and pushes the LoRA adapter to Hub. Never run directly.
-* `evaluation/eval_*.py`: Stage B stubs — correct function signatures and CLI, body raises `NotImplementedError`.
-* `tests/test_download.py` / `tests/test_preprocess.py`: 9 unit tests, all passing.
+* `data/download.py`: Downloads Hebrew summarization datasets (biunlp/HeSum; IAHLT/summarization_he inaccessible with current credentials), normalises to `{text, summary, source}`, writes `outputs/data/raw/combined.jsonl`.
+* `data/preprocess.py`: Reads `combined.jsonl`, builds `(prompt, completion)` pairs for completion-only SFT, applies the `--variant whole|lead|body` truncation probe (`make_variant`), truncates each article to `MAX_LENGTH-256` tokens so the summary always survives (HeSum articles are long — median ~2500 tokens; without this, completion-only loss goes nan), splits 80/10/10, saves Arrow splits to `outputs/data/processed/<variant>/`. `build_prompt`/`make_variant` are the single source of truth, reused by `evaluation/predict.py`.
+* `training/config.py`: Shared constants: `MODEL_ID="Qwen/Qwen3-2B"`, `METHOD_PRESETS` (the qlora/lora/full deltas), `LoRAConfig` (r=16, alpha=32), `TrainingConfig`, `WANDB_PROJECT`, and `dataset_repo`/`model_repo` Hub-id helpers.
+* `training/train.py`: One trainer for all three regimes (`--method qlora|lora|full`). Trains with `completion_only_loss=True`, logs to wandb, saves the adapter; `--push-to-hub` or `--submit-hf` push to the Hub. Inference is NOT here — that's `evaluation/predict.py`.
+* `training/train_hf_job.py`: Self-contained PEP 723 UV script submitted inline by `train.py --submit-hf`. Reads METHOD/VARIANT/DATASET_REPO/OUTPUT_REPO/WANDB_PROJECT from env, trains on the cloud GPU, then generates fine-tuned + zero-shot base test predictions (PEFT `disable_adapter`) and pushes the adapter + `predictions-finetuned.jsonl` / `predictions-base.jsonl` to the Hub. Never run directly.
+* `evaluation/predict.py`: Generates the Gemini advanced-baseline summaries via API (no GPU, no model load), same prompt as training. Resumes from a partial file. The fine-tuned and zero-shot predictions come from the cloud training job, not here.
+* `evaluation/evaluate.py`: Scores a predictions file with ROUGE-1/2/L, BERTScore (xlm-roberta-large), and the Gemini faithfulness/fluency judge (`--skip-llm` to skip). One JSON report per system.
+* `evaluation/error_analysis.py`: Samples ~50 predictions and has Gemini label failure types (hallucination, omission, entity/number error, lead copying, fluency), writing per-type rates.
+* `tests/`: 16 fast behavioral tests + 1 gated live Gemini test, all passing.
 
 ---
 
@@ -86,59 +88,61 @@
 * `uv` package manager (used instead of pip — `uv` is on PATH)
 * Install dependencies: `uv pip install -r requirements.txt` (or `uv sync` if using a lockfile)
 * Fill in `.env`:
-  * `HF_TOKEN` — HuggingFace access token (needed for model download and HF Hub upload)
-  * `GEMINI_API_KEY` — Gemini API key (needed for LLM-based evaluation in Stage B)
+  * `HF_TOKEN` — HuggingFace access token (model download + HF Hub upload)
+  * `GEMINI_API_KEY` — Gemini API key (advanced baseline + LLM-judge + error analysis)
+  * wandb auth is read from `~/.netrc` (global); the HF job also needs `WANDB_API_KEY`, picked up automatically.
 * Source the env and activate venv before running scripts: `source .env && source .venv/bin/activate`
+* **Always invoke scripts as modules** (`python -m data.preprocess`, `python -m training.train`, …)
+  so package imports resolve from the repo root. This is the one supported way to run them.
+* **Never load or run a model on the local GPU** — this machine (8 GB) freezes. All Qwen3-2B
+  training and inference run on **HuggingFace Jobs**. Local is only for: data download/preprocess
+  (CPU), `pytest`, the Gemini baseline + judge + error analysis (API), and BERTScore (pinned to CPU).
 
-**Running the pipeline (Stage A):**
+**Running the full pipeline:**
 ```bash
 source .env && source .venv/bin/activate
 
-# Step 1: Download datasets
-python data/download.py
+# 1. Download datasets  →  outputs/data/raw/combined.jsonl (10,000 records)   [local, CPU]
+python -m data.download
 
-# Step 2: Preprocess (format + split)
-python data/preprocess.py
+# 2. Preprocess: prompt/completion pairs + 80/10/10 split. --variant selects the probe input.  [local, CPU]
+python -m data.preprocess --variant whole        # also: --variant lead | body
 
-# Step 3 — choose one training option:
+# 3. Train on HF Jobs (cloud GPU). The job also generates fine-tuned + zero-shot base test
+#    predictions and pushes predictions-finetuned.jsonl / predictions-base.jsonl to the model repo.
+python -m training.train --submit-hf --hf-user avreymi --smoke-test   # verify first (~$0.05)
+python -m training.train --submit-hf --hf-user avreymi                # full run
 
-# Option A: QLoRA locally (~8 GB VRAM)
-python training/train_qlora.py --output outputs/checkpoints/run-qlora-01
+# 4. Pull the cloud predictions, and generate the Gemini advanced baseline locally (API only):
+hf download avreymi/amlk-qwen3-2b-sft predictions-finetuned.jsonl --repo-type model \
+    --local-dir outputs/results/
+hf download avreymi/amlk-qwen3-2b-sft predictions-base.jsonl --repo-type model \
+    --local-dir outputs/results/
+python -m evaluation.predict --variant whole --output outputs/results/gemini-whole.jsonl
 
-# Option B: LoRA bf16 locally (~16 GB VRAM)
-python training/train_lora.py --output outputs/checkpoints/run-lora-01
+# 5. Score each predictions file (ROUGE + BERTScore[CPU] + Gemini judge; --skip-llm to skip the judge):  [local]
+python -m evaluation.evaluate --predictions outputs/results/predictions-finetuned.jsonl \
+    --output outputs/results/finetuned-whole.report.json
 
-# Option C: Full fine-tune locally (~40 GB VRAM)
-python training/train_full.py --output outputs/checkpoints/run-full-01
-
-# Option D: Submit QLoRA job to HuggingFace Jobs (recommended — no local GPU needed)
-python training/train_full.py --submit-hf --hf-user avreymi
+# 6. Error analysis (failure-type rates on a ~50 sample, Gemini API):  [local]
+python -m evaluation.error_analysis --predictions outputs/results/predictions-finetuned.jsonl \
+    --output outputs/results/finetuned-whole.errors.json --n 50
 ```
 
-**HuggingFace Jobs — what happens and how to monitor:**
+**HuggingFace Jobs — submit and monitor:**
 ```bash
-# The --submit-hf command does two things automatically:
-#   1. Uploads outputs/data/processed/ to HF Hub as avreymi/amlk-training-data (private)
-#   2. Submits train_hf_job.py inline to HF Jobs (a10g-large, 4h timeout, QLoRA)
-# It prints a Job ID when done. Use that ID to monitor:
+# --submit-hf uploads outputs/data/processed/<variant>/ to the Hub (avreymi/amlk-training-data[-<variant>])
+# then submits train_hf_job.py inline (a10g-large, 6h, 1-epoch QLoRA). It prints a Job ID.
+python -m training.train --submit-hf --hf-user avreymi               # full run
+python -m training.train --submit-hf --hf-user avreymi --smoke-test  # 10 steps, a10g-small, ~$0.05 — verify first
 
-# Check job status
-hf jobs ps
-
-# Stream live logs (replace <job-id> with the printed ID)
-hf jobs logs <job-id>
-
-# Inspect details
+hf jobs ps                    # list recent jobs
+hf jobs logs <job-id>         # snapshot; add -f to stream
 hf jobs inspect <job-id>
 
-# Quick smoke-test (10 steps, a10g-small, ~$0.05) — use first to verify setup
-python training/train_full.py --submit-hf --hf-user avreymi --smoke-test
-
-# After training completes, the LoRA adapter is at:
-#   https://huggingface.co/avreymi/amlk-qwen3-2b-sft  (private)
-# Load it for evaluation:
-#   from peft import PeftModel
-#   model = PeftModel.from_pretrained(base_model, "avreymi/amlk-qwen3-2b-sft")
+# Trained adapter (LoRA only, not merged): https://huggingface.co/avreymi/amlk-qwen3-2b-sft  (private)
+# Evaluation loads it via: predict.py --model finetuned --adapter avreymi/amlk-qwen3-2b-sft
+# Training metrics: wandb project "amlk-hebrew-summarization".
 ```
 
 **Running tests:**
@@ -150,24 +154,24 @@ source .venv/bin/activate && python -m pytest tests/ -v
 
 ## Status - remember to update it
 
-**Stage A complete as of 2026-05-27.** HF Jobs submission verified 2026-05-27.
+**Stages A + B complete as of 2026-06-12.** Stack: trl 1.6.0, transformers 5.11, peft 0.19, wandb 0.27.
 - `data/download.py` — 10,000 records from biunlp/HeSum in `outputs/data/raw/combined.jsonl`. IAHLT/summarization_he is inaccessible (not on HF Hub with current credentials).
-- `data/preprocess.py` — 8,000 train / 1,000 val / 1,000 test splits in `outputs/data/processed/`.
-- `training/train_qlora.py`, `train_lora.py`, `train_full.py` — three fine-tuning variants implemented.
-- `training/train_hf_job.py` — QLoRA remote training script for HF Jobs infrastructure.
-- `evaluation/eval_*.py` — Stage B stubs in place.
-- 9 unit tests, all passing.
-- HF Jobs dataset: `avreymi/amlk-training-data` (private). Model output: `avreymi/amlk-qwen3-2b-sft`.
-- Known limitation: QLoRA `push_to_hub` saves the LoRA adapter only (not merged). Evaluation scripts must load base + adapter together via `PeftModel.from_pretrained`.
-- Known limitation: `DataCollatorForCompletionOnlyLM` was removed in trl 1.5.0; training scripts use full-sequence loss. Can be improved with `SFTConfig(completion_only_loss=True)` + prompt/completion column split.
+- `data/preprocess.py` — prompt/completion pairs + `--variant whole|lead|body`; 8,000/1,000/1,000 splits in `outputs/data/processed/<variant>/`.
+- `training/train.py` — one trainer for qlora|lora|full, `completion_only_loss=True`, wandb logging, `--submit-hf` to HF Jobs. Verified: local 12-step QLoRA smoke runs and logs to wandb.
+- `training/train_hf_job.py` — self-contained HF Jobs script (trl 1.6 API, wandb).
+- `evaluation/predict.py` / `evaluate.py` / `error_analysis.py` — full metric battery (ROUGE/BERTScore/Gemini judge), zero-shot + Gemini baselines, failure-type analysis.
+- 16 fast tests + 1 gated live Gemini test, all passing (`python -m pytest tests/`).
+- HF Jobs dataset: `avreymi/amlk-training-data` (private). Model output: `avreymi/amlk-qwen3-2b-sft` (private). wandb project: `amlk-hebrew-summarization`. Advanced baseline + judge: Gemini `gemini-2.5-flash`.
+- Note: QLoRA `push_to_hub` saves the LoRA adapter only (not merged) — evaluation loads base + adapter via `PeftModel.from_pretrained` (handled in `predict.py`).
+- Note: the Gemini LLM-judge and the Gemini advanced baseline are the same model family — flag the possible self-preference bias in the paper.
 
 **Next steps:**
-1. **Stage B (evaluation pipeline)** — implement `eval_rouge.py`, `eval_bertscore.py`, `eval_llm.py`; add advanced-model baseline inference (same Hebrew test set + prompt); run error analysis on a sampled prediction set.
-2. **Stage C (truncation / positional-shortcut probe)** — extend `data/preprocess.py` (or add `data/truncate.py`) for Whole / Lead-only / Body-only variants; train and evaluate one model per variant.
-3. **Literature (English summarization)** — document lessons from English news summarization in the paper (lead bias, ROUGE limits, baseline practices); see `TODO.md` C.1.
-4. **Journalism / headline control (optional)** — optional alternate instruction templates for headline-length vs longer summaries; see `TODO.md` G.
+1. **D.1** — full QLoRA run on HF Jobs + evaluation battery (finetuned vs zero-shot vs Gemini) for the **14.06 presentation**.
+2. **Truncation probe** — train/evaluate whole / lead / body variants by **30.06** (`--variant` is ready).
+3. **Literature (English summarization)** — document lessons from English news summarization in the paper (lead bias, ROUGE limits, baseline practices).
+4. **Journalism / headline control (optional)** — alternate instruction templates for headline-length vs longer summaries; see `TODO.md` H.
 
-Presentation deadline: 2026-06-14. Final submission: 2026-07-31.
+Final submission: **31.07**.
 
 ---
 

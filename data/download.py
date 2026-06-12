@@ -4,7 +4,7 @@ Downloads Hebrew summarization datasets from HuggingFace Hub (IAHLT/summarizatio
 and biunlp/HeSum), normalises their schemas to {text, summary, source}, and writes
 the merged dataset to outputs/data/raw/combined.jsonl.
 
-Run: python data/download.py
+Run: python -m data.download
 Execution environment: local development machine with HF_TOKEN in environment.
 """
 import json
