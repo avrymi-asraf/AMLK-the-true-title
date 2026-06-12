@@ -1,6 +1,6 @@
 ## Project Goal
 
-* **Description:** AMLK is a Hebrew text summarization research project. The goal is to fine-tune the `Qwen/Qwen3-2B` language model on Hebrew summarization datasets, evaluate it with ROUGE, BERTScore, and LLM-based metrics, and produce a research paper and presentation. The project runs locally for development and on HuggingFace infrastructure for training jobs when local compute is insufficient; all scripts are executed as command-line Python scripts.
+* **Description:** AMLK is a Hebrew **news** summarization research project. The goal is to fine-tune `Qwen/Qwen3-2B` on Hebrew journalism datasets (HeSum, IAHLT summarization_he), evaluate with ROUGE, BERTScore, and LLM-as-judge, and produce a research paper and presentation. Design choices are informed by **English summarization literature** (lead bias, metric limits, strong baselines) without re-running English experiments. Evaluation includes an **advanced-model baseline** (e.g. Gemini API on the same test set and prompt) so metrics can be interpreted against a stronger system. A **truncation / positional-shortcut probe** trains separate models on Whole text, Lead-only, and Body-only inputs. Optional **headline-style control** varies the instruction (short headline vs longer summary). **Error analysis** labels a sampled set of predictions for failure types common in the literature. Runs locally or on HuggingFace Jobs; all scripts are command-line Python.
 
 ---
 
@@ -8,7 +8,7 @@
 
 * **Architecture:** The project is divided into three sequential pipelines:
   1. **Training pipeline** — downloads Hebrew summarization datasets (IAHLT summarization_he, HeSum), loads the `Qwen/Qwen3-2B` base model, and fine-tunes it using the HuggingFace `transformers`/`trl` stack. If local GPU is insufficient, the job is submitted to HuggingFace as a remote training job.
-  2. **Evaluation pipeline** — takes the fine-tuned checkpoint and runs it against a held-out test set, computing ROUGE scores, BERTScore, and an LLM-as-judge evaluation (via the Gemini API).
+  2. **Evaluation pipeline** — runs fine-tuned and baseline checkpoints on the held-out test set: ROUGE, BERTScore, LLM-as-judge (Gemini), an advanced-model baseline on the same data, and systematic error analysis on a sampled subset.
   3. **Results & reporting** — aggregated metrics feed into the final paper and presentation.
 
 * **Code Flow:**
@@ -161,7 +161,13 @@ source .venv/bin/activate && python -m pytest tests/ -v
 - Known limitation: QLoRA `push_to_hub` saves the LoRA adapter only (not merged). Evaluation scripts must load base + adapter together via `PeftModel.from_pretrained`.
 - Known limitation: `DataCollatorForCompletionOnlyLM` was removed in trl 1.5.0; training scripts use full-sequence loss. Can be improved with `SFTConfig(completion_only_loss=True)` + prompt/completion column split.
 
-**Next steps:** Stage B (evaluation pipeline) — implement `eval_rouge.py`, `eval_bertscore.py`, `eval_llm.py`. Presentation deadline: 2026-06-14. Final submission: 2026-07-31.
+**Next steps:**
+1. **Stage B (evaluation pipeline)** — implement `eval_rouge.py`, `eval_bertscore.py`, `eval_llm.py`; add advanced-model baseline inference (same Hebrew test set + prompt); run error analysis on a sampled prediction set.
+2. **Stage C (truncation / positional-shortcut probe)** — extend `data/preprocess.py` (or add `data/truncate.py`) for Whole / Lead-only / Body-only variants; train and evaluate one model per variant.
+3. **Literature (English summarization)** — document lessons from English news summarization in the paper (lead bias, ROUGE limits, baseline practices); see `TODO.md` C.1.
+4. **Journalism / headline control (optional)** — optional alternate instruction templates for headline-length vs longer summaries; see `TODO.md` G.
+
+Presentation deadline: 2026-06-14. Final submission: 2026-07-31.
 
 ---
 
