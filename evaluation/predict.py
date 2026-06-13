@@ -24,7 +24,11 @@ import datasets as hf_datasets
 
 from data.preprocess import build_prompt, make_variant
 
-GEMINI_MODEL = "gemini-2.5-flash"
+# gemini-2.0-flash, not 2.5-flash: 2.5 "thinks" before answering (~11s/call), which makes the
+# ~4000-call evaluation battery take ~10h on HF Jobs; 2.0-flash has no thinking step (~2s/call,
+# ~6x faster) and is still a strong advanced baseline + judge. Revisit if a slower, higher-quality
+# baseline is wanted later.
+GEMINI_MODEL = "gemini-2.0-flash"
 
 
 def strip_think(text: str) -> str:
