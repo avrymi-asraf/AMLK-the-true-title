@@ -118,7 +118,9 @@ def submit(hf_user: str, variant: str, smoke: bool):
         print("ERROR: HF_TOKEN and GEMINI_API_KEY must be set. Run: source .env", file=sys.stderr)
         sys.exit(1)
 
-    flavor, timeout, limit = ("cpu-basic", "30m", "5") if smoke else ("cpu-upgrade", "3h", "0")
+    # ~4000 sequential Gemini calls (baseline + judge) can be rate-limited, so allow plenty of
+    # wall-clock; each report is pushed as soon as it's ready, so a timeout never loses finished work.
+    flavor, timeout, limit = ("cpu-basic", "30m", "5") if smoke else ("cpu-upgrade", "5h", "0")
     api = HfApi(token=hf_token)
     print(f"Submitting {'SMOKE ' if smoke else ''}eval job (flavor={flavor}, timeout={timeout}, limit={limit})...")
     job = api.run_uv_job(
