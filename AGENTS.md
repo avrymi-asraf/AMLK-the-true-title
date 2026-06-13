@@ -40,9 +40,11 @@
 │   └── train_hf_job.py                   # Self-contained UV script run by HF Jobs (submitted by train.py --submit-hf)
 ├── evaluation/
 │   ├── __init__.py
-│   ├── predict.py                        # Generate the Gemini advanced-baseline summaries (API only)
+│   ├── predict.py                        # Generate the Gemini advanced-baseline summaries (API only); strip_think() tool
 │   ├── evaluate.py                       # ROUGE-1/2/L + BERTScore (xlm-roberta-large) + Gemini judge → one report
-│   └── error_analysis.py                 # Gemini-labelled failure-type rates on a ~50-sample
+│   ├── error_analysis.py                 # Gemini-labelled failure-type rates on a ~50-sample
+│   ├── eval_hf_job.py                    # Run the full eval battery on HF Jobs (cheap CPU): --submit-hf | cloud runner
+│   └── build_report_tables.py            # Assemble the per-system reports into the D1 markdown comparison tables
 ├── tests/
 │   ├── __init__.py
 │   ├── test_download.py                  # normalize_iahlt / normalize_hesum
@@ -75,9 +77,11 @@
 * `training/config.py`: Shared constants: `MODEL_ID="Qwen/Qwen3-2B"`, `METHOD_PRESETS` (the qlora/lora/full deltas), `LoRAConfig` (r=16, alpha=32), `TrainingConfig`, `WANDB_PROJECT`, and `dataset_repo`/`model_repo` Hub-id helpers.
 * `training/train.py`: One trainer for all three regimes (`--method qlora|lora|full`). Trains with `completion_only_loss=True`, logs to wandb, saves the adapter; `--push-to-hub` or `--submit-hf` push to the Hub. Inference is NOT here — that's `evaluation/predict.py`.
 * `training/train_hf_job.py`: Self-contained PEP 723 UV script submitted inline by `train.py --submit-hf`. Reads METHOD/VARIANT/DATASET_REPO/OUTPUT_REPO/WANDB_PROJECT from env, trains on the cloud GPU, then generates fine-tuned + zero-shot base test predictions (PEFT `disable_adapter`) and pushes the adapter + `predictions-finetuned.jsonl` / `predictions-base.jsonl` to the Hub. Never run directly.
-* `evaluation/predict.py`: Generates the Gemini advanced-baseline summaries via API (no GPU, no model load), same prompt as training. Resumes from a partial file. The fine-tuned and zero-shot predictions come from the cloud training job, not here.
-* `evaluation/evaluate.py`: Scores a predictions file with ROUGE-1/2/L, BERTScore (xlm-roberta-large), and the Gemini faithfulness/fluency judge (`--skip-llm` to skip). One JSON report per system.
-* `evaluation/error_analysis.py`: Samples ~50 predictions and has Gemini label failure types (hallucination, omission, entity/number error, lead copying, fluency), writing per-type rates.
+* `evaluation/predict.py`: Generates the Gemini advanced-baseline summaries via API (no GPU, no model load), same prompt as training. Resumes from a partial file. The fine-tuned and zero-shot predictions come from the cloud training job, not here. Also defines `strip_think()` — the shared tool that drops closed Qwen3 `<think>…</think>` reasoning so metrics score the summary, not the reasoning (used by evaluate.py and error_analysis.py).
+* `evaluation/evaluate.py`: Scores a predictions file with ROUGE-1/2/L, BERTScore (xlm-roberta-large), and the Gemini faithfulness/fluency judge (`--skip-llm` to skip; `--limit N` to cap for a smoke run). Applies `strip_think` before scoring. One JSON report per system.
+* `evaluation/error_analysis.py`: Samples ~50 predictions (post `strip_think`) and has Gemini label failure types (hallucination, omission, entity/number error, lead copying, fluency), writing per-type rates.
+* `evaluation/eval_hf_job.py`: Runs the whole D1 battery on HuggingFace Jobs so the ~4000 Gemini calls + BERTScore happen on the cloud's fast connection (the user has weak internet). One file, two modes: `--submit-hf` uploads itself to a cheap CPU job; with no args (how HF Jobs invokes it) it fetches the public repo + Hub predictions/dataset and drives the existing `evaluation/` CLIs by subprocess, pushing each report to the model repo under `reports/` as it finishes (timeout-safe).
+* `evaluation/build_report_tables.py`: Downloads the pushed `reports/*.json` and assembles the D1 markdown — a quality table (ROUGE/BERTScore/judge), a failure-rate table, and behavioural notes (base `<think>`/language leakage, fine-tuned repetition, judge self-preference caveat).
 * `tests/`: 16 fast behavioral tests + 1 gated live Gemini test, all passing.
 
 ---
@@ -114,20 +118,19 @@ python -m data.preprocess --variant whole        # also: --variant lead | body
 python -m training.train --submit-hf --hf-user avreymi --smoke-test   # verify first (~$0.05)
 python -m training.train --submit-hf --hf-user avreymi                # full run
 
-# 4. Pull the cloud predictions, and generate the Gemini advanced baseline locally (API only):
-hf download avreymi/amlk-qwen3-2b-sft predictions-finetuned.jsonl --repo-type model \
-    --local-dir outputs/results/
-hf download avreymi/amlk-qwen3-2b-sft predictions-base.jsonl --repo-type model \
-    --local-dir outputs/results/
-python -m evaluation.predict --variant whole --output outputs/results/gemini-whole.jsonl
+# 4. Run the whole eval battery on HF Jobs (cheap CPU). Generates the Gemini baseline and scores
+#    all 3 systems (finetuned/base/gemini) with ROUGE + BERTScore + judge + error analysis, pushing
+#    reports/*.json to the model repo. Done on the cloud so the ~4000 Gemini calls + BERTScore are
+#    off the user's weak local connection.
+python -m evaluation.eval_hf_job --submit-hf --hf-user avreymi --smoke-test   # 5 examples, verify first (~pennies)
+python -m evaluation.eval_hf_job --submit-hf --hf-user avreymi                # full run (cpu-upgrade, ~$0.10-0.30)
 
-# 5. Score each predictions file (ROUGE + BERTScore[CPU] + Gemini judge; --skip-llm to skip the judge):  [local]
-python -m evaluation.evaluate --predictions outputs/results/predictions-finetuned.jsonl \
-    --output outputs/results/finetuned-whole.report.json
+# 5. Assemble the D1 comparison tables (downloads the tiny report JSONs):  [local, no GPU/API]
+python -m evaluation.build_report_tables --output outputs/results/d1-tables.md
 
-# 6. Error analysis (failure-type rates on a ~50 sample, Gemini API):  [local]
-python -m evaluation.error_analysis --predictions outputs/results/predictions-finetuned.jsonl \
-    --output outputs/results/finetuned-whole.errors.json --n 50
+# (Local alternative to step 4, if you have a fast connection: run the scripts directly —
+#  evaluation.predict for the Gemini baseline, then evaluation.evaluate / evaluation.error_analysis
+#  on each of predictions-finetuned.jsonl / predictions-base.jsonl / the gemini file.)
 ```
 
 **HuggingFace Jobs — submit and monitor:**
@@ -164,7 +167,8 @@ source .venv/bin/activate && python -m pytest tests/ -v
 - `data/preprocess.py` — prompt/completion pairs + `--variant whole|lead|body`; 8,000/1,000/1,000 splits in `outputs/data/processed/<variant>/`.
 - `training/train.py` — one trainer for qlora|lora|full, `completion_only_loss=True`, wandb logging, `--submit-hf` to HF Jobs. Verified: local 12-step QLoRA smoke runs and logs to wandb.
 - `training/train_hf_job.py` — self-contained HF Jobs script (trl 1.6 API, wandb).
-- `evaluation/predict.py` / `evaluate.py` / `error_analysis.py` — full metric battery (ROUGE/BERTScore/Gemini judge), zero-shot + Gemini baselines, failure-type analysis.
+- `evaluation/predict.py` / `evaluate.py` / `error_analysis.py` — full metric battery (ROUGE/BERTScore/Gemini judge), zero-shot + Gemini baselines, failure-type analysis. `strip_think()` (in predict.py) drops closed Qwen3 `<think>…</think>` reasoning before scoring; evaluate.py has `--limit` for smoke runs.
+- `evaluation/eval_hf_job.py` + `build_report_tables.py` — D1 eval runs on a cheap CPU HF Job (clones the public repo, drives the existing CLIs, pushes `reports/*.json`); the tables tool turns those reports into the presentation markdown. Chosen because the user has weak internet (the ~4000 Gemini calls + BERTScore run cloud-side). Smoke job `6a2cfda2` verified the path end-to-end.
 - 16 fast tests + 1 gated live Gemini test, all passing (`python -m pytest tests/`).
 - HF Jobs dataset: `avreymi/amlk-training-data` (private). Model output: `avreymi/amlk-qwen3-2b-sft` (private). wandb project: `amlk-hebrew-summarization`. Advanced baseline + judge: Gemini `gemini-2.5-flash`.
 - Note: QLoRA `push_to_hub` saves the LoRA adapter only (not merged) — evaluation loads base + adapter via `PeftModel.from_pretrained` (handled in `predict.py`).
@@ -174,7 +178,7 @@ source .venv/bin/activate && python -m pytest tests/ -v
 - `train_hf_job.py` pushes each predictions file immediately after its generation loop (timeout-safe), prints progress every 10 batches, generates with `max_new_tokens=256` (p99 reference length is 187 tokens); inference-only jobs use a 1h timeout.
 
 **Next steps:**
-1. **D.1** — full QLoRA run on HF Jobs + evaluation battery (finetuned vs zero-shot vs Gemini) for the **14.06 presentation**. Training done; predictions job `6a2c26ea` in flight; then run evaluate.py + error_analysis.py + Gemini baseline.
+1. **D.1** — full QLoRA run + evaluation battery for the **14.06 presentation**. Training done; predictions on the Hub (1000 each, finetuned ≠ base). Eval battery runs via `evaluation.eval_hf_job` (full run job `6a2cff9b`); then `evaluation.build_report_tables` → D1 markdown for the deck (the presentation SVG is flattened paths, so the deliverable is markdown tables to paste in).
 2. **Truncation probe** — train/evaluate whole / lead / body variants by **30.06** (`--variant` is ready). **First apply the post-mortem checklist (§7): extended LoRA target modules, a10g-small, `--method lora`, fast-path deps.**
 3. **Literature (English summarization)** — document lessons from English news summarization in the paper (lead bias, ROUGE limits, baseline practices).
 4. **Journalism / headline control (optional)** — alternate instruction templates for headline-length vs longer summaries; see `TODO.md` H.
