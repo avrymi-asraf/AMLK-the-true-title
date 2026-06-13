@@ -43,8 +43,8 @@ def build_tables(reports: dict, errors: dict, leakage: dict | None) -> str:
     """Render the quality table, failure-rate table, and notes from the loaded reports."""
     out = ["# D1 — Hebrew News Summarization Results (variant: whole, n=1000 test)\n"]
 
-    out.append("## Quality metrics\n")
-    out.append("| System | ROUGE-1 | ROUGE-2 | ROUGE-L | BERTScore-F1 | Faithfulness (1-5) | Fluency (1-5) |")
+    out.append("## Quality metrics  (↑ = higher is better — all six)\n")
+    out.append("| System | ROUGE-1 ↑ | ROUGE-2 ↑ | ROUGE-L ↑ | BERTScore-F1 ↑ | Faithfulness 1-5 ↑ | Fluency 1-5 ↑ |")
     out.append("|---|---|---|---|---|---|---|")
     for s in SYSTEMS:
         r, j = reports[s], reports[s].get("llm_judge", {})
@@ -52,7 +52,7 @@ def build_tables(reports: dict, errors: dict, leakage: dict | None) -> str:
                    f"{r['rouge']['rougeL']} | {r['bertscore']['f1']} | "
                    f"{j.get('faithfulness_mean', '—')} | {j.get('fluency_mean', '—')} |")
 
-    out.append("\n## Failure-type rates (Gemini-labelled sample)\n")
+    out.append("\n## Failure-type rates (Gemini-labelled sample)  (↓ = lower is better — all five)\n")
     out.append("| System | Hallucination | Omission | Entity/number | Lead-copying | Fluency |")
     out.append("|---|---|---|---|---|---|")
     for s in SYSTEMS:
