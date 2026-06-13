@@ -16,7 +16,7 @@ import random
 from pathlib import Path
 
 from evaluation.evaluate import gemini_json
-from evaluation.predict import GEMINI_MODEL
+from evaluation.predict import GEMINI_MODEL, strip_think
 
 FAILURE_TYPES = ["hallucination", "omission", "entity_or_number_error", "lead_copying", "fluency_problem"]
 
@@ -71,6 +71,9 @@ def main():
 
     with open(args.predictions, encoding="utf-8") as f:
         predictions = [json.loads(line) for line in f]
+    # Label the summary itself, not any leaked Qwen3 <think> reasoning (no-op when absent).
+    for p in predictions:
+        p["prediction"] = strip_think(p["prediction"])
     random.seed(args.seed)
     sample = random.sample(predictions, min(args.n, len(predictions)))
     print(f"Labelling {len(sample)} of {len(predictions)} predictions from {args.predictions}")

@@ -15,6 +15,7 @@ Execution environment: any machine with GEMINI_API_KEY set (no GPU, no local mod
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -24,6 +25,17 @@ import datasets as hf_datasets
 from data.preprocess import build_prompt, make_variant
 
 GEMINI_MODEL = "gemini-2.5-flash"
+
+
+def strip_think(text: str) -> str:
+    """Drop Qwen3 <think>...</think> reasoning so metrics score the summary, not the reasoning.
+
+    Only well-formed (closed) blocks are removed. A truncated, unclosed <think> means the model
+    spent its whole budget reasoning and never wrote a summary — it is left as-is so its low score
+    reflects that real failure instead of being hidden. Shared tool, reused by evaluate.py and
+    error_analysis.py.
+    """
+    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
 
 
 def call_with_retry(fn, attempts: int = 5):

@@ -16,7 +16,7 @@ import re
 import sys
 from pathlib import Path
 
-from evaluation.predict import GEMINI_MODEL, call_with_retry
+from evaluation.predict import GEMINI_MODEL, call_with_retry, strip_think
 
 JUDGE_PROMPT = """You are a strict evaluator of Hebrew text summaries.
 Read the ARTICLE and the candidate SUMMARY, then rate the summary:
@@ -116,6 +116,7 @@ def main():
     parser.add_argument("--output", required=True)
     parser.add_argument("--bertscore-model", default="xlm-roberta-large")
     parser.add_argument("--skip-llm", action="store_true", help="Skip the Gemini judge (no API needed)")
+    parser.add_argument("--limit", type=int, default=0, help="Cap examples for a quick smoke check")
     args = parser.parse_args()
 
     with open(args.predictions, encoding="utf-8") as f:
@@ -123,6 +124,11 @@ def main():
     if not predictions:
         print(f"ERROR: {args.predictions} is empty", file=sys.stderr)
         sys.exit(1)
+    if args.limit:
+        predictions = predictions[:args.limit]
+    # Score the summary itself, not any leaked Qwen3 <think> reasoning (no-op when absent).
+    for p in predictions:
+        p["prediction"] = strip_think(p["prediction"])
     print(f"Scoring {len(predictions)} predictions from {args.predictions}")
 
     report = {
