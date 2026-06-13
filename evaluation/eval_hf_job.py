@@ -36,10 +36,12 @@ SYSTEMS = ("finetuned", "base", "gemini")  # one predictions-<name>.jsonl per sy
 def run_cloud_job():
     """Driven by HF Jobs: fetch code + data, run the eval CLIs, push reports to the Hub."""
     import io
+    import json
     import subprocess
     import tarfile
     import urllib.request
     from pathlib import Path
+    from shutil import copyfile
 
     from huggingface_hub import HfApi, hf_hub_download, snapshot_download
 
@@ -82,17 +84,39 @@ def run_cloud_job():
                         repo_id=model_repo, repo_type="model")
         print(f"  pushed reports/{local_name}")
 
+    def hub_file(name):
+        """Local path to reports/<name> on the model repo, or None if it isn't there yet."""
+        try:
+            return hf_hub_download(model_repo, f"reports/{name}", repo_type="model", token=hf_token)
+        except Exception:
+            return None
+
+    def line_count(path):
+        return sum(1 for _ in open(path, encoding="utf-8"))
+
     lim = ["--limit", str(limit)] if limit else []
 
-    # 3. Gemini advanced baseline (the only predictions not already on the Hub).
-    step(["evaluation.predict", "--variant", variant,
-          "--output", "outputs/results/predictions-gemini.jsonl", *lim])
-    push("predictions-gemini.jsonl")
+    # 3. Gemini advanced baseline — reuse a complete one already on the Hub (so a re-run after a
+    #    crash skips the ~40-min generation).
+    cached = hub_file("predictions-gemini.jsonl")
+    if cached and not limit and line_count(cached) >= 1000:
+        copyfile(cached, results / "predictions-gemini.jsonl")
+        print(f"Reusing Gemini baseline from the Hub ({line_count(cached)} rows)")
+    else:
+        step(["evaluation.predict", "--variant", variant,
+              "--output", "outputs/results/predictions-gemini.jsonl", *lim])
+        push("predictions-gemini.jsonl")
 
-    # 4. Score + error-analyse every system; push each report immediately (timeout-safe).
+    # 4. Score + error-analyse every system; skip any whose report is already complete (resume),
+    #    push each report immediately (timeout-safe).
     for name in SYSTEMS:
         preds = f"outputs/results/predictions-{name}.jsonl"
+        n_pred = line_count(results / f"predictions-{name}.jsonl")
         report, errors = f"{name}-{variant}.report.json", f"{name}-{variant}.errors.json"
+        done = hub_file(report)
+        if done and json.load(open(done)).get("n") == n_pred:
+            print(f"Skipping {name}: report already complete (n={n_pred})")
+            continue
         step(["evaluation.evaluate", "--predictions", preds,
               "--output", f"outputs/results/{report}", *lim])
         push(report)

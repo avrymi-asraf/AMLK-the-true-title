@@ -73,9 +73,18 @@ def compute_bertscore(predictions: list[dict], model_id: str = "xlm-roberta-larg
 
 
 def _parse_json(raw: str) -> dict:
-    """Pull the first JSON object out of an LLM reply (tolerates ```json fences)."""
-    match = re.search(r"\{.*?\}", raw, re.DOTALL)
-    return json.loads(match.group(0)) if match else {}
+    """Pull a JSON object out of an LLM reply, tolerating fences and malformed values.
+
+    Returns {} when nothing parses (e.g. the model replied "4/5" or wrapped the object in prose)
+    so one bad judge/label reply skips that example instead of crashing the whole run.
+    """
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not match:
+        return {}
+    try:
+        return json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return {}
 
 
 def gemini_json(model, prompt: str) -> dict:
