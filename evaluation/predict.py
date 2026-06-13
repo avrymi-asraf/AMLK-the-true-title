@@ -40,12 +40,26 @@ def call_with_retry(fn, attempts: int = 5):
 
 
 def build_gemini_generator():
-    """Return a generate(text)->summary fn backed by the Gemini advanced baseline."""
+    """Return a generate(text)->summary fn backed by the Gemini advanced baseline.
+
+    Returns empty string for blocked prompts (PROHIBITED_CONTENT) so resume logic
+    (line-count index) stays aligned with the dataset.
+    """
     import google.generativeai as genai
 
     genai.configure(api_key=os.environ["GEMINI_API_KEY"])
     model = genai.GenerativeModel(GEMINI_MODEL)
-    return lambda text: call_with_retry(lambda: model.generate_content(build_prompt(text)).text).strip()
+
+    def generate(text: str) -> str:
+        try:
+            return call_with_retry(lambda: model.generate_content(build_prompt(text)).text).strip()
+        except Exception as e:
+            if "candidates" in str(e).lower() or "blocked" in str(e).lower() or "prohibited" in str(e).lower():
+                print(f"  [SKIPPED] Blocked prompt — writing empty prediction.", file=sys.stderr)
+                return ""
+            raise
+
+    return generate
 
 
 def main():
