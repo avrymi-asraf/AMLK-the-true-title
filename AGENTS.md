@@ -24,8 +24,9 @@
 
 ```
 /AMLK
-├── .claude/
+├── .agents/
 │   └── skills/
+│       ├── colab-cli/SKILL.md             # Official Google Colab CLI usage for agent-safe remote runtimes
 │       ├── coding-principles/SKILL.md    # Project-local coding standards
 │       ├── training/SKILL.md             # AMLK training process (train.py, HF Jobs, wandb)
 │       └── testing/SKILL.md              # AMLK testing philosophy
@@ -44,7 +45,13 @@
 │   ├── evaluate.py                       # ROUGE-1/2/L + BERTScore (xlm-roberta-large) + Gemini judge → one report
 │   ├── error_analysis.py                 # Gemini-labelled failure-type rates on a ~50-sample
 │   ├── eval_hf_job.py                    # Run the full eval battery on HF Jobs (cheap CPU): --submit-hf | cloud runner
-│   └── build_report_tables.py            # Assemble the per-system reports into the D1 markdown comparison tables
+│   ├── build_report_tables.py            # Assemble the per-system reports into the D1 markdown comparison tables
+│   └── infer.py                          # GPU inference helpers (load adapter + generate); used by the observation notebook
+├── notebooks/
+│   └── evaluation_observation.ipynb      # evaluation-observation stage: live per-example view (summary/judge/errors) on Colab
+├── scripts/
+│   ├── __init__.py
+│   └── run_nb_cell.py                    # Drive notebook cells on a Colab session via colab-cli (agent cell-by-cell runner)
 ├── tests/
 │   ├── __init__.py
 │   ├── test_download.py                  # normalize_iahlt / normalize_hesum
@@ -82,6 +89,9 @@
 * `evaluation/error_analysis.py`: Samples ~50 predictions (post `strip_think`) and has Gemini label failure types (hallucination, omission, entity/number error, lead copying, fluency), writing per-type rates.
 * `evaluation/eval_hf_job.py`: Runs the whole D1 battery on HuggingFace Jobs so the ~4000 Gemini calls + BERTScore happen on the cloud's fast connection (the user has weak internet). One file, two modes: `--submit-hf` uploads itself to a cheap CPU job; with no args (how HF Jobs invokes it) it fetches the public repo + Hub predictions/dataset and drives the existing `evaluation/` CLIs by subprocess, pushing each report to the model repo under `reports/` as it finishes (timeout-safe).
 * `evaluation/build_report_tables.py`: Downloads the pushed `reports/*.json` and assembles the D1 markdown — a quality table (ROUGE/BERTScore/judge), a failure-rate table, and behavioural notes (base `<think>`/language leakage, fine-tuned repetition, judge self-preference caveat).
+* `evaluation/infer.py`: GPU inference helpers — `load_finetuned_model` (base + LoRA adapter, `disable_adapter()` gives the zero-shot base) and `generate_summaries` (batched greedy decode over a processed split). The importable twin of `train_hf_job.py`'s inline generation block (that cloud script can't import repo code); keep the two in sync. **Remote GPU only — never call locally.**
+* `notebooks/evaluation_observation.ipynb`: The **evaluation-observation** stage. A self-bootstrapping Colab notebook that runs the *real* evaluation functions live and **displays** the per-example process (article → model summary → reference → judge faithfulness/fluency → error-analysis failure labels) for finetuned/base/gemini. Loads existing Hub predictions (finetuned/base at repo root, gemini under `reports/`) and generates fresh summaries on a T4. Judge/error/browse cells are API+CPU; only the generation cell needs a GPU.
+* `scripts/run_nb_cell.py`: Agent cell-runner — reads the notebook with `nbformat` and execs a chosen code cell / range against a persistent Colab session via `colab exec` (the Colab CLI has no native `.ipynb` runner). `--list` shows cell indices; the caller owns `colab new`/`stop`. This is how an agent observes the eval cell-by-cell.
 * `tests/`: 16 fast behavioral tests + 1 gated live Gemini test, all passing.
 
 ---

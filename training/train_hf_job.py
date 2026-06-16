@@ -183,6 +183,9 @@ def generate_predictions(label: str) -> list[dict]:
 
     Left-padding ensures all sequences in a batch are right-aligned so that
     the slice `out[:, input_len:]` consistently extracts only generated tokens.
+
+    Importable twin (used by the observation notebook): evaluation/infer.py:generate_summaries.
+    This script can't import repo code (submitted inline), so keep the two in sync by hand.
     """
     tokenizer.padding_side = "left"
     rows = []

@@ -58,3 +58,13 @@ whole-article model, ablate the input at inference" (what the trained model reli
 
 ## H. Finalize — 31.07
 - [ ] Final paper and presentation
+
+
+
+# add observation of the process.
+in this stage I dont see the summary of my model, the output of the model on test/eval set, the what the llm judge said about the summary, and the error analysis. I want to see them. 
+add evaluation-observation - it means I want to see the porcess of the evaluation so I can understand what happened, how the output look like and according that understand what works good in the train and what not.
+we will do it - 1. by colab notebook that run and display everything.
+to do it, you need to use the real functions that you use in the code. create it according the skill notebook-observability.
+implement it and validate that it works.
+I also want that agent can run the cells of the notebook by the colab-cli, in this way it can run cell by cell ant the agent can do the reaserch and observation by self. 
