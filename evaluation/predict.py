@@ -30,6 +30,10 @@ from data.preprocess import build_prompt, make_variant
 # judge. (gemini-2.0-flash was tried first but is retired — 404 on generate.) Revisit if a slower,
 # higher-quality baseline is wanted later.
 GEMINI_MODEL = "gemini-2.5-flash-lite"
+# Per-request deadline (seconds) for every generate_content call. Without it a single HTTP
+# request can hang forever on a degraded network (e.g. a flaky Colab VM), so call_with_retry
+# never gets to retry. flash-lite answers in ~1s on a healthy net, so 60s never false-fires.
+GEMINI_TIMEOUT = 60
 
 
 def strip_think(text: str) -> str:
@@ -69,7 +73,8 @@ def build_gemini_generator():
 
     def generate(text: str) -> str:
         try:
-            return call_with_retry(lambda: model.generate_content(build_prompt(text)).text).strip()
+            return call_with_retry(lambda: model.generate_content(
+                build_prompt(text), request_options={"timeout": GEMINI_TIMEOUT}).text).strip()
         except Exception as e:
             if "candidates" in str(e).lower() or "blocked" in str(e).lower() or "prohibited" in str(e).lower():
                 print(f"  [SKIPPED] Blocked prompt — writing empty prediction.", file=sys.stderr)

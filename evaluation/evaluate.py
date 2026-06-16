@@ -16,7 +16,7 @@ import re
 import sys
 from pathlib import Path
 
-from evaluation.predict import GEMINI_MODEL, call_with_retry, strip_think
+from evaluation.predict import GEMINI_MODEL, GEMINI_TIMEOUT, call_with_retry, strip_think
 
 JUDGE_PROMPT = """You are a strict evaluator of Hebrew text summaries.
 Read the ARTICLE and the candidate SUMMARY, then rate the summary:
@@ -89,7 +89,8 @@ def _parse_json(raw: str) -> dict:
 
 def gemini_json(model, prompt: str) -> dict:
     """Call Gemini and parse its reply as a JSON object."""
-    return _parse_json(call_with_retry(lambda: model.generate_content(prompt).text))
+    return _parse_json(call_with_retry(
+        lambda: model.generate_content(prompt, request_options={"timeout": GEMINI_TIMEOUT}).text))
 
 
 def judge_with_llm(predictions: list[dict]) -> dict:

@@ -237,6 +237,32 @@ colab --auth=oauth2 stop -s amlk-eval-obs
 The last code cell (live generation) needs a separate **T4** session. `run_nb_cell` is local —
 pass `--timeout` ≥1200 for the dep-install cell. Use `colab log` if a cell's stdout is truncated.
 
+#### Gotcha: `google.generativeai` hangs on Colab (the runtime-proxy import hook)
+
+On Colab, `import google.generativeai` is wrapped by `google.colab._import_hooks._GenerativeAIImportHook`
+(the source of the `FutureWarning` about the deprecated package). The hook routes every
+`generate_content` call through Colab's **runtime service proxy** at `localhost:45545`, which needs
+the `serviceusage.services.use` permission on the runtime's GCP project. On this account that
+permission is **missing** — it's the same 403 that kills keep-alive — so the proxied call **hangs
+forever** (no error, kernel stuck `BUSY`) instead of reaching Google. Verified 2026-06-16: a raw
+REST call to `generativelanguage.googleapis.com` and the SDK *with the hook removed* both answer in
+~0.5s; the hooked SDK times out on `localhost:45545`. This is unrelated to `GEMINI_API_KEY` being
+valid. Fix (done in the eval-obs notebook bootstrap) — drop the finder before the SDK is first
+imported:
+
+```python
+import sys
+sys.meta_path = [f for f in sys.meta_path if type(f).__name__ != "_GenerativeAIImportHook"]
+for _m in [m for m in sys.modules if m.startswith("google.generativeai")]:
+    del sys.modules[_m]
+```
+
+Any Colab notebook in this repo that calls Gemini (judge / error analysis / baseline) must do this
+in its first cell. A per-request `request_options={"timeout": N}` (now `GEMINI_TIMEOUT` in
+`evaluation/predict.py`) is a second line of defence: it converts a hung call into a fast failure
+that `call_with_retry` can surface, but it does **not** make the proxied call succeed — only
+removing the hook does.
+
 ## Low-Cost Validation Checklist
 
 This checklist exercises most CLI surfaces without starting a VM:
