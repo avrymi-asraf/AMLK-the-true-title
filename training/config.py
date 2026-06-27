@@ -30,11 +30,16 @@ def model_repo(hf_user: str, variant: str = "whole") -> str:
 
 @dataclass
 class LoRAConfig:
-    r: int = 16
-    lora_alpha: int = 32
+    # r=32 (up from 16) + the MLP projections (gate/up/down) give the adapter enough capacity
+    # for abstractive generation; attention-only r=16 underfit (v1 looped and over-copied).
+    r: int = 32
+    lora_alpha: int = 64
     lora_dropout: float = 0.05
     target_modules: list[str] = field(
-        default_factory=lambda: ["q_proj", "k_proj", "v_proj", "o_proj"]
+        default_factory=lambda: [
+            "q_proj", "k_proj", "v_proj", "o_proj",
+            "gate_proj", "up_proj", "down_proj",
+        ]
     )
     bias: str = "none"
     task_type: str = "CAUSAL_LM"

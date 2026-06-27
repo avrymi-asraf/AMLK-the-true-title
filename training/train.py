@@ -16,12 +16,9 @@ import os
 import sys
 from pathlib import Path
 
-import datasets as hf_datasets
-import torch
-import wandb
-from peft import LoraConfig
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
-from trl import SFTConfig, SFTTrainer
+# Heavy training deps (datasets/torch/peft/transformers/trl/wandb) are imported lazily inside
+# the functions that need them, so `--submit-hf` can run on a minimal local env (no GPU stack)
+# — submission only needs huggingface_hub.
 
 from training.config import (
     MAX_LENGTH,
@@ -38,6 +35,9 @@ from training.config import (
 
 def build_model_and_tokenizer(method: str, hf_token: str):
     """Load Qwen3-2B for the chosen regime: 4-bit (qlora) or bf16 (lora, full)."""
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+
     preset = METHOD_PRESETS[method]
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, token=hf_token or None)
     if tokenizer.pad_token is None:
@@ -59,7 +59,9 @@ def build_model_and_tokenizer(method: str, hf_token: str):
     return model, tokenizer
 
 
-def lora_config() -> LoraConfig:
+def lora_config():
+    from peft import LoraConfig
+
     cfg = LoRAConfig()
     return LoraConfig(
         r=cfg.r,
@@ -84,11 +86,14 @@ def wandb_api_key() -> str:
 
 
 def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
-                  smoke_test: bool, mini_test: bool = False, inference_only: bool = False):
+                  smoke_test: bool, mini_test: bool = False, inference_only: bool = False,
+                  pred_suffix: str = "", epochs: int = 0):
     """Upload the processed splits to the Hub and submit train_hf_job.py to HF Jobs.
 
     inference_only=True skips dataset re-upload and training; loads the already-pushed
-    adapter and regenerates predictions only (fast: a10g-small, 1h timeout).
+    adapter and regenerates predictions only (fast: a10g-small, 1h timeout). pred_suffix
+    (e.g. "-v2") keeps a re-decode from clobbering the v1 predictions. epochs overrides the
+    default epoch count (0 = use the job's default).
     """
     import warnings
     warnings.filterwarnings("ignore", category=UserWarning)
@@ -109,8 +114,10 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
 
     script_path = Path(__file__).parent / "train_hf_job.py"
     if inference_only:
-        # 1h, not 30m: setup ~5 min + 2,000 batched generations ~35-45 min leaves margin
-        flavor, timeout, label = "a10g-small", "1h", "infer"
+        # 2h: the anti-degeneration decode config (no_repeat_ngram + repetition_penalty) plus the
+        # v1 adapter not yet stopping early runs ~256 tokens/example at ~16-20 ex/min, so 2×1,000
+        # generations need well over the old 1h budget (observed: finetuned alone ~60 min).
+        flavor, timeout, label = "a10g-small", "2h", "infer"
     elif smoke_test:
         flavor, timeout, label = "a10g-small", "30m", "smoke"
     elif mini_test:
@@ -136,6 +143,8 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
             "SMOKE_TEST": "1" if smoke_test else "0",
             "MINI_TEST": "1" if mini_test else "0",
             "INFERENCE_ONLY": "1" if inference_only else "0",
+            "PRED_SUFFIX": pred_suffix,
+            "EPOCHS": str(epochs) if epochs else "",
         },
         token=hf_token,
     )
@@ -149,6 +158,10 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
 def train_local(method: str, variant: str, output_dir: Path, max_steps: int,
                 max_length: int, batch_size: int, push_to_hub: bool, hf_user: str, hf_token: str):
     """Run the SFT loop locally and save the adapter / model to output_dir."""
+    import datasets as hf_datasets
+    import wandb
+    from trl import SFTConfig, SFTTrainer
+
     preset = METHOD_PRESETS[method]
     base = TrainingConfig()
     per_device_batch = batch_size or preset["per_device_train_batch_size"]
@@ -242,6 +255,8 @@ def main():
     parser.add_argument("--smoke-test", action="store_true", help="With --submit-hf: quick 10-step job on a10g-small")
     parser.add_argument("--mini-test", action="store_true", help="With --submit-hf: 100-example / 5-epoch job on a10g-small — validates full pipeline with real wandb curves")
     parser.add_argument("--inference-only", action="store_true", help="With --submit-hf: skip training, regenerate predictions from the already-pushed adapter (fast: a10g-small, 1h)")
+    parser.add_argument("--pred-suffix", default="", help="With --submit-hf: suffix for pushed prediction files (e.g. -v2) so a re-decode doesn't clobber v1")
+    parser.add_argument("--epochs", type=int, default=0, help="With --submit-hf: number of training epochs (0 = job default of 3)")
     args = parser.parse_args()
 
     hf_token = os.environ.get("HF_TOKEN", "")
@@ -254,7 +269,8 @@ def main():
             print("ERROR: --hf-user required with --submit-hf", file=sys.stderr)
             sys.exit(1)
         submit_hf_job(args.method, args.variant, hf_token, args.hf_user,
-                      args.smoke_test, args.mini_test, args.inference_only)
+                      args.smoke_test, args.mini_test, args.inference_only,
+                      args.pred_suffix, args.epochs)
         return
 
     if args.push_to_hub and not args.hf_user:

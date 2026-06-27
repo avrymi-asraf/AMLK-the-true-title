@@ -11,14 +11,14 @@ Implements `docs/ANLP Project abstract.md`, `docs/research-proposal.md`, and the
 
 ## B. Evaluation pipeline — DONE (Stage B, due 07.06)
 - [x] B.1 ROUGE-1/2/L (Hebrew-aware tokenizer)
-- [x] B.2 BERTScore (xlm-roberta-large)
+- [x] B.2 BERTScore (default AlephBERT `onlplab/alephbert-base`, HeSum-comparable; `--bertscore-model` to override)
 - [x] B.3 Gemini LLM-as-judge (faithfulness + fluency, 1-5)
 - [x] B.4 Advanced-model baseline: Gemini API on the same Hebrew test set + prompt; score with B.1–B.3
 - [x] B.5 Error analysis: failure-type labelling on a ~50–100 sample (`evaluation/error_analysis.py`)
 
 ### B'. Reviewer-driven evaluation upgrades
-- [ ] B'.1 Switch LLM judge OFF the Gemini family (avoid self-preference bias vs the Gemini baseline)
-- [ ] B'.2 ROUGE-Hebrew: adopt HeSum's morphological-normalization recommendation; report raw + normalized
+- [x] B'.1 Switch LLM judge OFF the Gemini family — `evaluation/hf_client.py` enables a HF-hosted judge (`--judge-provider hf --judge-model …`) to avoid self-preference bias vs the Gemini baseline
+- [x] B'.2 ROUGE-Hebrew: HeSum-style morphological normalization (niqqud + final-form folding); `evaluate.py` reports raw + normalized
 - [ ] B'.3 Add a simple extractive Lead-N baseline (first N sentences) scored with B.1–B.3
 - [ ] B'.4 Data characterization before runs: abstractiveness (novel n-grams, extractive
       coverage/density, small manual check) + summary↔lead and summary↔body overlap

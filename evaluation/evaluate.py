@@ -33,19 +33,43 @@ SUMMARY:
 """
 
 
+# HeSum reports ROUGE both word- and morpheme-level (Table 5) because Hebrew's morphology
+# (niqqud, final-form letters, clitics) makes raw n-gram overlap undercount valid paraphrases.
+# We can't morpheme-segment cheaply, but stripping niqqud + folding final forms removes the
+# most common surface mismatches, so we report a raw and a normalized ROUGE side by side.
+_NIQQUD_RE = re.compile(r"[\u0591-\u05C7]")
+_FINAL_FORMS = str.maketrans("ךםןףץ", "כמנפצ")
+
+
+def normalize_hebrew(text: str) -> str:
+    """Strip niqqud and fold final-form letters so ROUGE matches on morphology-equivalent words."""
+    return _NIQQUD_RE.sub("", text).translate(_FINAL_FORMS)
+
+
 class _UnicodeTokenizer:
-    """ROUGE tokenizer that keeps Hebrew (rouge_score's default strips non-ASCII)."""
+    """ROUGE tokenizer that keeps Hebrew (rouge_score's default strips non-ASCII).
+
+    With normalize=True it also strips niqqud and folds final-form letters (Hebrew-normalized ROUGE).
+    """
+
+    def __init__(self, normalize: bool = False):
+        self.normalize = normalize
 
     def tokenize(self, text: str) -> list[str]:
+        if self.normalize:
+            text = normalize_hebrew(text)
         return re.findall(r"\w+", text.lower(), re.UNICODE)
 
 
-def compute_rouge(predictions: list[dict]) -> dict:
-    """Average ROUGE-1/2/L F-measure over {reference, prediction} pairs."""
+def compute_rouge(predictions: list[dict], normalize: bool = False) -> dict:
+    """Average ROUGE-1/2/L F-measure over {reference, prediction} pairs.
+
+    normalize=True applies Hebrew normalization (niqqud + final forms) before tokenizing.
+    """
     from rouge_score import rouge_scorer
 
     scorer = rouge_scorer.RougeScorer(
-        ["rouge1", "rouge2", "rougeL"], use_stemmer=False, tokenizer=_UnicodeTokenizer()
+        ["rouge1", "rouge2", "rougeL"], use_stemmer=False, tokenizer=_UnicodeTokenizer(normalize)
     )
     totals = {"rouge1": 0.0, "rouge2": 0.0, "rougeL": 0.0}
     for p in predictions:
@@ -56,16 +80,29 @@ def compute_rouge(predictions: list[dict]) -> dict:
     return {k: round(v / n, 4) for k, v in totals.items()}
 
 
-def compute_bertscore(predictions: list[dict], model_id: str = "xlm-roberta-large") -> dict:
-    """Average BERTScore precision/recall/F1 using a multilingual model.
+def compute_bertscore(predictions: list[dict], model_id: str = "onlplab/alephbert-base",
+                      num_layers: int | None = None) -> dict:
+    """Average BERTScore precision/recall/F1 using a Hebrew model.
 
-    Pinned to CPU: this runs locally and must not load a model onto the user's small GPU.
+    Defaults to AlephBERT (the HeSum paper's BERTScore backbone) so scores are directly
+    comparable to HeSum Table 3. Pinned to CPU: this runs locally and must not load a model
+    onto the user's small GPU. Summaries are short, so AlephBERT's 512-token limit is fine.
+
+    bert_score only ships a tuned layer index for a fixed model list; for any other backbone
+    (AlephBERT included) it raises KeyError unless num_layers is given, so we fall back to the
+    model's own hidden-layer count (its top layer) read from the HF config.
     """
     from bert_score import score as bertscore
+    from bert_score.utils import model2layers
+
+    if num_layers is None and model_id not in model2layers:
+        from transformers import AutoConfig
+        num_layers = AutoConfig.from_pretrained(model_id).num_hidden_layers
 
     cands = [p["prediction"] for p in predictions]
     refs = [p["reference"] for p in predictions]
-    P, R, F1 = bertscore(cands, refs, model_type=model_id, verbose=False, device="cpu")
+    P, R, F1 = bertscore(cands, refs, model_type=model_id, num_layers=num_layers,
+                         verbose=False, device="cpu")
     return {
         "precision": round(P.mean().item(), 4),
         "recall": round(R.mean().item(), 4),
@@ -148,7 +185,10 @@ def main():
     parser = argparse.ArgumentParser(description="Score a predictions file with ROUGE + BERTScore + LLM judge")
     parser.add_argument("--predictions", required=True)
     parser.add_argument("--output", required=True)
-    parser.add_argument("--bertscore-model", default="xlm-roberta-large")
+    parser.add_argument("--bertscore-model", default="onlplab/alephbert-base",
+                        help="BERTScore backbone (default: AlephBERT, HeSum-comparable)")
+    parser.add_argument("--bertscore-num-layers", type=int, default=None,
+                        help="Override the BERTScore layer (default: model's top layer for non-standard backbones)")
     parser.add_argument("--skip-llm", action="store_true", help="Skip the LLM judge")
     parser.add_argument("--skip-rouge", action="store_true", help="Skip ROUGE (reuse existing report with --judge-only)")
     parser.add_argument("--skip-bertscore", action="store_true", help="Skip BERTScore")
@@ -185,8 +225,10 @@ def main():
         }
         if not args.skip_rouge:
             report["rouge"] = compute_rouge(predictions)
+            report["rouge_normalized"] = compute_rouge(predictions, normalize=True)
         if not args.skip_bertscore:
-            report["bertscore"] = compute_bertscore(predictions, args.bertscore_model)
+            report["bertscore"] = compute_bertscore(predictions, args.bertscore_model,
+                                                     args.bertscore_num_layers)
 
     if not args.skip_llm:
         if args.judge_provider == "gemini" and not os.environ.get("GEMINI_API_KEY"):
@@ -211,7 +253,8 @@ def main():
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2))
     print(f"Report saved to {output_path}")
-    summary = {k: v for k, v in report.items() if k in ("rouge", "bertscore", "llm_judge")}
+    summary = {k: v for k, v in report.items()
+               if k in ("rouge", "rouge_normalized", "bertscore", "llm_judge")}
     print(json.dumps(summary, indent=2))
 
 

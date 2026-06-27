@@ -68,7 +68,11 @@ def generate_summaries(
         ).to(device)
         with torch.no_grad():
             outs = model.generate(
-                **inputs, max_new_tokens=max_new_tokens, do_sample=False,
+                # no_repeat_ngram_size + repetition_penalty kill greedy degeneration loops;
+                # min_new_tokens + explicit eos let the model stop instead of running to the cap.
+                **inputs, max_new_tokens=max_new_tokens, min_new_tokens=16, do_sample=False,
+                no_repeat_ngram_size=3, repetition_penalty=1.2,
+                eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.pad_token_id,
             )
         input_len = inputs["input_ids"].shape[1]

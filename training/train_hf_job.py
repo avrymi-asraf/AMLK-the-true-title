@@ -48,6 +48,12 @@ OUTPUT_REPO = os.environ["OUTPUT_REPO"]
 SMOKE_TEST = os.environ.get("SMOKE_TEST", "0") == "1"
 MINI_TEST = os.environ.get("MINI_TEST", "0") == "1"
 INFERENCE_ONLY = os.environ.get("INFERENCE_ONLY", "0") == "1"
+# Suffix appended to pushed prediction filenames, e.g. "-v2" so a re-decode of an existing
+# adapter doesn't clobber the v1 predictions and the two can be scored side by side.
+PRED_SUFFIX = os.environ.get("PRED_SUFFIX", "")
+# Full-run epoch count. v1 used 1 epoch (undertrained — the model never learned to stop);
+# 3 epochs is the default for the abstractive-generation retrain. Overridable via --epochs.
+EPOCHS = int(os.environ.get("EPOCHS") or 3)
 MODEL_ID = "Qwen/Qwen3-2B"
 os.environ.setdefault("WANDB_PROJECT", os.environ.get("WANDB_PROJECT", "amlk-hebrew-summarization"))
 
@@ -104,9 +110,12 @@ if INFERENCE_ONLY:
     device = next(trained_model.parameters()).device
     use_lora = True  # adapter is always a LoRA adapter
 else:
+    # Mirrors training/config.py:LoRAConfig — r=32 + MLP projections for generation capacity
+    # (v1's attention-only r=16 underfit: repetition loops and lead-copying).
     peft_config = LoraConfig(
-        r=16, lora_alpha=32, lora_dropout=0.05,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
+        r=32, lora_alpha=64, lora_dropout=0.05,
+        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                        "gate_proj", "up_proj", "down_proj"],
         bias="none", task_type="CAUSAL_LM",
     ) if use_lora else None
 
@@ -127,7 +136,7 @@ else:
         n_epochs, max_steps_cfg = 1, 10
         log_steps, eval_steps_cfg, save_steps_cfg = 5, 5, 5
     else:
-        n_epochs, max_steps_cfg = 1, -1
+        n_epochs, max_steps_cfg = EPOCHS, -1
         log_steps, eval_steps_cfg, save_steps_cfg = 10, 200, 200
 
     sft_config = SFTConfig(
@@ -150,8 +159,16 @@ else:
         save_total_limit=2,
         eval_strategy="steps",
         eval_steps=eval_steps_cfg,
+        # With EPOCHS=3 the last checkpoint can overfit; keep the lowest-eval_loss one instead.
+        load_best_model_at_end=True,
+        metric_for_best_model="eval_loss",
+        greater_is_better=False,
         bf16=True,
         gradient_checkpointing=True,
+        # TRL's SFTTrainer auto-appends tokenizer.eos_token to each completion (non-conversational
+        # prompt/completion path), and completion_only_loss keeps that EOS inside the loss mask, so
+        # the model is trained to stop. v1 ran on for 256 tokens because of 1-epoch undertraining +
+        # greedy decode, not a missing EOS — fixed by EPOCHS=3 and the decode config above.
         completion_only_loss=True,
         max_length=2048,
         report_to="wandb",
@@ -201,7 +218,12 @@ def generate_predictions(label: str) -> list[dict]:
             outs = trained_model.generate(
                 # 256 covers p99 of reference-summary lengths (p95=151, p99=187 tokens);
                 # the old cap of 128 truncated ~9% of summaries mid-sentence.
-                **inputs, max_new_tokens=256, do_sample=False,
+                # no_repeat_ngram_size + repetition_penalty kill the greedy degeneration
+                # loops (46% of v1 finetuned outputs); min_new_tokens + explicit eos let the
+                # model stop cleanly instead of running to the cap.
+                **inputs, max_new_tokens=256, min_new_tokens=16, do_sample=False,
+                no_repeat_ngram_size=3, repetition_penalty=1.2,
+                eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.pad_token_id,
             )
         input_len = inputs["input_ids"].shape[1]
@@ -223,7 +245,7 @@ def generate_and_push(label: str):
     """Generate one system's predictions and push the file immediately — a later
     timeout must never destroy finished work (see the 2026-06-12 post-mortem)."""
     rows = generate_predictions(label)
-    path = Path(f"predictions-{label}.jsonl")
+    path = Path(f"predictions-{label}{PRED_SUFFIX}.jsonl")
     path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")
     api.upload_file(path_or_fileobj=str(path), path_in_repo=path.name,
                     repo_id=OUTPUT_REPO, repo_type="model")
