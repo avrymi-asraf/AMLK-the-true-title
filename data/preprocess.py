@@ -13,51 +13,18 @@ Execution environment: local development machine.
 import argparse
 import json
 import os
-import re
 import sys
 from pathlib import Path
 
 import datasets as hf_datasets
 
+from data.prompts import build_prompt, make_variant
 from training.config import MAX_LENGTH, MODEL_ID
-
 
 INPUT_PATH = Path("outputs/data/raw/combined.jsonl")
 OUTPUT_ROOT = Path("outputs/data/processed")
 VARIANTS = ("whole", "lead", "body")
-# Articles are long (median ~2500 tokens); cap them so the prompt + summary fit in MAX_LENGTH.
-# Without this, right-truncation cuts the summary away and completion-only loss becomes nan.
-ARTICLE_TOKEN_BUDGET = MAX_LENGTH - 256  # 256 reserved for the prompt scaffold + the summary
-
-# The "in Hebrew" instruction matters for the zero-shot baselines (base Qwen, Gemini):
-# without it they summarize in English and score near-zero against the Hebrew references.
-# The fine-tuned model learns Hebrew from the completions regardless.
-PROMPT_TEMPLATE = "Summarize the following Hebrew text. Write the summary in Hebrew:\n\n{text}\n\nSummary:\n"
-
-
-def build_prompt(text: str) -> str:
-    """Render the Hebrew summarization instruction prompt for an article."""
-    return PROMPT_TEMPLATE.format(text=text)
-
-
-def _split_lead_body(text: str) -> tuple[str, str]:
-    """Split an article into (lead, body): the first paragraph vs. the rest."""
-    paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
-    if len(paragraphs) >= 2:
-        return paragraphs[0], "\n\n".join(paragraphs[1:])
-    sentences = [s for s in re.split(r"(?<=[.!?。])\s+", text.strip()) if s]
-    if len(sentences) >= 2:
-        return sentences[0], " ".join(sentences[1:])
-    return text, text  # too short to split — probe falls back to whole text
-
-
-def make_variant(text: str, variant: str) -> str:
-    """Return the article input for a probe variant: whole, lead-only, or body-only."""
-    if variant == "whole":
-        return text
-    lead, body = _split_lead_body(text)
-    return lead if variant == "lead" else body
-
+ARTICLE_TOKEN_BUDGET = MAX_LENGTH - 256
 
 def truncate_to_tokens(text: str, tokenizer, max_tokens: int) -> str:
     """Cut text to its first max_tokens tokens (keeps the lead — where news summaries live)."""

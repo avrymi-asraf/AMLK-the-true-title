@@ -1,7 +1,7 @@
 """
 Evaluation pipeline step 1 (local, API-only): generate the Gemini advanced-baseline
 summaries for the held-out test split. Uses the same instruction prompt as training
-(imported from data.preprocess) so the baseline is comparable to the fine-tuned model.
+(imported from data.prompts) so the baseline is comparable to the fine-tuned model.
 Writes predictions.jsonl ({text, reference, prediction, model, variant}) that evaluate.py
 and error_analysis.py consume; resumes from a partial file so a rate-limit stop is safe.
 
@@ -15,49 +15,11 @@ Execution environment: any machine with GEMINI_API_KEY set (no GPU, no local mod
 import argparse
 import json
 import os
-import re
 import sys
-import time
 from pathlib import Path
 
-import datasets as hf_datasets
-
-from data.preprocess import build_prompt, make_variant
-
-# gemini-2.5-flash-lite, not 2.5-flash: full 2.5-flash "thinks" before answering (~7s/call
-# measured), which makes the ~4000-call evaluation battery take ~10h on HF Jobs. The -lite variant
-# has no thinking step (~1s/call measured), ~6x faster, and is still a capable advanced baseline +
-# judge. (gemini-2.0-flash was tried first but is retired — 404 on generate.) Revisit if a slower,
-# higher-quality baseline is wanted later.
-GEMINI_MODEL = "gemini-2.5-flash-lite"
-# Per-request deadline (seconds) for every generate_content call. Without it a single HTTP
-# request can hang forever on a degraded network (e.g. a flaky Colab VM), so call_with_retry
-# never gets to retry. flash-lite answers in ~1s on a healthy net, so 60s never false-fires.
-GEMINI_TIMEOUT = 60
-
-
-def strip_think(text: str) -> str:
-    """Drop Qwen3 <think>...</think> reasoning so metrics score the summary, not the reasoning.
-
-    Only well-formed (closed) blocks are removed. A truncated, unclosed <think> means the model
-    spent its whole budget reasoning and never wrote a summary — it is left as-is so its low score
-    reflects that real failure instead of being hidden. Shared tool, reused by evaluate.py and
-    error_analysis.py.
-    """
-    return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-
-
-def call_with_retry(fn, attempts: int = 5):
-    """Call fn(), retrying with exponential backoff on transient API errors."""
-    for i in range(attempts):
-        try:
-            return fn()
-        except Exception as e:  # noqa: BLE001 — the API raises a variety of transient errors
-            if i == attempts - 1:
-                raise
-            wait = 2 ** i
-            print(f"  API error ({str(e)[:60]}...); retrying in {wait}s", file=sys.stderr)
-            time.sleep(wait)
+from data.prompts import build_prompt, make_variant
+from evaluation.gemini_client import GEMINI_MODEL, GEMINI_TIMEOUT, call_with_retry
 
 
 def build_gemini_generator():
@@ -77,7 +39,7 @@ def build_gemini_generator():
                 build_prompt(text), request_options={"timeout": GEMINI_TIMEOUT}).text).strip()
         except Exception as e:
             if "candidates" in str(e).lower() or "blocked" in str(e).lower() or "prohibited" in str(e).lower():
-                print(f"  [SKIPPED] Blocked prompt — writing empty prediction.", file=sys.stderr)
+                print("  [SKIPPED] Blocked prompt — writing empty prediction.", file=sys.stderr)
                 return ""
             raise
 
@@ -90,16 +52,27 @@ def main():
     parser.add_argument("--data", default="", help="Test split dir (default: outputs/data/processed/<variant>/test)")
     parser.add_argument("--output", required=True)
     parser.add_argument("--limit", type=int, default=0, help="Cap examples for a quick check")
+    parser.add_argument("--from-predictions", default="",
+                        help="Reuse text/reference rows from an existing predictions.jsonl (skips datasets)")
     args = parser.parse_args()
 
     if not os.environ.get("GEMINI_API_KEY"):
         print("ERROR: GEMINI_API_KEY not set. Run: source .env", file=sys.stderr)
         sys.exit(1)
 
-    data_dir = Path(args.data or f"outputs/data/processed/{args.variant}/test")
-    test_ds = hf_datasets.load_from_disk(str(data_dir))
+    if args.from_predictions:
+        with open(args.from_predictions, encoding="utf-8") as f:
+            source_rows = [json.loads(line) for line in f]
+        test_rows = [{"text": r["text"], "summary": r["reference"]} for r in source_rows]
+    else:
+        import datasets as hf_datasets
+
+        data_dir = Path(args.data or f"outputs/data/processed/{args.variant}/test")
+        test_ds = hf_datasets.load_from_disk(str(data_dir))
+        test_rows = [{"text": ex["text"], "summary": ex["summary"]} for ex in test_ds]
+
     if args.limit:
-        test_ds = test_ds.select(range(min(args.limit, len(test_ds))))
+        test_rows = test_rows[: min(args.limit, len(test_rows))]
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -108,10 +81,10 @@ def main():
         print(f"Resuming: {done} predictions already in {output_path}")
 
     generate = build_gemini_generator()
-    print(f"Generating {len(test_ds) - done} Gemini predictions (variant={args.variant})...")
+    print(f"Generating {len(test_rows) - done} Gemini predictions (variant={args.variant})...")
     with open(output_path, "a", encoding="utf-8") as f:
-        for i in range(done, len(test_ds)):
-            ex = test_ds[i]
+        for i in range(done, len(test_rows)):
+            ex = test_rows[i]
             text = make_variant(ex["text"], args.variant)
             record = {
                 "text": text,
@@ -123,7 +96,7 @@ def main():
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
             f.flush()
             if (i + 1) % 25 == 0:
-                print(f"  {i + 1}/{len(test_ds)}")
+                print(f"  {i + 1}/{len(test_rows)}")
 
     print(f"Saved predictions to {output_path}")
 

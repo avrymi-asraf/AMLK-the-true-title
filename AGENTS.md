@@ -58,6 +58,7 @@
 │   ├── test_preprocess.py                # build_prompt / make_variant / split_dataset
 │   └── test_evaluation.py                # ROUGE-on-Hebrew, judge-reply parsing, failure rates (live test gated)
 ├── docs/
+│   ├── obsidian/                         # Shared Obsidian vault (team research notes; open folder as vault)
 │   ├── ANLP Project abstract.md          # The research proposal this project implements
 │   ├── 2026-06-12-qlora-training-job-postmortem.md  # Full-run post-mortem: cost, root cause, probe-run recommendations
 │   └── superpowers/
