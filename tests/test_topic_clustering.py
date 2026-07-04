@@ -42,6 +42,17 @@ def test_bertopic_english_preprocess_strips_hebrew():
     assert "הנבחרת" in multilingual
 
 
+def test_bertopic_reduce_topics_uses_topics_on_model_not_second_arg():
+    """BERTopic >=0.17 reads assignments from topic_model.topics_, not a topics= arg."""
+    pytest.importorskip("bertopic")
+    import inspect
+    from bertopic import BERTopic
+
+    params = inspect.signature(BERTopic.reduce_topics).parameters
+    assert "nr_topics" in params
+    assert "topics" not in params
+
+
 @pytest.mark.skipif(
     not (os.getenv("GEMINI_API_KEY") and os.getenv("RUN_LIVE_TESTS")),
     reason="Set GEMINI_API_KEY and RUN_LIVE_TESTS=1 to run the live BERTopic + Gemini naming test",

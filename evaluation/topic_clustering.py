@@ -132,11 +132,13 @@ def fit_topics(summaries: list[str], embeddings, min_cluster_size: int = 100,
     print(f"Raw HDBSCAN: {n_topics} topics, {n_noise}/{len(cluster_ids)} noise "
           f"({n_noise / len(cluster_ids):.1%}).", flush=True)
 
+    topics_reassigned = False
     if reduce_outliers and n_noise:
         print("Reassigning noise docs to their nearest topic by embedding similarity...", flush=True)
         cluster_ids = topic_model.reduce_outliers(summaries, cluster_ids, strategy="embeddings",
                                                     embeddings=embeddings)
-        topic_model.update_topics(summaries, topics=cluster_ids, vectorizer_model=_build_vectorizer())
+        topic_model.topics_ = [int(c) for c in cluster_ids]
+        topics_reassigned = True
         n_noise = sum(c == NOISE_TOPIC_ID for c in cluster_ids)
         print(f"After outlier reduction: {n_noise}/{len(cluster_ids)} noise "
               f"({n_noise / len(cluster_ids):.1%}).", flush=True)
@@ -144,9 +146,18 @@ def fit_topics(summaries: list[str], embeddings, min_cluster_size: int = 100,
     if nr_topics:
         n_before = len(set(cluster_ids) - {NOISE_TOPIC_ID})
         print(f"Merging near-duplicate topics (nr_topics={nr_topics!r})...", flush=True)
-        cluster_ids, _ = topic_model.reduce_topics(summaries, cluster_ids, nr_topics=nr_topics)
+        # BERTopic >=0.17: reduce_topics(docs, nr_topics=...) reads/writes topic_model.topics_
+        # internally. The pre-0.17 API reduce_topics(docs, topics, nr_topics=...) is gone —
+        # passing cluster_ids positionally collides with nr_topics and raises TypeError.
+        topic_model.topics_ = [int(c) for c in cluster_ids]
+        topic_model.reduce_topics(summaries, nr_topics=nr_topics)
+        cluster_ids = [int(c) for c in topic_model.topics_]
+        topics_reassigned = True
         n_after = len(set(cluster_ids) - {NOISE_TOPIC_ID})
         print(f"Topics merged: {n_before} -> {n_after}.", flush=True)
+
+    if topics_reassigned:
+        topic_model.update_topics(summaries, vectorizer_model=_build_vectorizer())
 
     n_topics = len(set(cluster_ids) - {NOISE_TOPIC_ID})
     n_noise = sum(c == NOISE_TOPIC_ID for c in cluster_ids)
