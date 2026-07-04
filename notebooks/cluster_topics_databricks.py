@@ -307,7 +307,8 @@ displayHTML(size_fig.to_html(include_plotlyjs="cdn", full_html=False))
 # MAGIC ### Visualize the clusters
 # MAGIC
 # MAGIC A 2D projection of the embeddings (a fresh UMAP run for plotting, separate from the 5D
-# MAGIC one used for HDBSCAN clustering above), colored by topic. Hover shows the **summary** (short),
+# MAGIC one used for HDBSCAN clustering above), colored by topic. The legend shows the Gemini
+# MAGIC Hebrew topic names (not raw cluster IDs / c-TF-IDF keywords). Hover shows the **summary** (short),
 # MAGIC not the full article body — and only a sample of points (see `plot_sample` widget) so the
 # MAGIC HTML stays under Databricks' ~20 MB cell-output cap. The plot is written to DBFS FileStore
 # MAGIC and embedded via iframe (not inline `displayHTML(fig.to_html(...))`, which exceeded the limit

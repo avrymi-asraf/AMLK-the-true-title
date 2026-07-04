@@ -357,6 +357,9 @@ def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: in
         keywords_by_topic[topic_id] = [w for w, _ in topic_model.get_topic(topic_id)][:10]
         labels_by_topic[topic_id] = name_topic(gemini_model, topic_model, topic_id)
 
+    # So plot_clusters() can show Hebrew topic names in the legend (not "0_keyword_keyword").
+    topic_model.set_topic_labels({**labels_by_topic, NOISE_TOPIC_ID: NOISE_LABEL})
+
     rows = [
         {"summary": r["summary"], "source": r.get("source"), "cluster_id": int(cid),
          "topic_label": labels_by_topic[int(cid)], "keywords": keywords_by_topic[int(cid)]}
@@ -386,7 +389,7 @@ def plot_clusters(topic_model, cluster_docs: list[str], embeddings, *,
     if len(hover_texts) != len(embeddings):
         raise ValueError(f"hover_texts length {len(hover_texts)} != embeddings length {len(embeddings)}")
     return topic_model.visualize_documents(hover_texts, embeddings=embeddings, hide_annotations=True,
-                                            sample=sample)
+                                            custom_labels=True, sample=sample)
 
 
 def plot_topic_sizes(summary_rows: list[dict], top_n: int = 30):
