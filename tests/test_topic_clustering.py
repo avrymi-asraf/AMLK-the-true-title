@@ -176,6 +176,29 @@ def test_bertopic_reduce_topics_uses_topics_on_model_not_second_arg():
     assert "topics" not in params
 
 
+def test_distinct_topic_colors_are_unique():
+    from evaluation.topic_clustering import _distinct_topic_colors
+
+    colors = _distinct_topic_colors(12)
+    assert len(colors) == 12
+    assert len(set(colors)) == 12
+
+
+def test_spread_display_layout_increases_centroid_distance():
+    pytest.importorskip("numpy")
+    import numpy as np
+
+    from evaluation.topic_clustering import _spread_display_layout
+
+    emb = np.array([[0.09, 0.0], [0.11, 0.0], [0.135, 0.0], [0.155, 0.0]])
+    topics = [0, 0, 1, 1]
+    topic_ids = [0, 1]
+    spread = _spread_display_layout(emb, topics, topic_ids, strength=1.0)
+    d_before = np.linalg.norm(emb[:2].mean(axis=0) - emb[2:].mean(axis=0))
+    d_after = np.linalg.norm(spread[:2].mean(axis=0) - spread[2:].mean(axis=0))
+    assert d_after > d_before
+
+
 def test_plot_clusters_3d_uses_scatter3d():
     pytest.importorskip("umap")
     import numpy as np

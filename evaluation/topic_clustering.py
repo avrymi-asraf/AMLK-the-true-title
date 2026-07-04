@@ -209,9 +209,9 @@ embed_summaries = embed_texts
 
 
 def fit_topics(cluster_docs: list[str], embeddings, min_cluster_size: int = 60,
-               min_samples: int | None = 15, seed: int = 42, reduce_outliers: bool = True,
-               outlier_threshold: float = 0.35, nr_topics: int | str | None = None,
-               umap_n_neighbors: int = 10):
+               min_samples: int | None = 20, seed: int = 42, reduce_outliers: bool = True,
+               outlier_threshold: float = 0.40, nr_topics: int | str | None = None,
+               umap_n_neighbors: int = 15, umap_min_dist: float = 0.0):
     """Fit BERTopic (UMAP + HDBSCAN + c-TF-IDF) over precomputed embeddings.
 
     `cluster_docs` is what BERTopic tokenizes for c-TF-IDF keywords — pass truncated article
@@ -224,7 +224,7 @@ def fit_topics(cluster_docs: list[str], embeddings, min_cluster_size: int = 60,
       nearest topic, flooding the largest cluster. Use outlier_threshold (~0.35 cosine sim) so
       uncertain docs stay -1.
     - `nr_topics='auto'` over-merges distinct domains into a few media-meta topics — off by default.
-    - `min_cluster_size=60`/`min_samples=15` (raised from an initial 25/5 pass that produced ~100
+    - `min_cluster_size=60`/`min_samples=20` (raised from an initial 25/5 pass that produced ~100
       topics, many of them near-duplicate Gemini labels for what was really the same domain seen
       through slightly different HDBSCAN sub-clusters) — coarser HDBSCAN granularity up front means
       fewer, larger, more distinct topics before naming even runs. See also
@@ -240,7 +240,7 @@ def fit_topics(cluster_docs: list[str], embeddings, min_cluster_size: int = 60,
 
     print(f"Fitting BERTopic on {len(cluster_docs)} docs (UMAP → HDBSCAN)...", flush=True)
     umap_model = UMAP(random_state=seed, n_neighbors=umap_n_neighbors, n_components=5,
-                      min_dist=0.0, metric="cosine")
+                      min_dist=umap_min_dist, metric="cosine")
     hdbscan_model = HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples,
                              metric="euclidean", cluster_selection_method="eom",
                              prediction_data=True)
@@ -450,8 +450,9 @@ def refine_large_clusters(cluster_ids: list[int], cluster_docs: list[str], embed
 
 
 def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: int = 60,
-                     min_samples: int | None = 15, seed: int = 42, reduce_outliers: bool = True,
-                     outlier_threshold: float = 0.35, nr_topics: int | str | None = None,
+                     min_samples: int | None = 20, seed: int = 42, reduce_outliers: bool = True,
+                     outlier_threshold: float = 0.40, nr_topics: int | str | None = None,
+                     umap_n_neighbors: int = 15, umap_min_dist: float = 0.0,
                      embed_field: str = "text", max_embed_chars: int = 4000,
                      merge_duplicates: bool = True, embed_device: str = "auto",
                      embed_batch_size: int = 8, refine_oversized: bool = True,
@@ -479,8 +480,11 @@ def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: in
 
     print(f"cluster_dataset: {len(records)} records (embed_field={embed_field!r})", flush=True)
     embeddings = embed_texts(cluster_docs, device=embed_device, batch_size=embed_batch_size)
-    topic_model, cluster_ids = fit_topics(cluster_docs, embeddings, min_cluster_size, min_samples,
-                                           seed, reduce_outliers, outlier_threshold, nr_topics)
+    topic_model, cluster_ids = fit_topics(
+        cluster_docs, embeddings, min_cluster_size, min_samples,
+        seed, reduce_outliers, outlier_threshold, nr_topics,
+        umap_n_neighbors=umap_n_neighbors, umap_min_dist=umap_min_dist,
+    )
 
     if gemini_model is None:
         import google.generativeai as genai
@@ -523,6 +527,54 @@ def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: in
     rows = renumber_rows(rows)
     _sync_topic_model_labels(topic_model, rows)
     return rows, topic_model, embeddings
+
+
+def _distinct_topic_colors(n: int) -> list[str]:
+    """Golden-angle HSL hues — maximally separated colors for multi-topic plots."""
+    import colorsys
+
+    if n <= 0:
+        return []
+    golden = 0.61803398875
+    return [
+        f"#{int(r * 255):02x}{int(g * 255):02x}{int(b * 255):02x}"
+        for i in range(n)
+        for r, g, b in [colorsys.hls_to_rgb((i * golden) % 1.0, 0.48, 0.78)]
+    ]
+
+
+def _spread_display_layout(emb_proj, topics_sampled, topic_ids, strength: float = 0.0):
+    """Nudge topic centroids apart in projection space (visual only — assignments unchanged)."""
+    import numpy as np
+
+    if strength <= 0:
+        return emb_proj
+    out = emb_proj.copy()
+    real_ids = [t for t in topic_ids if t != NOISE_TOPIC_ID]
+    centroids = {}
+    for tid in real_ids:
+        mask = np.array([t == tid for t in topics_sampled])
+        centroids[tid] = out[mask].mean(axis=0)
+
+    offsets = {tid: np.zeros(out.shape[1]) for tid in real_ids}
+    scales = [np.linalg.norm(c) for c in centroids.values() if np.linalg.norm(c) > 1e-9]
+    target_sep = (float(np.median(scales)) * 0.4) if scales else 1.0
+
+    for i, a in enumerate(real_ids):
+        for b in real_ids[i + 1:]:
+            diff = centroids[a] - centroids[b]
+            d = float(np.linalg.norm(diff))
+            if d < 1e-9:
+                continue
+            if d < target_sep:
+                push = diff / d * (target_sep - d) * strength
+                offsets[a] += push * 0.5
+                offsets[b] -= push * 0.5
+
+    for tid in real_ids:
+        mask = np.array([t == tid for t in topics_sampled])
+        out[mask] += offsets[tid]
+    return out
 
 
 def _sample_document_indices(topic_per_doc: list[int], sample: float | None, seed: int = 42):
@@ -623,7 +675,6 @@ def _build_cluster_plot_state(topic_model, cluster_docs: list[str], embeddings, 
                               hover_texts: list[str] | None, sample: float | None):
     """Shared sampling, labels, and palette for 2D/3D cluster plots."""
     import numpy as np
-    import plotly.express as px
 
     if hover_texts is None:
         hover_texts = cluster_docs
@@ -641,16 +692,16 @@ def _build_cluster_plot_state(topic_model, cluster_docs: list[str], embeddings, 
     indices = _sample_document_indices(topic_per_doc, sample)
     embeddings = np.asarray(embeddings)
     topics_sampled = [topic_per_doc[i] for i in indices]
-    palette = (
-        px.colors.qualitative.Bold
-        + px.colors.qualitative.Safe
-        + px.colors.qualitative.Prism
-    )
     topic_ids = sorted(set(topics_sampled), key=lambda t: (t == NOISE_TOPIC_ID, -topic_counts.get(t, 0)))
-    color_by_topic = {
-        tid: ("#90A4AE" if tid == NOISE_TOPIC_ID else palette[i % len(palette)])
-        for i, tid in enumerate(topic_ids)
-    }
+    n_real = sum(1 for t in topic_ids if t != NOISE_TOPIC_ID)
+    distinct = _distinct_topic_colors(n_real)
+    color_by_topic = {NOISE_TOPIC_ID: "#90A4AE"}
+    j = 0
+    for tid in topic_ids:
+        if tid == NOISE_TOPIC_ID:
+            continue
+        color_by_topic[tid] = distinct[j]
+        j += 1
     return dict(
         embeddings=embeddings, indices=indices, topics_sampled=topics_sampled,
         label_by_id=label_by_id, topic_counts=topic_counts, topic_ids=topic_ids,
@@ -793,13 +844,17 @@ def _render_clusters_3d(state: dict, emb_proj, *, show_clouds: bool, show_header
 
 def plot_clusters(topic_model, cluster_docs: list[str], embeddings, *,
                   hover_texts: list[str] | None = None, sample: float | None = 0.15,
-                  dimensions: int = 2, show_clouds: bool = True, show_headers: bool = True):
+                  dimensions: int = 2, show_clouds: bool = True, show_headers: bool = True,
+                  umap_min_dist: float = 0.35, umap_spread: float = 1.25,
+                  display_spread: float = 0.25):
     """UMAP scatter of discovered clusters — 2D (default) or interactive 3D.
 
     2D: dual-layer hull clouds + layout annotations at each centroid.
     3D: convex-hull mesh clouds + centroid text labels (rotate/zoom in the browser).
 
-    Pass short `hover_texts` (e.g. summaries) when `cluster_docs` are long article bodies.
+    Higher `umap_min_dist` / `umap_spread` push topic clouds apart in the projection (visual only
+    for display_spread; clustering uses separate UMAP settings in fit_topics). Pass short
+    `hover_texts` (e.g. summaries) when `cluster_docs` are long article bodies.
     `sample` keeps at most that fraction of docs per topic (fine for smoke runs: None = all).
     """
     from umap import UMAP
@@ -811,8 +866,12 @@ def plot_clusters(topic_model, cluster_docs: list[str], embeddings, *,
         topic_model, cluster_docs, embeddings, hover_texts=hover_texts, sample=sample,
     )
     emb_proj = UMAP(
-        n_neighbors=15, n_components=dimensions, min_dist=0.08, metric="cosine", random_state=42,
+        n_neighbors=15, n_components=dimensions, min_dist=umap_min_dist, spread=umap_spread,
+        metric="cosine", random_state=42,
     ).fit_transform(state["embeddings"][state["indices"]])
+    emb_proj = _spread_display_layout(
+        emb_proj, state["topics_sampled"], state["topic_ids"], display_spread,
+    )
 
     if dimensions == 3:
         return _render_clusters_3d(state, emb_proj, show_clouds=show_clouds, show_headers=show_headers)

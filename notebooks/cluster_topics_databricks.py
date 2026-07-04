@@ -102,13 +102,14 @@ dbutils.widgets.text(
 dbutils.widgets.text("secret_scope", "", "Databricks secret scope (optional)")
 dbutils.widgets.text("gemini_api_key", "", "GEMINI_API_KEY (last resort — prefer .env or a secret scope)")
 dbutils.widgets.text("min_cluster_size", "60", "HDBSCAN min_cluster_size (lower = more, smaller topics)")
-dbutils.widgets.text("min_samples", "15", "HDBSCAN min_samples (lower = less raw noise; blank = tie to min_cluster_size)")
+dbutils.widgets.text("min_samples", "20", "HDBSCAN min_samples (higher = tighter, more separated cores)")
+dbutils.widgets.text("umap_n_neighbors", "15", "UMAP n_neighbors for clustering (higher = more global structure)")
 dbutils.widgets.dropdown("embed_field", "text", ["text", "summary"], "Embed/cluster on article text or summary")
 dbutils.widgets.dropdown("embed_device", "auto", ["auto", "cpu", "cuda"], "Embedding device (auto skips cuda when GPU is nearly full)")
 dbutils.widgets.text("embed_batch_size", "8", "Embedding batch size (lower if CUDA OOM)")
 dbutils.widgets.text("max_embed_chars", "4000", "Chars of article body to embed (embed_field=text)")
 dbutils.widgets.dropdown("reduce_outliers", "True", ["True", "False"], "Reassign noise docs above similarity threshold")
-dbutils.widgets.text("outlier_threshold", "0.35", "Min cosine sim to reassign a noise doc (0 = assign all)")
+dbutils.widgets.text("outlier_threshold", "0.40", "Min cosine sim to reassign a noise doc (higher = stricter; 0 = assign all)")
 dbutils.widgets.text("nr_topics", "", "Merge near-duplicate topics: 'auto', an int, or blank to skip")
 dbutils.widgets.dropdown("merge_duplicate_labels", "True", ["True", "False"], "Collapse clusters Gemini named identically into one topic")
 dbutils.widgets.dropdown("refine_oversized", "True", ["True", "False"], "Second-stage split of any cluster >= refine_size_fraction of corpus")
@@ -119,6 +120,8 @@ dbutils.widgets.text("refine_nr_topics", "12", "Cap sub-topics after refinement 
 dbutils.widgets.text("record_limit", "0", "Max records (0 = all; try 500 for a smoke test)")
 dbutils.widgets.text("plot_sample", "0.15", "Fraction of docs per topic in cluster plot (blank = all)")
 dbutils.widgets.dropdown("plot_dimensions", "2", ["2", "3"], "Cluster plot UMAP dimensions (2 = flat, 3 = rotatable)")
+dbutils.widgets.text("plot_umap_min_dist", "0.35", "Plot UMAP min_dist (higher = more visual separation)")
+dbutils.widgets.text("plot_display_spread", "0.25", "Extra centroid repulsion in plot (0 = off)")
 dbutils.widgets.text("topic_size_plot_top_n", "30", "Max topics shown in the cluster-size bar chart")
 
 # COMMAND ----------
@@ -234,14 +237,14 @@ print(f"Loaded {len(records)} records from {combined_path}")
 # MAGIC   to skip the cuda attempt, or restart/detach other GPU workloads on this cluster.
 # MAGIC - **embed_batch_size=8**: lowered from an implicit 64; 4k-char article bodies OOM at large
 # MAGIC   batches even on a clean 22 GB GPU.
-# MAGIC - **outlier_threshold=0.35**: only reassign noise docs with decent embedding similarity.
+# MAGIC - **outlier_threshold=0.40**: only reassign noise docs with decent embedding similarity.
 # MAGIC   threshold=0 force-assigns everything and floods the largest cluster.
 # MAGIC - **nr_topics**: leave blank to keep HDBSCAN's granularity; `auto` over-merges domains.
-# MAGIC - **min_cluster_size=60, min_samples=15**: raised from an earlier 25/5 pass, which produced
-# MAGIC   ~100 topics — many near-duplicate labels (e.g. "תקשורת ומדיה"/"תקשורת וטלוויזיה") for
-# MAGIC   what was really the same domain seen through slightly different HDBSCAN sub-clusters.
-# MAGIC   Coarser HDBSCAN granularity + the boilerplate-stopword and merge-duplicate-labels fixes
-# MAGIC   below together aim for fewer, more distinct topics. Lower these again if too coarse.
+# MAGIC - **min_cluster_size=60, min_samples=20, umap_n_neighbors=15**: raised from an earlier 25/5/10
+# MAGIC   pass that produced ~100 near-duplicate topics. Higher min_samples demands denser cluster
+# MAGIC   cores; higher n_neighbors gives UMAP more global structure before HDBSCAN. Lower again if
+# MAGIC   too coarse. Plot widgets `plot_umap_min_dist` / `plot_display_spread` add visual separation
+# MAGIC   without changing assignments.
 # MAGIC - **merge_duplicate_labels=True**: any clusters Gemini still names identically are collapsed
 # MAGIC   into one reported topic (evaluation.topic_clustering.merge_duplicate_labels) — no re-run
 # MAGIC   needed, this is a free local post-processing step.
@@ -272,12 +275,13 @@ rows, topic_model, embeddings = cluster_dataset(
     records,
     min_cluster_size=int(dbutils.widgets.get("min_cluster_size")),
     min_samples=int(_min_samples_raw) if _min_samples_raw else None,
+    umap_n_neighbors=int(dbutils.widgets.get("umap_n_neighbors") or "15"),
     embed_field=_embed_field,
     max_embed_chars=int(dbutils.widgets.get("max_embed_chars") or "4000"),
     embed_device=dbutils.widgets.get("embed_device"),
     embed_batch_size=int(dbutils.widgets.get("embed_batch_size") or "8"),
     reduce_outliers=dbutils.widgets.get("reduce_outliers") == "True",
-    outlier_threshold=float(dbutils.widgets.get("outlier_threshold") or "0.35"),
+    outlier_threshold=float(dbutils.widgets.get("outlier_threshold") or "0.40"),
     nr_topics=_nr_topics or None,
     merge_duplicates=dbutils.widgets.get("merge_duplicate_labels") == "True",
     refine_oversized=dbutils.widgets.get("refine_oversized") == "True",
@@ -375,10 +379,13 @@ from evaluation.topic_clustering import plot_clusters, write_plot_html
 _plot_sample_raw = dbutils.widgets.get("plot_sample").strip()
 plot_sample = float(_plot_sample_raw) if _plot_sample_raw else None
 plot_dimensions = int(dbutils.widgets.get("plot_dimensions") or "2")
+plot_umap_min_dist = float(dbutils.widgets.get("plot_umap_min_dist") or "0.35")
+plot_display_spread = float(dbutils.widgets.get("plot_display_spread") or "0.25")
 hover_texts = [r["summary"] for r in records]
 fig = plot_clusters(
     topic_model, hover_texts, embeddings,
     sample=plot_sample, dimensions=plot_dimensions,
+    umap_min_dist=plot_umap_min_dist, display_spread=plot_display_spread,
 )
 
 plot_path = Path("/dbfs/FileStore/amlk/cluster-plot.html")
