@@ -334,6 +334,37 @@ def merge_duplicate_labels(rows: list[dict]) -> list[dict]:
     ]
 
 
+def renumber_rows(rows: list[dict]) -> list[dict]:
+    """Map cluster_id values to contiguous 0..n-1 (noise stays -1).
+
+    BERTopic's visualize_documents indexes custom_labels_ as topic_id + _outliers, which only
+    works when non-noise IDs are 0, 1, 2, … — refinement assigns global IDs like 7, 8, 9 and
+    triggers IndexError in the plot cell without this pass.
+    """
+    if not rows:
+        return rows
+    old_to_new: dict[int, int] = {}
+    next_id = 0
+    for old_id in sorted(set(r["cluster_id"] for r in rows)):
+        if old_id == NOISE_TOPIC_ID:
+            old_to_new[old_id] = NOISE_TOPIC_ID
+        else:
+            old_to_new[old_id] = next_id
+            next_id += 1
+    return [{**row, "cluster_id": old_to_new[row["cluster_id"]]} for row in rows]
+
+
+def _sync_topic_model_labels(topic_model, rows: list[dict]) -> None:
+    """Push final per-doc cluster IDs + Hebrew labels onto topic_model for plot_clusters()."""
+    topic_model.topics_ = [int(r["cluster_id"]) for r in rows]
+    labels_by_topic: dict[int, str] = {}
+    for row in rows:
+        cid = int(row["cluster_id"])
+        if cid not in labels_by_topic:
+            labels_by_topic[cid] = row["topic_label"]
+    topic_model.set_topic_labels({**labels_by_topic, NOISE_TOPIC_ID: NOISE_LABEL})
+
+
 def _large_topic_ids(cluster_ids: list[int], size_fraction: float) -> list[int]:
     """Topic IDs whose doc count is >= size_fraction of the corpus (excluding noise)."""
     n = len(cluster_ids)
@@ -476,10 +507,6 @@ def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: in
             reduce_outliers=reduce_outliers, outlier_threshold=outlier_threshold,
         )
 
-    # Sync final per-doc assignments + Hebrew labels for plot_clusters() legend.
-    topic_model.topics_ = [int(c) for c in cluster_ids]
-    topic_model.set_topic_labels({**labels_by_topic, NOISE_TOPIC_ID: NOISE_LABEL})
-
     rows = [
         {"summary": r["summary"], "source": r.get("source"), "cluster_id": int(cid),
          "topic_label": labels_by_topic[int(cid)], "keywords": keywords_by_topic[int(cid)]}
@@ -490,6 +517,8 @@ def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: in
         rows = merge_duplicate_labels(rows)
         n_after = len(set(r["cluster_id"] for r in rows))
         print(f"Merged duplicate-labeled clusters: {n_before} -> {n_after}.", flush=True)
+    rows = renumber_rows(rows)
+    _sync_topic_model_labels(topic_model, rows)
     return rows, topic_model, embeddings
 
 
@@ -508,8 +537,35 @@ def plot_clusters(topic_model, cluster_docs: list[str], embeddings, *,
         hover_texts = cluster_docs
     if len(hover_texts) != len(embeddings):
         raise ValueError(f"hover_texts length {len(hover_texts)} != embeddings length {len(embeddings)}")
-    return topic_model.visualize_documents(hover_texts, embeddings=embeddings, hide_annotations=True,
-                                            custom_labels=True, sample=sample)
+
+    # BERTopic indexes custom_labels_[topic_id + _outliers] — requires contiguous 0..n-1 IDs.
+    # Re-apply renumber_rows on a lightweight row view so older runs / edge cases still plot.
+    pseudo_rows = [
+        {"cluster_id": int(t), "topic_label": _topic_label_for_plot(topic_model, int(t))}
+        for t in topic_model.topics_
+    ]
+    pseudo_rows = renumber_rows(pseudo_rows)
+    backup_topics = list(topic_model.topics_)
+    backup_labels = topic_model.custom_labels_
+    _sync_topic_model_labels(topic_model, pseudo_rows)
+    try:
+        return topic_model.visualize_documents(hover_texts, embeddings=embeddings, hide_annotations=True,
+                                                custom_labels=True, sample=sample)
+    finally:
+        topic_model.topics_ = backup_topics
+        topic_model.custom_labels_ = backup_labels
+
+
+def _topic_label_for_plot(topic_model, topic_id: int) -> str:
+    """Resolve a Hebrew label for topic_id from custom_labels_ (sorted-topic order)."""
+    if topic_id == NOISE_TOPIC_ID:
+        return NOISE_LABEL
+    if topic_model.custom_labels_ is None:
+        return f"cluster_{topic_id}"
+    for i, tid in enumerate(sorted(set(topic_model.topics_))):
+        if tid == topic_id:
+            return topic_model.custom_labels_[i]
+    return f"cluster_{topic_id}"
 
 
 def plot_topic_sizes(summary_rows: list[dict], top_n: int = 30):

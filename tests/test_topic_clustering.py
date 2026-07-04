@@ -12,11 +12,13 @@ import pytest
 from evaluation.topic_clustering import (
     HEBREW_STOPWORDS,
     HEBREW_TOKEN_PATTERN,
+    NOISE_TOPIC_ID,
     _large_topic_ids,
     _resolve_embed_device,
     _truncate_text,
     merge_duplicate_labels,
     plot_topic_sizes,
+    renumber_rows,
     topic_summary,
 )
 
@@ -48,6 +50,29 @@ def test_large_topic_ids_ignores_noise():
 
 def test_large_topic_ids_empty_input():
     assert _large_topic_ids([], size_fraction=0.3) == []
+
+
+def test_renumber_rows_maps_to_contiguous_ids():
+    rows = [
+        {"cluster_id": 7, "topic_label": "א"},
+        {"cluster_id": 0, "topic_label": "ב"},
+        {"cluster_id": 7, "topic_label": "א"},
+        {"cluster_id": 12, "topic_label": "ג"},
+    ]
+
+    renumbered = renumber_rows(rows)
+
+    assert [r["cluster_id"] for r in renumbered] == [1, 0, 1, 2]
+    assert {r["topic_label"] for r in renumbered} == {"א", "ב", "ג"}
+
+
+def test_renumber_rows_keeps_noise_as_minus_one():
+    rows = [{"cluster_id": NOISE_TOPIC_ID, "topic_label": "לא מסווג"}, {"cluster_id": 5, "topic_label": "ספורט"}]
+
+    renumbered = renumber_rows(rows)
+
+    assert renumbered[0]["cluster_id"] == NOISE_TOPIC_ID
+    assert renumbered[1]["cluster_id"] == 0
 
 
 def test_truncate_text_limits_article_body():
