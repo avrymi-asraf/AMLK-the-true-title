@@ -113,22 +113,28 @@ _TOPIC_CLUSTERING = Path("evaluation/topic_clustering.py")
 
 
 def _resolve_repo_dir() -> str:
-    """Prefer a Workspace copy of the repo (uncommitted code); else shallow-clone from GitHub."""
+    """Prefer a Workspace copy of the repo (uncommitted code); else fresh-clone from GitHub.
+
+    Always re-clones (rm -rf + clone) rather than reusing an existing /tmp/amlk-repo — on a
+    persistent interactive cluster, the driver's /tmp survives across notebook re-runs, so a
+    "skip if already cloned" check would silently keep serving a stale commit even after new
+    code is pushed to GitHub. The clone is small/shallow, so re-cloning every run is cheap.
+    """
     workspace = dbutils.widgets.get("code_root")
     if (Path(workspace) / _TOPIC_CLUSTERING).is_file():
-        print(f"Using workspace repo at {workspace}")
+        print(f"Using workspace repo at {workspace} (make sure it's up to date — this path is "
+              "never auto-refreshed from GitHub)")
         return workspace
 
     repo_dir = "/tmp/amlk-repo"
+    if Path(repo_dir).exists():
+        shutil.rmtree(repo_dir)
+    subprocess.run(
+        ["git", "clone", "--branch", dbutils.widgets.get("repo_branch"),
+         "--depth", "1", dbutils.widgets.get("repo_url"), repo_dir],
+        check=True,
+    )
     marker = Path(repo_dir) / _TOPIC_CLUSTERING
-    if not marker.is_file():
-        if Path(repo_dir).exists():
-            shutil.rmtree(repo_dir)
-        subprocess.run(
-            ["git", "clone", "--branch", dbutils.widgets.get("repo_branch"),
-             "--depth", "1", dbutils.widgets.get("repo_url"), repo_dir],
-            check=True,
-        )
     if not marker.is_file():
         raise ModuleNotFoundError(
             f"{_TOPIC_CLUSTERING} not found in workspace ({workspace}) or after git clone "
@@ -139,13 +145,23 @@ def _resolve_repo_dir() -> str:
             "  evaluation/evaluate.py\n"
             "  evaluation/gemini_client.py"
         )
-    print(f"Using git clone at {repo_dir}")
+    print(f"Fresh-cloned {dbutils.widgets.get('repo_branch')}@{dbutils.widgets.get('repo_url')} "
+          f"into {repo_dir}")
     return repo_dir
 
 
 repo_dir = _resolve_repo_dir()
 if repo_dir not in sys.path:
     sys.path.insert(0, repo_dir)
+
+# Belt-and-suspenders for a persistent interactive cluster: if a previous cell run in this same
+# Python process already imported these packages (e.g. you re-ran cells without restarting
+# Python after a code update), sys.modules would keep serving the old, cached code even though
+# the file on disk above is now fresh. Evict them so the next import re-reads from disk.
+for _mod_name in list(sys.modules):
+    if _mod_name == "evaluation" or _mod_name.startswith("evaluation.") \
+            or _mod_name == "data" or _mod_name.startswith("data."):
+        del sys.modules[_mod_name]
 
 
 def _load_gemini_api_key() -> str:
