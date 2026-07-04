@@ -4,7 +4,8 @@ results can later be broken down by topic (e.g. "does the model hallucinate more
 articles than sports?"). Embeds each article's summary with a Hebrew-native, clustering-tuned
 sentence-embedding model, clusters with BERTopic (UMAP + HDBSCAN + a Hebrew-only c-TF-IDF
 vectorizer, plus outlier-reduction/topic-merging passes to keep noise and near-duplicate topics
-in check — see fit_topics()'s docstring), then names each cluster with one Gemini call, then
+in check — see fit_topics()'s docstring), then names each cluster with one Gemini call, optionally re-clusters any mega-topic with a
+finer second-stage pass (refine_large_clusters()), then
 collapses any clusters Gemini still named identically (merge_duplicate_labels()) so the final
 report has one row per distinct real-world topic. This
 module holds the real, testable clustering logic; the
@@ -22,6 +23,7 @@ CPU/API-only regardless of where embedding happened.
 """
 import json
 import os
+from collections import Counter
 from pathlib import Path
 
 from evaluation.evaluate import gemini_json
@@ -93,6 +95,19 @@ short Hebrew topic name (2-4 words) for the news *domain* or subject area — e.
 Do NOT name the media format, outlet, or generic journalism meta-topic (avoid labels like
 "חדשות ותקשורת", "תקשורת ועיתונות", "כותרות").
 Reply with ONLY a JSON object: {{"label": "<short Hebrew topic name>"}}
+
+KEYWORDS: {keywords}
+
+EXAMPLE SUMMARIES:
+{examples}
+"""
+
+REFINEMENT_NAMING_PROMPT = """You name sub-topic clusters within a large Hebrew news topic cluster.
+The parent cluster was labeled "{parent_label}" — give a more specific news *sub-domain* name
+(2-4 words), not a repeat of the parent. Examples of good sub-domains: "ביטחון וצבא",
+"כלכלה ועסקים", "חברה ורווחה", "בחירות ומפלגות", "משפט חוקתי", "יחסים בינלאומיים".
+Do NOT name the media format or a generic label.
+Reply with ONLY a JSON object: {{"label": "<short Hebrew sub-topic name>"}}
 
 KEYWORDS: {keywords}
 
@@ -193,7 +208,8 @@ embed_summaries = embed_texts
 
 def fit_topics(cluster_docs: list[str], embeddings, min_cluster_size: int = 60,
                min_samples: int | None = 15, seed: int = 42, reduce_outliers: bool = True,
-               outlier_threshold: float = 0.35, nr_topics: int | str | None = None):
+               outlier_threshold: float = 0.35, nr_topics: int | str | None = None,
+               umap_n_neighbors: int = 10):
     """Fit BERTopic (UMAP + HDBSCAN + c-TF-IDF) over precomputed embeddings.
 
     `cluster_docs` is what BERTopic tokenizes for c-TF-IDF keywords — pass truncated article
@@ -221,7 +237,8 @@ def fit_topics(cluster_docs: list[str], embeddings, min_cluster_size: int = 60,
     from umap import UMAP
 
     print(f"Fitting BERTopic on {len(cluster_docs)} docs (UMAP → HDBSCAN)...", flush=True)
-    umap_model = UMAP(random_state=seed, n_neighbors=10, n_components=5, min_dist=0.0, metric="cosine")
+    umap_model = UMAP(random_state=seed, n_neighbors=umap_n_neighbors, n_components=5,
+                      min_dist=0.0, metric="cosine")
     hdbscan_model = HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples,
                              metric="euclidean", cluster_selection_method="eom",
                              prediction_data=True)
@@ -265,16 +282,24 @@ def fit_topics(cluster_docs: list[str], embeddings, min_cluster_size: int = 60,
     return topic_model, cluster_ids
 
 
-def name_topic(gemini_model, topic_model, topic_id: int, n_examples: int = 8) -> str:
+def name_topic(gemini_model, topic_model, topic_id: int, n_examples: int = 8, *,
+               parent_label: str | None = None) -> str:
     """One Gemini call: turn a cluster's c-TF-IDF keywords + representative examples into a
     short Hebrew label. Never called for the noise cluster (see NOISE_LABEL) — it's expected to
-    be too heterogeneous for one label."""
+    be too heterogeneous for one label. Pass parent_label when naming a refinement sub-cluster."""
     keywords = [word for word, _ in topic_model.get_topic(topic_id)][:10]
     examples = topic_model.get_representative_docs(topic_id)[:n_examples]
-    prompt = NAMING_PROMPT.format(
-        keywords=", ".join(keywords),
-        examples="\n".join(f"- {e}" for e in examples),
-    )
+    if parent_label:
+        prompt = REFINEMENT_NAMING_PROMPT.format(
+            parent_label=parent_label,
+            keywords=", ".join(keywords),
+            examples="\n".join(f"- {e}" for e in examples),
+        )
+    else:
+        prompt = NAMING_PROMPT.format(
+            keywords=", ".join(keywords),
+            examples="\n".join(f"- {e}" for e in examples),
+        )
     result = gemini_json(gemini_model, prompt)
     return result.get("label", "").strip() or f"cluster_{topic_id}"
 
@@ -309,17 +334,103 @@ def merge_duplicate_labels(rows: list[dict]) -> list[dict]:
     ]
 
 
+def _large_topic_ids(cluster_ids: list[int], size_fraction: float) -> list[int]:
+    """Topic IDs whose doc count is >= size_fraction of the corpus (excluding noise)."""
+    n = len(cluster_ids)
+    if n == 0:
+        return []
+    threshold = max(1, int(n * size_fraction))
+    counts = Counter(cluster_ids)
+    return sorted(tid for tid, count in counts.items()
+                  if tid != NOISE_TOPIC_ID and count >= threshold)
+
+
+def refine_large_clusters(cluster_ids: list[int], cluster_docs: list[str], embeddings,
+                          labels_by_topic: dict[int, str], keywords_by_topic: dict[int, list[str]],
+                          gemini_model, *, size_fraction: float = 0.3,
+                          min_cluster_size: int = 25, min_samples: int = 8, seed: int = 42,
+                          reduce_outliers: bool = True, outlier_threshold: float = 0.35,
+                          umap_n_neighbors: int = 5) -> tuple[list[int], dict[int, str], dict[int, list[str]]]:
+    """Second-stage pass: re-cluster any mega-topic with finer HDBSCAN on existing embeddings.
+
+    Keeps pass-1 granularity for small domains (sports, legal, …) and only splits clusters that
+    hold >= size_fraction of docs (default 30% — e.g. the 7.6k "פוליטיקה וממשלה" blob). No
+    re-embedding; sub-clusters get new global IDs and a refinement naming prompt with parent
+    context so Gemini picks ביטחון / כלכלה / חברה instead of another generic politics label.
+    """
+    import numpy as np
+
+    large_topics = _large_topic_ids(cluster_ids, size_fraction)
+    if not large_topics:
+        print("refine_large_clusters: no cluster above "
+              f"{size_fraction:.0%} threshold — skipping.", flush=True)
+        return cluster_ids, labels_by_topic, keywords_by_topic
+
+    cluster_ids = [int(c) for c in cluster_ids]
+    labels_by_topic = dict(labels_by_topic)
+    keywords_by_topic = dict(keywords_by_topic)
+    next_id = max(cluster_ids) + 1
+    embeddings = np.asarray(embeddings)
+
+    for parent_id in large_topics:
+        parent_label = labels_by_topic.get(parent_id, f"cluster_{parent_id}")
+        indices = [i for i, cid in enumerate(cluster_ids) if cid == parent_id]
+        print(f"Refining cluster {parent_id} ({parent_label!r}, {len(indices)} docs)...", flush=True)
+
+        sub_docs = [cluster_docs[i] for i in indices]
+        sub_embeddings = embeddings[indices]
+        sub_model, sub_ids = fit_topics(
+            sub_docs, sub_embeddings,
+            min_cluster_size=min_cluster_size, min_samples=min_samples, seed=seed,
+            reduce_outliers=reduce_outliers, outlier_threshold=outlier_threshold,
+            umap_n_neighbors=umap_n_neighbors,
+        )
+
+        sub_labels: dict[int, str] = {}
+        sub_keywords: dict[int, list[str]] = {}
+        for sub_tid in sorted(set(int(c) for c in sub_ids)):
+            if sub_tid == NOISE_TOPIC_ID:
+                sub_labels[sub_tid] = NOISE_LABEL
+                sub_keywords[sub_tid] = []
+                continue
+            sub_keywords[sub_tid] = [w for w, _ in sub_model.get_topic(sub_tid)][:10]
+            sub_labels[sub_tid] = name_topic(gemini_model, sub_model, sub_tid, parent_label=parent_label)
+
+        sub_to_global: dict[int, int] = {NOISE_TOPIC_ID: NOISE_TOPIC_ID}
+        for sub_tid in sorted(set(int(c) for c in sub_ids) - {NOISE_TOPIC_ID}):
+            sub_to_global[sub_tid] = next_id
+            labels_by_topic[next_id] = sub_labels[sub_tid]
+            keywords_by_topic[next_id] = sub_keywords[sub_tid]
+            next_id += 1
+
+        labels_by_topic.pop(parent_id, None)
+        keywords_by_topic.pop(parent_id, None)
+        for idx, sub_tid in zip(indices, sub_ids):
+            cluster_ids[idx] = sub_to_global[int(sub_tid)]
+
+        n_sub = sum(1 for gid in sub_to_global.values() if gid != NOISE_TOPIC_ID)
+        if n_sub:
+            real_ids = [gid for gid in sub_to_global.values() if gid != NOISE_TOPIC_ID]
+            print(f"  -> {n_sub} sub-clusters (ids {min(real_ids)}..{max(real_ids)}).", flush=True)
+
+    return cluster_ids, labels_by_topic, keywords_by_topic
+
+
 def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: int = 60,
                      min_samples: int | None = 15, seed: int = 42, reduce_outliers: bool = True,
                      outlier_threshold: float = 0.35, nr_topics: int | str | None = None,
                      embed_field: str = "text", max_embed_chars: int = 4000,
                      merge_duplicates: bool = True, embed_device: str = "auto",
-                     embed_batch_size: int = 8):
+                     embed_batch_size: int = 8, refine_oversized: bool = True,
+                     refine_size_fraction: float = 0.3, refine_min_cluster_size: int = 25,
+                     refine_min_samples: int = 8):
     """Full pipeline: embed -> cluster -> name. Each record needs `summary` (join key) and, when
     embed_field='text', `text` (article body). Cluster geometry + c-TF-IDF keywords come from
     truncated article bodies by default — summaries alone collapse into one media-meta mega-topic.
     `merge_duplicates` runs merge_duplicate_labels() on the result (see its docstring) so clusters
-    Gemini happened to name identically are reported as one topic.
+    Gemini happened to name identically are reported as one topic. `refine_oversized` runs a
+    second, finer BERTopic pass on any cluster holding >= refine_size_fraction of docs (re-uses
+    embeddings; see refine_large_clusters()).
 
     Returns (rows, topic_model, embeddings): rows align 1:1 with records —
     {summary, source, cluster_id, topic_label, keywords}. embeddings is returned (not just
@@ -357,7 +468,16 @@ def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: in
         keywords_by_topic[topic_id] = [w for w, _ in topic_model.get_topic(topic_id)][:10]
         labels_by_topic[topic_id] = name_topic(gemini_model, topic_model, topic_id)
 
-    # So plot_clusters() can show Hebrew topic names in the legend (not "0_keyword_keyword").
+    if refine_oversized:
+        cluster_ids, labels_by_topic, keywords_by_topic = refine_large_clusters(
+            cluster_ids, cluster_docs, embeddings, labels_by_topic, keywords_by_topic,
+            gemini_model, size_fraction=refine_size_fraction,
+            min_cluster_size=refine_min_cluster_size, min_samples=refine_min_samples, seed=seed,
+            reduce_outliers=reduce_outliers, outlier_threshold=outlier_threshold,
+        )
+
+    # Sync final per-doc assignments + Hebrew labels for plot_clusters() legend.
+    topic_model.topics_ = [int(c) for c in cluster_ids]
     topic_model.set_topic_labels({**labels_by_topic, NOISE_TOPIC_ID: NOISE_LABEL})
 
     rows = [

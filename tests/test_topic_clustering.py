@@ -12,6 +12,7 @@ import pytest
 from evaluation.topic_clustering import (
     HEBREW_STOPWORDS,
     HEBREW_TOKEN_PATTERN,
+    _large_topic_ids,
     _resolve_embed_device,
     _truncate_text,
     merge_duplicate_labels,
@@ -29,6 +30,24 @@ def test_resolve_embed_device_rejects_unknown():
 
     with pytest.raises(ValueError, match="embed_device"):
         _resolve_embed_device("tpu")
+
+
+def test_large_topic_ids_selects_clusters_above_fraction():
+    cluster_ids = [0] * 80 + [1] * 15 + [2] * 5
+
+    assert _large_topic_ids(cluster_ids, size_fraction=0.3) == [0]
+    assert _large_topic_ids(cluster_ids, size_fraction=0.2) == [0]
+    assert _large_topic_ids(cluster_ids, size_fraction=0.85) == []
+
+
+def test_large_topic_ids_ignores_noise():
+    cluster_ids = [-1] * 50 + [0] * 50
+
+    assert _large_topic_ids(cluster_ids, size_fraction=0.3) == [0]
+
+
+def test_large_topic_ids_empty_input():
+    assert _large_topic_ids([], size_fraction=0.3) == []
 
 
 def test_truncate_text_limits_article_body():
