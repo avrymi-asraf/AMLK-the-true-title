@@ -96,6 +96,7 @@ dbutils.widgets.text(
 dbutils.widgets.text("secret_scope", "", "Databricks secret scope (optional)")
 dbutils.widgets.text("gemini_api_key", "", "GEMINI_API_KEY (last resort — prefer .env or a secret scope)")
 dbutils.widgets.text("min_cluster_size", "100", "HDBSCAN min_cluster_size")
+dbutils.widgets.text("record_limit", "0", "Max records (0 = all; try 500 for a smoke test)")
 
 # COMMAND ----------
 
@@ -187,7 +188,14 @@ print(f"Loaded {len(records)} records from {combined_path}")
 
 from evaluation.topic_clustering import cluster_dataset, topic_summary, write_topics
 
-rows, topic_model = cluster_dataset(records, min_cluster_size=int(dbutils.widgets.get("min_cluster_size")))
+# Smoke-test first: set record_limit widget to e.g. 500 before a full 10k run.
+record_limit = int(dbutils.widgets.get("record_limit") or "0")
+if record_limit > 0:
+    print(f"record_limit={record_limit} — using a subset for this run", flush=True)
+    records = records[:record_limit]
+
+print(f"Starting cluster_dataset on {len(records)} records...", flush=True)
+rows, topic_model, embeddings = cluster_dataset(records, min_cluster_size=int(dbutils.widgets.get("min_cluster_size")))
 n_clusters = len(set(r["cluster_id"] for r in rows))
 print(f"Discovered {n_clusters} clusters (including noise, cluster_id=-1)")
 
@@ -206,11 +214,68 @@ display(spark.createDataFrame(
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC ### Visualize the clusters
+# MAGIC
+# MAGIC A 2D projection of the embeddings (a fresh UMAP run for plotting, separate from the 5D
+# MAGIC one used for HDBSCAN clustering above), colored by topic. Hover a point to see its
+# MAGIC summary text. Cluster -1 (noise) is included so you can see how much of the corpus didn't
+# MAGIC fit a real topic.
+
+# COMMAND ----------
+
+from evaluation.topic_clustering import plot_clusters
+
+summaries = [r["summary"] for r in records]
+fig = plot_clusters(topic_model, summaries, embeddings)
+displayHTML(fig.to_html(include_plotlyjs="cdn"))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Structural style labels (rule-based, local — no GPU/API)
+# MAGIC
+# MAGIC A second, independent dimension over the same summaries: not *what topic* an article is
+# MAGIC about, but *what format* its summary takes — a single sentence, several sentences, a
+# MAGIC "headline | headline | headline" pipe-separated digest, or a question-style headline.
+# MAGIC `evaluation/style_labels.py` is pure regex and runs instantly on CPU; it's included here
+# MAGIC (rather than only as a standalone local script) so it merges into the same `topics.jsonl`
+# MAGIC artifact and can be cross-tabbed against the topic clusters below.
+
+# COMMAND ----------
+
+from evaluation.style_labels import label_dataset as label_style
+from evaluation.style_labels import style_summary
+
+style_rows = label_style(records)  # aligned 1:1 with records/rows — same order, no join needed
+for row, style_row in zip(rows, style_rows):
+    row["style_label"] = style_row["style_label"]
+
+print("Style label distribution:")
+print(json.dumps(style_summary(style_rows), indent=2, ensure_ascii=False))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### Topic x style crosstab
+# MAGIC
+# MAGIC E.g. do certain topics skew toward multi-headline digests more than others?
+
+# COMMAND ----------
+
+import pandas as pd
+
+df = pd.DataFrame(rows)
+crosstab = pd.crosstab(df["topic_label"], df["style_label"]).reset_index()
+display(spark.createDataFrame(crosstab))
+
+# COMMAND ----------
+
 from pathlib import Path
 
 topics_path = Path("/dbfs/FileStore/amlk/topics.jsonl")
 summary_path = Path("/dbfs/FileStore/amlk/topics-summary.json")
-write_topics(rows, topics_path, summary_path)
+write_topics(rows, topics_path, summary_path)  # rows now carry both topic_label and style_label
 print(f"Wrote {topics_path} and {summary_path}")
 
 # COMMAND ----------
@@ -220,14 +285,21 @@ print(f"Wrote {topics_path} and {summary_path}")
 # MAGIC
 # MAGIC Grab both files from the Databricks "Data" > "DBFS" browser (or the workspace's
 # MAGIC `/files/amlk/topics.jsonl` FileStore URL) and save them locally as:
-# MAGIC - `outputs/data/raw/topics.jsonl`
+# MAGIC - `outputs/data/raw/topics.jsonl` (now carries both `topic_label` and `style_label`)
 # MAGIC - `outputs/results/topics-summary.json`
 # MAGIC
-# MAGIC Then, locally (no GPU/Databricks needed for this step), stratify any predictions file:
+# MAGIC Then, locally (no GPU/Databricks needed for this step), stratify any predictions file by
+# MAGIC either dimension:
 # MAGIC ```bash
 # MAGIC python -m evaluation.stratify_by_topic \
 # MAGIC   --predictions outputs/results/predictions-finetuned.jsonl \
-# MAGIC   --topics outputs/data/raw/topics.jsonl \
+# MAGIC   --labels outputs/data/raw/topics.jsonl --label-field topic_label \
 # MAGIC   --errors outputs/results/finetuned-v3.errors.json \
 # MAGIC   --output outputs/results/finetuned-by-topic.json
+# MAGIC
+# MAGIC python -m evaluation.stratify_by_topic \
+# MAGIC   --predictions outputs/results/predictions-finetuned.jsonl \
+# MAGIC   --labels outputs/data/raw/topics.jsonl --label-field style_label \
+# MAGIC   --errors outputs/results/finetuned-v3.errors.json \
+# MAGIC   --output outputs/results/finetuned-by-style.json
 # MAGIC ```

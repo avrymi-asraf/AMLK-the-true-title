@@ -45,10 +45,16 @@ EXAMPLE SUMMARIES:
 
 def embed_summaries(summaries: list[str]):
     """Encode summaries with the Hebrew-native, clustering-tuned embedding model."""
+    import torch
     from sentence_transformers import SentenceTransformer
 
-    model = SentenceTransformer(EMBEDDING_MODEL, trust_remote_code=True)
-    return model.encode(summaries, show_progress_bar=True)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Loading {EMBEDDING_MODEL} on {device}...", flush=True)
+    model = SentenceTransformer(EMBEDDING_MODEL, trust_remote_code=True, device=device)
+    print(f"Embedding {len(summaries)} summaries...", flush=True)
+    embeddings = model.encode(summaries, show_progress_bar=True, batch_size=64)
+    print(f"Embedding done ({embeddings.shape}).", flush=True)
+    return embeddings
 
 
 def fit_topics(summaries: list[str], embeddings, min_cluster_size: int = 100, seed: int = 42):
@@ -64,12 +70,16 @@ def fit_topics(summaries: list[str], embeddings, min_cluster_size: int = 100, se
     from hdbscan import HDBSCAN
     from umap import UMAP
 
+    print(f"Fitting BERTopic on {len(summaries)} docs (UMAP → HDBSCAN)...", flush=True)
     umap_model = UMAP(random_state=seed, n_neighbors=15, n_components=5, metric="cosine")
     hdbscan_model = HDBSCAN(min_cluster_size=min_cluster_size, metric="euclidean",
                              cluster_selection_method="eom", prediction_data=True)
     topic_model = BERTopic(umap_model=umap_model, hdbscan_model=hdbscan_model,
                             calculate_probabilities=False, verbose=True)
     cluster_ids, _ = topic_model.fit_transform(summaries, embeddings)
+    n_topics = len(set(int(c) for c in cluster_ids if int(c) != NOISE_TOPIC_ID))
+    n_noise = sum(int(c) == NOISE_TOPIC_ID for c in cluster_ids)
+    print(f"Clustering done: {n_topics} topics, {n_noise} noise docs.", flush=True)
     return topic_model, cluster_ids
 
 
@@ -91,10 +101,12 @@ def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: in
                      seed: int = 42):
     """Full pipeline: embed -> cluster -> name. Each record needs 'summary' (and 'source').
 
-    Returns (rows, topic_model): rows align 1:1 with records —
-    {summary, source, cluster_id, topic_label, keywords}.
+    Returns (rows, topic_model, embeddings): rows align 1:1 with records —
+    {summary, source, cluster_id, topic_label, keywords}. embeddings is returned (not just
+    discarded) so plot_clusters() can reuse them without a second, expensive embedding pass.
     """
     summaries = [r["summary"] for r in records]
+    print(f"cluster_dataset: {len(records)} records", flush=True)
     embeddings = embed_summaries(summaries)
     topic_model, cluster_ids = fit_topics(summaries, embeddings, min_cluster_size, seed)
 
@@ -104,13 +116,16 @@ def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: in
         genai.configure(api_key=os.environ["GEMINI_API_KEY"])
         gemini_model = genai.GenerativeModel(GEMINI_MODEL)
 
+    topic_ids = sorted(set(int(c) for c in cluster_ids))
+    print(f"Naming {sum(t != NOISE_TOPIC_ID for t in topic_ids)} clusters via Gemini...", flush=True)
     labels_by_topic: dict[int, str] = {}
     keywords_by_topic: dict[int, list[str]] = {}
-    for topic_id in set(int(c) for c in cluster_ids):
+    for i, topic_id in enumerate(topic_ids):
         if topic_id == NOISE_TOPIC_ID:
             labels_by_topic[topic_id] = NOISE_LABEL
             keywords_by_topic[topic_id] = []
             continue
+        print(f"  naming cluster {topic_id} ({i + 1}/{len(topic_ids)})...", flush=True)
         keywords_by_topic[topic_id] = [w for w, _ in topic_model.get_topic(topic_id)][:10]
         labels_by_topic[topic_id] = name_topic(gemini_model, topic_model, topic_id)
 
@@ -119,7 +134,16 @@ def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: in
          "topic_label": labels_by_topic[int(cid)], "keywords": keywords_by_topic[int(cid)]}
         for r, cid in zip(records, cluster_ids)
     ]
-    return rows, topic_model
+    return rows, topic_model, embeddings
+
+
+def plot_clusters(topic_model, summaries: list[str], embeddings):
+    """2D scatter of the discovered clusters, for a visual sanity check alongside
+    topic_summary()'s numeric table. Uses BERTopic's built-in visualize_documents, which runs
+    its own fresh 2D UMAP projection for plotting — separate from the 5D one fit_topics() used
+    for HDBSCAN clustering — and returns a Plotly figure (hover text shows each summary).
+    """
+    return topic_model.visualize_documents(summaries, embeddings=embeddings, hide_annotations=True)
 
 
 def topic_summary(rows: list[dict]) -> list[dict]:
