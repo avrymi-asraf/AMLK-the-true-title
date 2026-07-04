@@ -9,7 +9,12 @@ import re
 
 import pytest
 
-from evaluation.topic_clustering import HEBREW_STOPWORDS, HEBREW_TOKEN_PATTERN
+from evaluation.topic_clustering import HEBREW_STOPWORDS, HEBREW_TOKEN_PATTERN, _truncate_text
+
+
+def test_truncate_text_limits_article_body():
+    body = "א" * 10_000
+    assert len(_truncate_text(body, max_chars=4000)) == 4000
 
 
 def test_hebrew_token_pattern_keeps_only_hebrew_words():
@@ -68,9 +73,9 @@ def test_live_cluster_dataset_names_a_topic():
     ]
     # HDBSCAN needs enough points to form a cluster at all — repeat a tiny, clearly-one-topic
     # sample rather than standing up a large synthetic corpus just for this smoke test.
-    records = [{"summary": s, "source": "test"} for s in sports_summaries] * 15
+    records = [{"summary": s, "text": s, "source": "test"} for s in sports_summaries] * 15
 
-    rows, topic_model, embeddings = cluster_dataset(records, min_cluster_size=10)
+    rows, topic_model, embeddings = cluster_dataset(records, min_cluster_size=10, embed_field="summary")
 
     assert len(rows) == len(records)
     real_labels = {row["topic_label"] for row in rows if row["topic_label"] != NOISE_LABEL}

@@ -51,18 +51,35 @@ HEBREW_STOPWORDS = frozenset("""
 """.split())
 
 
+# Outlet / boilerplate tokens that dominate summary c-TF-IDF when clustering on headlines
+# instead of article bodies — harmless when embed_field='text', belt-and-suspenders otherwise.
+MEDIA_STOPWORDS = frozenset("""
+ידיעות אחרונות ישראל היום הארץ מעריב מקורבת וואלה nrg ynet וואלה חדשות העיתונים
+התקשורת העיתונות בעיתונות מהעיתונות בתקשורת
+""".split())
+
+
+def _truncate_text(text: str, max_chars: int = 4000) -> str:
+    """First N chars of article body — enough topical signal; the embedding model truncates further."""
+    return text[:max_chars].strip()
+
+
 def _build_vectorizer(ngram_range: tuple[int, int] = (1, 2)):
     """CountVectorizer for BERTopic's c-TF-IDF step, restricted to Hebrew words (see
     HEBREW_TOKEN_PATTERN/HEBREW_STOPWORDS above)."""
     from sklearn.feature_extraction.text import CountVectorizer
 
-    return CountVectorizer(token_pattern=HEBREW_TOKEN_PATTERN, stop_words=list(HEBREW_STOPWORDS),
-                            ngram_range=ngram_range)
+    return CountVectorizer(token_pattern=HEBREW_TOKEN_PATTERN,
+                            stop_words=list(HEBREW_STOPWORDS | MEDIA_STOPWORDS),
+                            ngram_range=ngram_range, lowercase=False)
 
 
 NAMING_PROMPT = """You name topic clusters of Hebrew news articles.
 Given these representative keywords and example summaries from one cluster, reply with a single
-short Hebrew topic name (2-4 words, e.g. "פוליטיקה וממשלה", "ספורט", "כלכלה ועסקים").
+short Hebrew topic name (2-4 words) for the news *domain* or subject area — e.g. "פוליטיקה
+וממשלה", "ספורט", "כלכלה ועסקים", "משפט וצדק", "ביטחון".
+Do NOT name the media format, outlet, or generic journalism meta-topic (avoid labels like
+"חדשות ותקשורת", "תקשורת ועיתונות", "כותרות").
 Reply with ONLY a JSON object: {{"label": "<short Hebrew topic name>"}}
 
 KEYWORDS: {keywords}
@@ -72,60 +89,57 @@ EXAMPLE SUMMARIES:
 """
 
 
-def embed_summaries(summaries: list[str]):
-    """Encode summaries with the Hebrew-native, clustering-tuned embedding model."""
+def embed_texts(texts: list[str]):
+    """Encode texts with the Hebrew-native, clustering-tuned embedding model."""
     import torch
     from sentence_transformers import SentenceTransformer
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Loading {EMBEDDING_MODEL} on {device}...", flush=True)
     model = SentenceTransformer(EMBEDDING_MODEL, trust_remote_code=True, device=device)
-    print(f"Embedding {len(summaries)} summaries...", flush=True)
-    embeddings = model.encode(summaries, show_progress_bar=True, batch_size=64)
+    print(f"Embedding {len(texts)} texts...", flush=True)
+    embeddings = model.encode(texts, show_progress_bar=True, batch_size=64)
     print(f"Embedding done ({embeddings.shape}).", flush=True)
     return embeddings
 
 
-def fit_topics(summaries: list[str], embeddings, min_cluster_size: int = 100,
-               min_samples: int | None = 10, seed: int = 42, reduce_outliers: bool = True,
-               nr_topics: int | str | None = "auto"):
+# Backward-compatible alias — callers may still say embed_summaries.
+embed_summaries = embed_texts
+
+
+def fit_topics(cluster_docs: list[str], embeddings, min_cluster_size: int = 25,
+               min_samples: int | None = 5, seed: int = 42, reduce_outliers: bool = True,
+               outlier_threshold: float = 0.35, nr_topics: int | str | None = None):
     """Fit BERTopic (UMAP + HDBSCAN + c-TF-IDF) over precomputed embeddings.
 
-    HDBSCAN infers the number of topics from density instead of requiring a pre-chosen k. Three
-    knobs address the two failure modes seen on the full ~10k-doc corpus (~50% noise; near-
-    duplicate topic names like "תקשורת ומדיה" vs "תקשורת וטלוויזיה"):
-    - `_build_vectorizer()` (module-level) makes c-TF-IDF keywords Hebrew words instead of years/
-      IDs/Latin site names, which is what made those topics look like duplicates in the first
-      place (their real keywords are genuinely different once numbers/brand tokens are dropped).
-    - `min_samples` decoupled from `min_cluster_size`: HDBSCAN ties min_samples to
-      min_cluster_size unless told otherwise, which is unusually conservative about what counts
-      as a core point; per BERTopic's FAQ, a smaller fixed min_samples produces less raw noise
-      without having to loosen min_cluster_size (which controls topic granularity instead).
-    - `language="multilingual"`: BERTopic defaults to `language="english"`, whose `_preprocess_text`
-      strips every non-[A-Za-z0-9] character — i.e. all Hebrew — before c-TF-IDF, yielding an
-      empty vocabulary on this corpus. Any non-"english" language skips that strip; "multilingual"
-      is BERTopic's documented choice for non-English text.
-    - `reduce_outliers`/`nr_topics`: BERTopic's own outlier-reduction (reassigns -1 docs to their
-      nearest topic by embedding cosine similarity) and "auto" topic-merging (HDBSCAN over the
-      topics' own c-TF-IDF vectors, so only genuinely near-duplicate topics merge — dissimilar
-      ones stay separate) passes. Both are opt-out (set to False/None) if you'd rather keep
-      HDBSCAN's raw, more conservative "explicit outlier" behavior.
+    `cluster_docs` is what BERTopic tokenizes for c-TF-IDF keywords — pass truncated article
+    bodies (not headlines) when possible; see cluster_dataset(embed_field='text').
 
-    Returns (topic_model, cluster_ids) — cluster_ids aligns 1:1 with summaries.
+    Tuning notes from full-corpus runs:
+    - Summaries alone collapse into one "חדשות ותקשורת" mega-topic (~99% of docs) because
+      headlines share outlet names and format. Embed/cluster on article `text` instead.
+    - `reduce_outliers` with threshold=0 (BERTopic default) force-assigns every noise doc to its
+      nearest topic, flooding the largest cluster. Use outlier_threshold (~0.35 cosine sim) so
+      uncertain docs stay -1.
+    - `nr_topics='auto'` over-merges distinct domains into a few media-meta topics — off by default.
+    - Lower min_cluster_size (25) + min_samples (5) yields more granular HDBSCAN topics than 40/10.
+    - `language='multilingual'` is required — English mode strips all Hebrew before c-TF-IDF.
+
+    Returns (topic_model, cluster_ids) — cluster_ids aligns 1:1 with cluster_docs.
     """
     from bertopic import BERTopic
     from hdbscan import HDBSCAN
     from umap import UMAP
 
-    print(f"Fitting BERTopic on {len(summaries)} docs (UMAP → HDBSCAN)...", flush=True)
-    umap_model = UMAP(random_state=seed, n_neighbors=15, n_components=5, metric="cosine")
+    print(f"Fitting BERTopic on {len(cluster_docs)} docs (UMAP → HDBSCAN)...", flush=True)
+    umap_model = UMAP(random_state=seed, n_neighbors=10, n_components=5, min_dist=0.0, metric="cosine")
     hdbscan_model = HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples,
                              metric="euclidean", cluster_selection_method="eom",
                              prediction_data=True)
     topic_model = BERTopic(language="multilingual", umap_model=umap_model, hdbscan_model=hdbscan_model,
                             vectorizer_model=_build_vectorizer(), calculate_probabilities=False,
                             verbose=True)
-    raw_cluster_ids, _ = topic_model.fit_transform(summaries, embeddings)
+    raw_cluster_ids, _ = topic_model.fit_transform(cluster_docs, embeddings)
     cluster_ids = [int(c) for c in raw_cluster_ids]
     n_noise = sum(c == NOISE_TOPIC_ID for c in cluster_ids)
     n_topics = len(set(cluster_ids) - {NOISE_TOPIC_ID})
@@ -134,9 +148,9 @@ def fit_topics(summaries: list[str], embeddings, min_cluster_size: int = 100,
 
     topics_reassigned = False
     if reduce_outliers and n_noise:
-        print("Reassigning noise docs to their nearest topic by embedding similarity...", flush=True)
-        cluster_ids = topic_model.reduce_outliers(summaries, cluster_ids, strategy="embeddings",
-                                                    embeddings=embeddings)
+        print(f"Reassigning noise docs with embedding similarity >= {outlier_threshold}...", flush=True)
+        cluster_ids = topic_model.reduce_outliers(cluster_docs, cluster_ids, strategy="embeddings",
+                                                    embeddings=embeddings, threshold=outlier_threshold)
         topic_model.topics_ = [int(c) for c in cluster_ids]
         topics_reassigned = True
         n_noise = sum(c == NOISE_TOPIC_ID for c in cluster_ids)
@@ -146,18 +160,15 @@ def fit_topics(summaries: list[str], embeddings, min_cluster_size: int = 100,
     if nr_topics:
         n_before = len(set(cluster_ids) - {NOISE_TOPIC_ID})
         print(f"Merging near-duplicate topics (nr_topics={nr_topics!r})...", flush=True)
-        # BERTopic >=0.17: reduce_topics(docs, nr_topics=...) reads/writes topic_model.topics_
-        # internally. The pre-0.17 API reduce_topics(docs, topics, nr_topics=...) is gone —
-        # passing cluster_ids positionally collides with nr_topics and raises TypeError.
         topic_model.topics_ = [int(c) for c in cluster_ids]
-        topic_model.reduce_topics(summaries, nr_topics=nr_topics)
+        topic_model.reduce_topics(cluster_docs, nr_topics=nr_topics)
         cluster_ids = [int(c) for c in topic_model.topics_]
         topics_reassigned = True
         n_after = len(set(cluster_ids) - {NOISE_TOPIC_ID})
         print(f"Topics merged: {n_before} -> {n_after}.", flush=True)
 
     if topics_reassigned:
-        topic_model.update_topics(summaries, vectorizer_model=_build_vectorizer())
+        topic_model.update_topics(cluster_docs, vectorizer_model=_build_vectorizer())
 
     n_topics = len(set(cluster_ids) - {NOISE_TOPIC_ID})
     n_noise = sum(c == NOISE_TOPIC_ID for c in cluster_ids)
@@ -179,21 +190,30 @@ def name_topic(gemini_model, topic_model, topic_id: int, n_examples: int = 8) ->
     return result.get("label", "").strip() or f"cluster_{topic_id}"
 
 
-def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: int = 100,
-                     min_samples: int | None = 10, seed: int = 42, reduce_outliers: bool = True,
-                     nr_topics: int | str | None = "auto"):
-    """Full pipeline: embed -> cluster -> name. Each record needs 'summary' (and 'source').
-    See fit_topics() for what min_samples/reduce_outliers/nr_topics do.
+def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: int = 25,
+                     min_samples: int | None = 5, seed: int = 42, reduce_outliers: bool = True,
+                     outlier_threshold: float = 0.35, nr_topics: int | str | None = None,
+                     embed_field: str = "text", max_embed_chars: int = 4000):
+    """Full pipeline: embed -> cluster -> name. Each record needs `summary` (join key) and, when
+    embed_field='text', `text` (article body). Cluster geometry + c-TF-IDF keywords come from
+    truncated article bodies by default — summaries alone collapse into one media-meta mega-topic.
 
     Returns (rows, topic_model, embeddings): rows align 1:1 with records —
     {summary, source, cluster_id, topic_label, keywords}. embeddings is returned (not just
     discarded) so plot_clusters() can reuse them without a second, expensive embedding pass.
     """
     summaries = [r["summary"] for r in records]
-    print(f"cluster_dataset: {len(records)} records", flush=True)
-    embeddings = embed_summaries(summaries)
-    topic_model, cluster_ids = fit_topics(summaries, embeddings, min_cluster_size, min_samples,
-                                           seed, reduce_outliers, nr_topics)
+    if embed_field == "summary":
+        cluster_docs = summaries
+    elif embed_field == "text":
+        cluster_docs = [_truncate_text(r["text"], max_embed_chars) for r in records]
+    else:
+        raise ValueError(f"embed_field must be 'text' or 'summary', got {embed_field!r}")
+
+    print(f"cluster_dataset: {len(records)} records (embed_field={embed_field!r})", flush=True)
+    embeddings = embed_texts(cluster_docs)
+    topic_model, cluster_ids = fit_topics(cluster_docs, embeddings, min_cluster_size, min_samples,
+                                           seed, reduce_outliers, outlier_threshold, nr_topics)
 
     if gemini_model is None:
         import google.generativeai as genai
@@ -222,13 +242,13 @@ def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: in
     return rows, topic_model, embeddings
 
 
-def plot_clusters(topic_model, summaries: list[str], embeddings):
+def plot_clusters(topic_model, cluster_docs: list[str], embeddings):
     """2D scatter of the discovered clusters, for a visual sanity check alongside
     topic_summary()'s numeric table. Uses BERTopic's built-in visualize_documents, which runs
     its own fresh 2D UMAP projection for plotting — separate from the 5D one fit_topics() used
-    for HDBSCAN clustering — and returns a Plotly figure (hover text shows each summary).
+    for HDBSCAN clustering — and returns a Plotly figure (hover text shows each cluster doc).
     """
-    return topic_model.visualize_documents(summaries, embeddings=embeddings, hide_annotations=True)
+    return topic_model.visualize_documents(cluster_docs, embeddings=embeddings, hide_annotations=True)
 
 
 def topic_summary(rows: list[dict]) -> list[dict]:
