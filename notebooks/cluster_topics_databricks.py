@@ -103,6 +103,7 @@ dbutils.widgets.dropdown("reduce_outliers", "True", ["True", "False"], "Reassign
 dbutils.widgets.text("outlier_threshold", "0.35", "Min cosine sim to reassign a noise doc (0 = assign all)")
 dbutils.widgets.text("nr_topics", "", "Merge near-duplicate topics: 'auto', an int, or blank to skip")
 dbutils.widgets.text("record_limit", "0", "Max records (0 = all; try 500 for a smoke test)")
+dbutils.widgets.text("plot_sample", "0.15", "Fraction of docs per topic in cluster plot (blank = all)")
 
 # COMMAND ----------
 
@@ -266,20 +267,27 @@ display(spark.createDataFrame(
 # MAGIC ### Visualize the clusters
 # MAGIC
 # MAGIC A 2D projection of the embeddings (a fresh UMAP run for plotting, separate from the 5D
-# MAGIC one used for HDBSCAN clustering above), colored by topic. Hover a point to see its
-# MAGIC summary text. Cluster -1 (noise) is included so you can see how much of the corpus didn't
-# MAGIC fit a real topic.
+# MAGIC one used for HDBSCAN clustering above), colored by topic. Hover shows the **summary** (short),
+# MAGIC not the full article body — and only a sample of points (see `plot_sample` widget) so the
+# MAGIC HTML stays under Databricks' ~20 MB cell-output cap. The plot is written to DBFS FileStore
+# MAGIC and embedded via iframe (not inline `displayHTML(fig.to_html(...))`, which exceeded the limit
+# MAGIC on 10k docs when hovers carried 4k-char article snippets).
 
 # COMMAND ----------
 
-from evaluation.topic_clustering import plot_clusters
+from pathlib import Path
 
-if _embed_field == "text":
-    cluster_docs = [_truncate_text(r["text"], int(dbutils.widgets.get("max_embed_chars") or "4000")) for r in records]
-else:
-    cluster_docs = [r["summary"] for r in records]
-fig = plot_clusters(topic_model, cluster_docs, embeddings)
-displayHTML(fig.to_html(include_plotlyjs="cdn"))
+from evaluation.topic_clustering import plot_clusters, write_plot_html
+
+_plot_sample_raw = dbutils.widgets.get("plot_sample").strip()
+plot_sample = float(_plot_sample_raw) if _plot_sample_raw else None
+hover_texts = [r["summary"] for r in records]
+fig = plot_clusters(topic_model, hover_texts, embeddings, sample=plot_sample)
+
+plot_path = Path("/dbfs/FileStore/amlk/cluster-plot.html")
+write_plot_html(fig, plot_path)
+print(f"Wrote cluster plot to {plot_path} ({len(records)} docs, plot_sample={plot_sample})")
+displayHTML('<iframe src="/files/amlk/cluster-plot.html" width="100%" height="700" frameborder="0"></iframe>')
 
 # COMMAND ----------
 

@@ -242,13 +242,31 @@ def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: in
     return rows, topic_model, embeddings
 
 
-def plot_clusters(topic_model, cluster_docs: list[str], embeddings):
+def plot_clusters(topic_model, cluster_docs: list[str], embeddings, *,
+                  hover_texts: list[str] | None = None, sample: float | None = 0.15):
     """2D scatter of the discovered clusters, for a visual sanity check alongside
     topic_summary()'s numeric table. Uses BERTopic's built-in visualize_documents, which runs
     its own fresh 2D UMAP projection for plotting — separate from the 5D one fit_topics() used
-    for HDBSCAN clustering — and returns a Plotly figure (hover text shows each cluster doc).
+    for HDBSCAN clustering — and returns a Plotly figure.
+
+    Pass short `hover_texts` (e.g. summaries) when `cluster_docs` are long article bodies — embedding
+    10k × 4k-char hovers blows past Databricks' ~20 MB command-result cap. `sample` keeps at most
+    that fraction of docs per topic (BERTopic built-in); None plots every point (fine for smoke runs).
     """
-    return topic_model.visualize_documents(cluster_docs, embeddings=embeddings, hide_annotations=True)
+    if hover_texts is None:
+        hover_texts = cluster_docs
+    if len(hover_texts) != len(embeddings):
+        raise ValueError(f"hover_texts length {len(hover_texts)} != embeddings length {len(embeddings)}")
+    return topic_model.visualize_documents(hover_texts, embeddings=embeddings, hide_annotations=True,
+                                            sample=sample)
+
+
+def write_plot_html(fig, path: Path) -> Path:
+    """Write a Plotly figure to disk (e.g. DBFS FileStore) for viewing outside the notebook cell."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.write_html(str(path), include_plotlyjs="cdn")
+    return path
 
 
 def topic_summary(rows: list[dict]) -> list[dict]:
