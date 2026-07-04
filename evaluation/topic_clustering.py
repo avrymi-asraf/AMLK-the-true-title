@@ -101,6 +101,10 @@ def fit_topics(summaries: list[str], embeddings, min_cluster_size: int = 100,
       min_cluster_size unless told otherwise, which is unusually conservative about what counts
       as a core point; per BERTopic's FAQ, a smaller fixed min_samples produces less raw noise
       without having to loosen min_cluster_size (which controls topic granularity instead).
+    - `language="multilingual"`: BERTopic defaults to `language="english"`, whose `_preprocess_text`
+      strips every non-[A-Za-z0-9] character — i.e. all Hebrew — before c-TF-IDF, yielding an
+      empty vocabulary on this corpus. Any non-"english" language skips that strip; "multilingual"
+      is BERTopic's documented choice for non-English text.
     - `reduce_outliers`/`nr_topics`: BERTopic's own outlier-reduction (reassigns -1 docs to their
       nearest topic by embedding cosine similarity) and "auto" topic-merging (HDBSCAN over the
       topics' own c-TF-IDF vectors, so only genuinely near-duplicate topics merge — dissimilar
@@ -118,7 +122,7 @@ def fit_topics(summaries: list[str], embeddings, min_cluster_size: int = 100,
     hdbscan_model = HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples,
                              metric="euclidean", cluster_selection_method="eom",
                              prediction_data=True)
-    topic_model = BERTopic(umap_model=umap_model, hdbscan_model=hdbscan_model,
+    topic_model = BERTopic(language="multilingual", umap_model=umap_model, hdbscan_model=hdbscan_model,
                             vectorizer_model=_build_vectorizer(), calculate_probabilities=False,
                             verbose=True)
     raw_cluster_ids, _ = topic_model.fit_transform(summaries, embeddings)

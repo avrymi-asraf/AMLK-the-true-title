@@ -27,6 +27,21 @@ def test_hebrew_stopwords_cover_common_function_words():
     assert {"של", "את", "על", "גם", "לא"} <= HEBREW_STOPWORDS
 
 
+def test_bertopic_english_preprocess_strips_hebrew():
+    """BERTopic's default language='english' removes all Hebrew before c-TF-IDF — fit_topics()
+    must pass language='multilingual' instead (see fit_topics docstring)."""
+    pytest.importorskip("bertopic")
+    import numpy as np
+    from bertopic import BERTopic
+
+    docs = np.array(["הנבחרת ניצחה במשחק הכדורגל"])
+    english = BERTopic(language="english")._preprocess_text(docs)[0]
+    multilingual = BERTopic(language="multilingual")._preprocess_text(docs)[0]
+
+    assert "הנבחרת" not in english
+    assert "הנבחרת" in multilingual
+
+
 @pytest.mark.skipif(
     not (os.getenv("GEMINI_API_KEY") and os.getenv("RUN_LIVE_TESTS")),
     reason="Set GEMINI_API_KEY and RUN_LIVE_TESTS=1 to run the live BERTopic + Gemini naming test",
