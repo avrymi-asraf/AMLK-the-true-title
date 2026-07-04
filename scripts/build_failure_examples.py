@@ -1,5 +1,9 @@
-"""One-off builder for docs/obsidian/Failure Examples.md — run from repo root."""
+"""Build docs/failure-examples.md — Google Docs / Word friendly (no tables, no code fences).
+
+Run from repo root: python scripts/build_failure_examples.py
+"""
 import json
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,95 +21,150 @@ def pick(examples: list[dict], label_set: set[str]) -> dict | None:
     return None
 
 
-def article_excerpt(text: str, n: int = 600) -> str:
-    t = text.replace("\n", " ").strip()
-    return t if len(t) <= n else t[:n] + "…"
-
-
-def pred_block(text: str, limit: int = 0) -> str:
-    if limit and len(text) > limit:
-        return text[:limit] + "…"
-    return text
+def plain(s: str) -> str:
+    """Strip markdown bold/backticks for paste-friendly prose."""
+    s = re.sub(r"\*\*([^*]+)\*\*", r"\1", s)
+    s = re.sub(r"`([^`]+)`", r"\1", s)
+    return s
 
 
 CLUSTER_DESC = {
     "entity_or_number_error+hallucination+omission": (
-        "**Hallucination + wrong entities + missing main points** (20% of finetuned sample). "
+        "Hallucination + wrong entities + missing main points (20% of finetuned sample). "
         "The model writes a plausible Hebrew media-digest in the right format, but invents newspapers, "
         "people, and claims; it also drops key stories from the article."
     ),
     "hallucination+omission": (
-        "**Hallucination + omission** (15%). The summary is on-topic in tone but describes events "
+        "Hallucination + omission (15%). The summary is on-topic in tone but describes events "
         "that are not in the article and skips the article's actual main points."
     ),
     "entity_or_number_error+omission": (
-        "**Wrong entities + omission** (10%). Names/outlets are garbled or wrong; main content missing."
+        "Wrong entities + omission (10%). Names/outlets are garbled or wrong; main content missing."
     ),
     "entity_or_number_error+hallucination+lead_copying": (
-        "**Hallucination + entity errors + lead bias** (8%). Picks up lead-adjacent names but fabricates the rest."
+        "Hallucination + entity errors + lead bias (8%). Picks up lead-adjacent names but fabricates the rest."
     ),
     "lead_copying+omission": (
-        "**Lead copying + omission** (7%). Echoes opening themes or entities but fails to summarize the full article."
+        "Lead copying + omission (7%). Echoes opening themes or entities but fails to summarize the full article."
     ),
     "entity_or_number_error+fluency_problem+hallucination": (
-        "**Hallucination + entity errors + fluency** (7%). Fluent-looking Hebrew with garbled tokens and invented content."
+        "Hallucination + entity errors + fluency (7%). Fluent-looking Hebrew with garbled tokens and invented content."
     ),
     "omission": (
-        "**Omission only** (8%). May look reasonable but leaves out the article's central story."
+        "Omission only (8%). May look reasonable but leaves out the article's central story."
     ),
     "wrong_language": (
-        "**Wrong language / non-answer** (97% of base sample, post-hoc tag). "
-        "Qwen3 enters an English `<think>` block and never produces a Hebrew summary. "
-        "The literature failure taxonomy marks these as \"clean\" because the English reasoning restates the article."
+        "Wrong language / non-answer (97% of base sample, post-hoc tag). "
+        "Qwen3 enters an English thinking block and never produces a Hebrew summary. "
+        "The literature failure taxonomy marks these as clean because the English reasoning restates the article."
     ),
     "entity_or_number_error+hallucination": (
-        "**Hallucination + entity errors in English** (13% of base). "
+        "Hallucination + entity errors in English (13% of base). "
         "Responds in English with invented facts (e.g. dollar amounts not in the source)."
     ),
     "entity_or_number_error+hallucination+omission_base": (
-        "**English summary with wrong facts and missing points** (11% of base)."
+        "English summary with wrong facts and missing points (11% of base)."
     ),
 }
 
 
-def write_example(lines: list[str], e: dict, combo: tuple[str, ...], key: str, pred_limit: int = 0) -> None:
-    lines.append(f"**Labels:** `{', '.join(combo) if combo else '(none — wrong_language post-hoc)'}`")
+def write_text_block(lines: list[str], label: str, text: str) -> None:
+    lines.append(label)
     lines.append("")
-    lines.append(CLUSTER_DESC[key])
+    lines.append(text)
     lines.append("")
-    lines.append("**Article (excerpt):**")
-    lines.append("```")
-    lines.append(article_excerpt(e["text"]))
-    lines.append("```")
+
+
+def write_example(lines: list[str], e: dict, combo: tuple[str, ...], key: str) -> None:
+    label_str = ", ".join(combo) if combo else "(none — wrong_language tagged post-hoc)"
+    lines.append(f"Failure labels: {label_str}")
     lines.append("")
-    lines.append("**Model prediction:**")
-    lines.append("```")
-    lines.append(pred_block(e["prediction"], pred_limit))
-    lines.append("```")
+    lines.append(plain(CLUSTER_DESC[key]))
     lines.append("")
-    lines.append("**Reference:**")
-    lines.append("```")
-    lines.append(e["reference"])
-    lines.append("```")
-    lines.append("")
-    lines.append("**What went wrong:**")
+    write_text_block(lines, "Article (full):", e["text"].strip())
+    write_text_block(lines, "Model prediction (full):", e["prediction"].strip())
+    write_text_block(lines, "Reference summary (full):", e["reference"].strip())
+    lines.append("What went wrong:")
+    bullets: list[str] = []
     if not combo or key == "wrong_language":
-        lines.append("- Model outputs English reasoning inside `<think>` and often hits `max_new_tokens` before any Hebrew summary.")
-        lines.append("- Judge taxonomy has no \"wrong language\" label, so this often scores as \"no failure\".")
+        bullets += [
+            "Model outputs English reasoning inside a thinking block and often hits the token limit before any Hebrew summary.",
+            "Judge taxonomy has no wrong-language label, so this often scores as no failure.",
+        ]
     else:
         if "hallucination" in combo:
-            lines.append("- Prediction invents outlets, people, or events not supported by the article.")
+            bullets.append("Prediction invents outlets, people, or events not supported by the article.")
         if "omission" in combo:
-            lines.append("- Key stories in the reference (and article) are missing from the prediction.")
+            bullets.append("Key stories in the reference (and article) are missing from the prediction.")
         if "entity_or_number_error" in combo:
-            lines.append("- Names/numbers are wrong or garbled (e.g. mixed Hebrew/Latin characters).")
+            bullets.append("Names/numbers are wrong or garbled (e.g. mixed Hebrew/Latin characters).")
         if "lead_copying" in combo:
-            lines.append("- Over-relies on lead-adjacent entities without faithful abstraction.")
+            bullets.append("Over-relies on lead-adjacent entities without faithful abstraction.")
         if "fluency_problem" in combo:
-            lines.append("- Surface fluency breaks down (tokenization artifacts, incoherent phrases).")
+            bullets.append("Surface fluency breaks down (tokenization artifacts, incoherent phrases).")
         if not has_hebrew(e["prediction"]):
-            lines.append("- Responds in English, not Hebrew.")
+            bullets.append("Responds in English, not Hebrew.")
+    for b in bullets:
+        lines.append(f"• {b}")
     lines.append("")
+
+
+def multi_header_stats(texts: list[str]) -> dict:
+    def seg_count(text: str) -> int:
+        return len([s for s in text.split("|") if s.strip()])
+
+    n = len(texts)
+    multi = sum(1 for t in texts if seg_count(t) > 1)
+    has_pipe = sum(1 for t in texts if "|" in t)
+    dist: dict[int, int] = {}
+    for t in texts:
+        c = seg_count(t)
+        dist[c] = dist.get(c, 0) + 1
+    return {"n": n, "multi": multi, "has_pipe": has_pipe, "dist": dist}
+
+
+def append_multi_header_section(lines: list[str], preds: list[str]) -> None:
+    pred = multi_header_stats(preds)
+    lines += [
+        "Multi-header format (pipe-separated digests)",
+        "",
+        "HeSum references often use a multi-header style: several short headline clauses joined by "
+        '" | " (a weekly media-roundup digest, not a single-topic abstract). A summary counts as '
+        "multi-header when it has more than one non-empty segment after splitting on |.",
+        "",
+        "Reference summaries (ground truth)",
+        "",
+        "• Test set (n=1000): 254 multi-header (25.4%), 746 single-segment (74.6%)",
+        "• Train set (n=8000): 2068 multi-header (25.9%), 5932 single-segment (74.2%)",
+        "",
+        "Test-set segment distribution:",
+        "• 1 segment: 746 (74.6%)",
+        "• 2 segments: 16 (1.6%)",
+        "• 3 segments: 205 (20.5%)",
+        "• 4 segments: 27 (2.7%)",
+        "• 5 segments: 5 (0.5%)",
+        "• 6 segments: 1 (0.1%)",
+        "",
+        "Most multi-header references have exactly 3 pipe-separated items (205/254 = 81% of multi-header refs).",
+        "",
+        "Finetuned v3 predictions",
+        "",
+        f"• Contains | separator: {pred['has_pipe']} ({100 * pred['has_pipe'] / pred['n']:.1f}%)",
+        f"• Multi-header (>1 segment): {pred['multi']} ({100 * pred['multi'] / pred['n']:.1f}%)",
+        f"• Single segment: {pred['n'] - pred['multi']} ({100 * (pred['n'] - pred['multi']) / pred['n']:.1f}%)",
+        "",
+        "The model over-uses the pipe template: about 62% of predictions are multi-header vs 25% of references "
+        "(more than 2× the reference rate). It learned the HeSum digest format but applies it too often and runs too long:",
+        "",
+        "• Reference median length: ~147 chars / ~25 words",
+        "• Prediction median length: ~548 chars / ~89 words (3.7× reference)",
+        f"• Predictions reach up to {max(pred['dist'])} pipe segments in one output; references almost never exceed 6",
+        "",
+        "Interpretation: pipe-headline overfitting is a distinct failure mode from hallucination. The model produces "
+        'plausible-looking "| newspaper X does Y" clauses even when the reference is a single-topic summary (74.6% of refs). '
+        "This inflates format correctness while hurting faithfulness and length control.",
+        "",
+    ]
 
 
 def main() -> None:
@@ -114,35 +173,35 @@ def main() -> None:
     ft_ex, base_ex = ft["examples"], base["examples"]
 
     lines = [
-        "# Failure Examples — v3 (Qwen3-2B, whole variant)",
+        "Failure Examples — v3 (Qwen3-2B, whole variant)",
         "",
-        "#status/done",
+        "AMLK Hebrew news summarization project. Curated examples of the biggest failure modes in the v3 "
+        "evaluation run (3-epoch LoRA, anti-degeneration decode). Failure labels from Gemini gemini-2.5-flash-lite "
+        "on a 100-example sample. Full machine-readable reports: outputs/results/finetuned-v3.errors.json and "
+        "outputs/results/base-v3.errors.json.",
         "",
-        "Curated examples of the **biggest failure modes** in the v3 evaluation run "
-        "(3-epoch LoRA, anti-degeneration decode). Labels from Gemini `gemini-2.5-flash-lite` "
-        "on a 100-example stratified sample (`evaluation/error_analysis.py`). "
-        "Full reports: `outputs/results/finetuned-v3.errors.json`, `outputs/results/base-v3.errors.json`.",
+        "Summary failure rates (n=100 each)",
         "",
-        "See also: [[Prediction Failure Modes]] (v1 repetition-loop analysis), [[Current Results]].",
-        "",
-        "---",
-        "",
-        "## Summary rates (n=100 each)",
-        "",
-        "| Failure type | v3 Finetuned | v3 Base |",
-        "|---|---|---|",
     ]
     for k in ["hallucination", "omission", "entity_or_number_error", "lead_copying", "fluency_problem"]:
-        lines.append(f"| {k} | {ft['failure_rates'][k]:.0%} | {base['failure_rates'][k]:.0%} |")
+        name = k.replace("_", " ")
+        lines.append(f"• {name}: finetuned {ft['failure_rates'][k]:.0%}, base {base['failure_rates'][k]:.0%}")
     lines += [
-        "| wrong_language (post-hoc) | 0% | 97% |",
+        "• wrong language (post-hoc tag): finetuned 0%, base 97%",
         "",
-        "**Finetuned:** fails on *content* (hallucination/omission) but always answers in Hebrew.",
-        "**Base:** fails on *task completion* (English thinking, no Hebrew answer) unless chat template is used.",
+        "Finetuned: fails on content (hallucination/omission) but always answers in Hebrew.",
+        "Base: fails on task completion (English thinking, no Hebrew answer) unless the chat template is used.",
         "",
-        "---",
-        "",
-        "## Finetuned v3",
+    ]
+    preds = [
+        json.loads(line)["prediction"]
+        for line in (ROOT / "outputs/results/predictions-finetuned.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    append_multi_header_section(lines, preds)
+
+    lines += [
+        "Finetuned v3 — example failures",
         "",
     ]
 
@@ -159,25 +218,23 @@ def main() -> None:
         e = pick(ft_ex, set(combo))
         if not e:
             continue
-        lines.append(f"### {num}. {key.replace('_', ' ')}")
+        lines.append(f"Example {num}: {key.replace('_', ' ')}")
         lines.append("")
         write_example(lines, e, combo, key)
-        lines.append("---")
         lines.append("")
 
     lines += [
-        "## Base v3 (zero-shot, raw prompt — known baseline bug)",
+        "Base v3 (zero-shot, raw prompt — known baseline bug)",
         "",
-        "> **Note:** A fairer base baseline uses Qwen3 chat template with `enable_thinking=False`. "
-        "Regen job `6a48d621` (`--pred-suffix=-v4`) was submitted 2026-07-04.",
+        "Note: a fairer base baseline uses the Qwen3 chat template with thinking disabled. "
+        "Regen job 6a48d621 (--pred-suffix=-v4) was submitted 2026-07-04.",
         "",
     ]
 
     e = next(x for x in base_ex if not x["labels"] and not has_hebrew(x["prediction"]))
-    lines.append("### 1. wrong_language (non-answer)")
+    lines.append("Example 1: wrong language (non-answer)")
     lines.append("")
-    write_example(lines, e, tuple(), "wrong_language", pred_limit=1200)
-    lines.append("---")
+    write_example(lines, e, tuple(), "wrong_language")
     lines.append("")
 
     for combo, key, num in [
@@ -187,10 +244,9 @@ def main() -> None:
         e = pick(base_ex, set(combo))
         if not e:
             continue
-        lines.append(f"### {num}. {key.replace('_', ' ')}")
+        lines.append(f"Example {num}: {key.replace('_', ' ')}")
         lines.append("")
-        write_example(lines, e, combo, key, pred_limit=1200)
-        lines.append("---")
+        write_example(lines, e, combo, key)
         lines.append("")
 
     OUT.write_text("\n".join(lines), encoding="utf-8")

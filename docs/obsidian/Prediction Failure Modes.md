@@ -1,6 +1,6 @@
 # Prediction Failure Modes
 
-> **v3 curated examples (full article / prediction / reference):** [failure-examples.md](../failure-examples.md)
+> **v3 curated examples (Google Docs friendly):** [failure-examples.md](../failure-examples.md)
 
 Analysis of all **1000** fine-tuned predictions (`outputs/results/predictions-finetuned.jsonl`), June 2026.
 
