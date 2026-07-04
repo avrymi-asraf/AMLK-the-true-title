@@ -176,6 +176,30 @@ def test_bertopic_reduce_topics_uses_topics_on_model_not_second_arg():
     assert "topics" not in params
 
 
+def test_plot_clusters_adds_topic_header_annotations():
+    pytest.importorskip("umap")
+    import numpy as np
+    from unittest.mock import MagicMock
+
+    from evaluation.topic_clustering import plot_clusters
+
+    topic_model = MagicMock()
+    topic_model.topics_ = [0] * 30 + [1] * 30
+    topic_model.custom_labels_ = ["נושא א", "נושא ב"]
+    rng = np.random.default_rng(0)
+    embeddings = np.concatenate([
+        rng.normal(scale=0.3, size=(30, 16)),
+        rng.normal(scale=0.3, size=(30, 16)) + 4.0,
+    ])
+    hover = [f"doc{i}" for i in range(60)]
+
+    fig = plot_clusters(topic_model, hover, embeddings, sample=1.0)
+
+    assert fig is not None
+    assert len(fig.layout.annotations) == 2
+    assert "נושא א" in fig.layout.annotations[0]["text"]
+
+
 @pytest.mark.skipif(
     not (os.getenv("GEMINI_API_KEY") and os.getenv("RUN_LIVE_TESTS")),
     reason="Set GEMINI_API_KEY and RUN_LIVE_TESTS=1 to run the live BERTopic + Gemini naming test",

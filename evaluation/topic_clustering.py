@@ -525,38 +525,123 @@ def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: in
     return rows, topic_model, embeddings
 
 
-def plot_clusters(topic_model, cluster_docs: list[str], embeddings, *,
-                  hover_texts: list[str] | None = None, sample: float | None = 0.15):
-    """2D scatter of the discovered clusters, for a visual sanity check alongside
-    topic_summary()'s numeric table. Uses BERTopic's built-in visualize_documents, which runs
-    its own fresh 2D UMAP projection for plotting — separate from the 5D one fit_topics() used
-    for HDBSCAN clustering — and returns a Plotly figure.
+def _sample_document_indices(topic_per_doc: list[int], sample: float | None, seed: int = 42):
+    """Per-topic subsample for plotting — mirrors BERTopic's visualize_documents cap."""
+    import numpy as np
 
-    Pass short `hover_texts` (e.g. summaries) when `cluster_docs` are long article bodies — embedding
-    10k × 4k-char hovers blows past Databricks' ~20 MB command-result cap. `sample` keeps at most
-    that fraction of docs per topic (BERTopic built-in); None plots every point (fine for smoke runs).
+    if sample is None or sample >= 1:
+        return np.arange(len(topic_per_doc))
+    rng = np.random.default_rng(seed)
+    indices: list[int] = []
+    for topic in set(topic_per_doc):
+        where = np.where(np.array(topic_per_doc) == topic)[0]
+        cap = len(where) if len(where) < 100 else max(3, int(len(where) * sample))
+        cap = min(cap, len(where))
+        indices.extend(rng.choice(where, size=cap, replace=False))
+    return np.array(sorted(indices))
+
+
+def _fill_color(hex_color: str, alpha: float = 0.18) -> str:
+    from plotly.colors import hex_to_rgb
+
+    r, g, b = hex_to_rgb(hex_color)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
+def _add_convex_hull_cloud(fig, xs, ys, color: str) -> None:
+    """Semi-transparent polygon around a topic's points so clusters read as distinct 'clouds'."""
+    import numpy as np
+    from scipy.spatial import ConvexHull
+    import plotly.graph_objects as go
+
+    if len(xs) < 3:
+        return
+    points = np.column_stack([xs, ys])
+    hull = ConvexHull(points)
+    ring = points[hull.vertices]
+    ring = np.vstack([ring, ring[0]])
+    fig.add_trace(go.Scatter(
+        x=ring[:, 0], y=ring[:, 1], mode="lines", fill="toself",
+        fillcolor=_fill_color(color), line=dict(color=color, width=1.5),
+        showlegend=False, hoverinfo="skip",
+    ))
+
+
+def plot_clusters(topic_model, cluster_docs: list[str], embeddings, *,
+                  hover_texts: list[str] | None = None, sample: float | None = 0.15,
+                  show_clouds: bool = True, show_headers: bool = True):
+    """2D UMAP scatter of discovered clusters with optional convex-hull 'clouds' and a bold
+    Hebrew topic header at each cluster centroid — clearer separation than BERTopic's default
+    visualize_documents (which also breaks when cluster IDs are non-contiguous).
+
+    Pass short `hover_texts` (e.g. summaries) when `cluster_docs` are long article bodies.
+    `sample` keeps at most that fraction of docs per topic (fine for smoke runs: None = all).
     """
+    import numpy as np
+    import plotly.express as px
+    import plotly.graph_objects as go
+    from umap import UMAP
+
     if hover_texts is None:
         hover_texts = cluster_docs
     if len(hover_texts) != len(embeddings):
         raise ValueError(f"hover_texts length {len(hover_texts)} != embeddings length {len(embeddings)}")
 
-    # BERTopic indexes custom_labels_[topic_id + _outliers] — requires contiguous 0..n-1 IDs.
-    # Re-apply renumber_rows on a lightweight row view so older runs / edge cases still plot.
-    pseudo_rows = [
+    pseudo_rows = renumber_rows([
         {"cluster_id": int(t), "topic_label": _topic_label_for_plot(topic_model, int(t))}
         for t in topic_model.topics_
-    ]
-    pseudo_rows = renumber_rows(pseudo_rows)
-    backup_topics = list(topic_model.topics_)
-    backup_labels = topic_model.custom_labels_
-    _sync_topic_model_labels(topic_model, pseudo_rows)
-    try:
-        return topic_model.visualize_documents(hover_texts, embeddings=embeddings, hide_annotations=True,
-                                                custom_labels=True, sample=sample)
-    finally:
-        topic_model.topics_ = backup_topics
-        topic_model.custom_labels_ = backup_labels
+    ])
+    topic_per_doc = [r["cluster_id"] for r in pseudo_rows]
+    label_by_id = {r["cluster_id"]: r["topic_label"] for r in pseudo_rows}
+
+    indices = _sample_document_indices(topic_per_doc, sample)
+    embeddings = np.asarray(embeddings)
+    emb_2d = UMAP(n_neighbors=15, n_components=2, min_dist=0.1, metric="cosine",
+                  random_state=42).fit_transform(embeddings[indices])
+
+    topics_sampled = [topic_per_doc[i] for i in indices]
+    palette = px.colors.qualitative.Plotly + px.colors.qualitative.Set2 + px.colors.qualitative.Pastel
+    topic_ids = sorted(set(topics_sampled), key=lambda t: (t == NOISE_TOPIC_ID, t))
+
+    fig = go.Figure()
+    annotations = []
+
+    for j, topic_id in enumerate(topic_ids):
+        mask = np.array([t == topic_id for t in topics_sampled])
+        xs, ys = emb_2d[mask, 0], emb_2d[mask, 1]
+        label = label_by_id.get(topic_id, f"cluster_{topic_id}")
+        if topic_id == NOISE_TOPIC_ID:
+            color = "#B0BEC5"
+            fig.add_trace(go.Scattergl(
+                x=xs, y=ys, mode="markers", name=label,
+                marker=dict(color=color, size=5, opacity=0.45),
+                text=[hover_texts[i] for i in indices[mask]], hoverinfo="text",
+            ))
+            continue
+
+        color = palette[j % len(palette)]
+        if show_clouds:
+            _add_convex_hull_cloud(fig, xs, ys, color)
+        fig.add_trace(go.Scattergl(
+            x=xs, y=ys, mode="markers", name=label,
+            marker=dict(color=color, size=7, opacity=0.75, line=dict(width=0.5, color="white")),
+            text=[hover_texts[i] for i in indices[mask]], hoverinfo="text",
+        ))
+        if show_headers and len(xs):
+            annotations.append(dict(
+                x=float(xs.mean()), y=float(ys.mean()), text=f"<b>{label}</b>",
+                showarrow=False, font=dict(size=12, color="#212121"),
+                bgcolor="rgba(255,255,255,0.92)", bordercolor=color, borderwidth=2, borderpad=4,
+            ))
+
+    fig.update_layout(
+        title="<b>Topic clusters</b> — 2D UMAP of article embeddings",
+        template="plotly_white", height=800, width=1200,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, font=dict(size=11)),
+        xaxis=dict(visible=False, scaleanchor="y"), yaxis=dict(visible=False),
+        annotations=annotations, margin=dict(t=80, b=40),
+    )
+    return fig
 
 
 def _topic_label_for_plot(topic_model, topic_id: int) -> str:
