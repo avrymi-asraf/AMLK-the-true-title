@@ -113,8 +113,9 @@ dbutils.widgets.text("nr_topics", "", "Merge near-duplicate topics: 'auto', an i
 dbutils.widgets.dropdown("merge_duplicate_labels", "True", ["True", "False"], "Collapse clusters Gemini named identically into one topic")
 dbutils.widgets.dropdown("refine_oversized", "True", ["True", "False"], "Second-stage split of any cluster >= refine_size_fraction of corpus")
 dbutils.widgets.text("refine_size_fraction", "0.3", "Min share of corpus to trigger second-stage refinement (e.g. 0.3 = 30%)")
-dbutils.widgets.text("refine_min_cluster_size", "25", "HDBSCAN min_cluster_size for refinement pass")
-dbutils.widgets.text("refine_min_samples", "8", "HDBSCAN min_samples for refinement pass")
+dbutils.widgets.text("refine_min_cluster_size", "100", "HDBSCAN min_cluster_size for refinement pass (higher = fewer sub-topics)")
+dbutils.widgets.text("refine_min_samples", "20", "HDBSCAN min_samples for refinement pass")
+dbutils.widgets.text("refine_nr_topics", "12", "Cap sub-topics after refinement merge (blank = no cap)")
 dbutils.widgets.text("record_limit", "0", "Max records (0 = all; try 500 for a smoke test)")
 dbutils.widgets.text("plot_sample", "0.15", "Fraction of docs per topic in cluster plot (blank = all)")
 dbutils.widgets.text("topic_size_plot_top_n", "30", "Max topics shown in the cluster-size bar chart")
@@ -244,9 +245,10 @@ print(f"Loaded {len(records)} records from {combined_path}")
 # MAGIC   into one reported topic (evaluation.topic_clustering.merge_duplicate_labels) — no re-run
 # MAGIC   needed, this is a free local post-processing step.
 # MAGIC - **refine_oversized=True** (default): after pass 1, any cluster holding >=30% of docs
-# MAGIC   (e.g. the 7.6k "פוליטיקה וממשלה" blob) is re-clustered with finer HDBSCAN (25/8) on the
-# MAGIC   *same embeddings* — no re-embed. Sub-clusters get a refinement naming prompt (ביטחון,
-# MAGIC   כלכלה, חברה, …). Small clusters (sports, legal) are left untouched.
+# MAGIC   (e.g. the 7.6k politics blob) is re-clustered on the *same embeddings* with coarser
+# MAGIC   refinement defaults (min_cluster_size=100, min_samples=20, nr_topics=12) — the earlier
+# MAGIC   25/8 pass without a cap produced 60+ near-duplicate "תקשורת ו…" labels. Small pass-1
+# MAGIC   clusters (sports, legal, …) are left untouched. Set `refine_oversized=False` to keep ~6 topics.
 # MAGIC Re-run end-to-end after pulling the latest `evaluation/topic_clustering.py`.
 
 # COMMAND ----------
@@ -279,8 +281,9 @@ rows, topic_model, embeddings = cluster_dataset(
     merge_duplicates=dbutils.widgets.get("merge_duplicate_labels") == "True",
     refine_oversized=dbutils.widgets.get("refine_oversized") == "True",
     refine_size_fraction=float(dbutils.widgets.get("refine_size_fraction") or "0.3"),
-    refine_min_cluster_size=int(dbutils.widgets.get("refine_min_cluster_size") or "25"),
-    refine_min_samples=int(dbutils.widgets.get("refine_min_samples") or "8"),
+    refine_min_cluster_size=int(dbutils.widgets.get("refine_min_cluster_size") or "100"),
+    refine_min_samples=int(dbutils.widgets.get("refine_min_samples") or "20"),
+    refine_nr_topics=int(dbutils.widgets.get("refine_nr_topics")) if dbutils.widgets.get("refine_nr_topics").strip() else None,
 )
 n_clusters = len(set(r["cluster_id"] for r in rows))
 print(f"Discovered {n_clusters} clusters (including noise, cluster_id=-1)")

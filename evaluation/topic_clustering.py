@@ -103,10 +103,12 @@ EXAMPLE SUMMARIES:
 """
 
 REFINEMENT_NAMING_PROMPT = """You name sub-topic clusters within a large Hebrew news topic cluster.
-The parent cluster was labeled "{parent_label}" — give a more specific news *sub-domain* name
-(2-4 words), not a repeat of the parent. Examples of good sub-domains: "ביטחון וצבא",
-"כלכלה ועסקים", "חברה ורווחה", "בחירות ומפלגות", "משפט חוקתי", "יחסים בינלאומיים".
-Do NOT name the media format or a generic label.
+The parent cluster was labeled "{parent_label}" — give a more specific news *subject-domain* name
+(2-4 words), not a repeat of the parent. Good examples: "ביטחון וצבא", "כלכלה ושוק ההון",
+"בחירות ומפלגות", "משפט ושחיתות", "חברה ורווחה", "יחסים בינלאומיים".
+Do NOT name the media format, journalism process, or outlet — forbidden patterns include labels
+starting with "תקשורת", "עיתונות", "שידור", "פרסום", or "מדיה" unless the cluster is *only*
+about regulation of broadcasters as an industry (even then prefer "רשות השידור" over "תקשורת ו…").
 Reply with ONLY a JSON object: {{"label": "<short Hebrew sub-topic name>"}}
 
 KEYWORDS: {keywords}
@@ -379,15 +381,15 @@ def _large_topic_ids(cluster_ids: list[int], size_fraction: float) -> list[int]:
 def refine_large_clusters(cluster_ids: list[int], cluster_docs: list[str], embeddings,
                           labels_by_topic: dict[int, str], keywords_by_topic: dict[int, list[str]],
                           gemini_model, *, size_fraction: float = 0.3,
-                          min_cluster_size: int = 25, min_samples: int = 8, seed: int = 42,
+                          min_cluster_size: int = 100, min_samples: int = 20, seed: int = 42,
                           reduce_outliers: bool = True, outlier_threshold: float = 0.35,
-                          umap_n_neighbors: int = 5) -> tuple[list[int], dict[int, str], dict[int, list[str]]]:
+                          umap_n_neighbors: int = 8, nr_topics: int | None = 12) -> tuple[list[int], dict[int, str], dict[int, list[str]]]:
     """Second-stage pass: re-cluster any mega-topic with finer HDBSCAN on existing embeddings.
 
     Keeps pass-1 granularity for small domains (sports, legal, …) and only splits clusters that
     hold >= size_fraction of docs (default 30% — e.g. the 7.6k "פוליטיקה וממשלה" blob). No
-    re-embedding; sub-clusters get new global IDs and a refinement naming prompt with parent
-    context so Gemini picks ביטחון / כלכלה / חברה instead of another generic politics label.
+    re-embedding. Defaults are deliberately *coarser* than pass-1 (min_cluster_size=100,
+    nr_topics=12) — an earlier 25/8 pass without a topic cap produced 60+ "תקשורת ו…" sub-labels.
     """
     import numpy as np
 
@@ -414,7 +416,7 @@ def refine_large_clusters(cluster_ids: list[int], cluster_docs: list[str], embed
             sub_docs, sub_embeddings,
             min_cluster_size=min_cluster_size, min_samples=min_samples, seed=seed,
             reduce_outliers=reduce_outliers, outlier_threshold=outlier_threshold,
-            umap_n_neighbors=umap_n_neighbors,
+            umap_n_neighbors=umap_n_neighbors, nr_topics=nr_topics,
         )
 
         sub_labels: dict[int, str] = {}
@@ -453,8 +455,8 @@ def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: in
                      embed_field: str = "text", max_embed_chars: int = 4000,
                      merge_duplicates: bool = True, embed_device: str = "auto",
                      embed_batch_size: int = 8, refine_oversized: bool = True,
-                     refine_size_fraction: float = 0.3, refine_min_cluster_size: int = 25,
-                     refine_min_samples: int = 8):
+                     refine_size_fraction: float = 0.3, refine_min_cluster_size: int = 100,
+                     refine_min_samples: int = 20, refine_nr_topics: int | None = 12):
     """Full pipeline: embed -> cluster -> name. Each record needs `summary` (join key) and, when
     embed_field='text', `text` (article body). Cluster geometry + c-TF-IDF keywords come from
     truncated article bodies by default — summaries alone collapse into one media-meta mega-topic.
@@ -505,6 +507,7 @@ def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: in
             gemini_model, size_fraction=refine_size_fraction,
             min_cluster_size=refine_min_cluster_size, min_samples=refine_min_samples, seed=seed,
             reduce_outliers=reduce_outliers, outlier_threshold=outlier_threshold,
+            nr_topics=refine_nr_topics,
         )
 
     rows = [
