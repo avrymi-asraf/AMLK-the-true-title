@@ -48,7 +48,11 @@
 │   ├── build_report_tables.py            # Assemble the per-system reports into the D1 markdown comparison tables
 │   ├── infer.py                          # GPU inference helpers (load adapter + generate); used by the observation notebook
 │   ├── topic_clustering.py               # Embed summaries + BERTopic cluster + Gemini-name topics; used by the Databricks notebook
-│   └── stratify_by_topic.py              # Break down a predictions file's ROUGE/BERTScore/failure rates by topic
+│   ├── stratify_by_topic.py              # Break down a predictions file's ROUGE/BERTScore/failure rates by topic
+│   └── viewer/                           # Predictions viewer (its own subfolder — a self-contained UI feature)
+│       ├── __init__.py                   # Re-exports data.py's public functions
+│       ├── data.py                       # Streamlit-free helpers: discover/load/keyword-search predictions.jsonl files
+│       └── app.py                        # Local Streamlit UI: browse predictions.jsonl, RTL Hebrew, keyword search, multi-system compare
 ├── notebooks/
 │   ├── evaluation_observation.ipynb      # evaluation-observation stage: live per-example view (summary/judge/errors) on Colab
 │   └── cluster_topics_databricks.py      # Topic-clustering side-analysis: Databricks source-format notebook, GPU cluster
@@ -61,7 +65,8 @@
 │   ├── test_preprocess.py                # build_prompt / make_variant / split_dataset
 │   ├── test_evaluation.py                # ROUGE-on-Hebrew, judge-reply parsing, failure rates (live test gated)
 │   ├── test_stratify_by_topic.py         # join/grouping logic for topic stratification
-│   └── test_topic_clustering.py          # BERTopic fit + Gemini naming (live test gated)
+│   ├── test_topic_clustering.py          # BERTopic fit + Gemini naming (live test gated)
+│   └── test_viewer.py                    # predictions-viewer load/keyword-search/discovery logic
 ├── docs/
 │   ├── obsidian/                         # Shared Obsidian vault (team research notes; open folder as vault)
 │   ├── ANLP Project abstract.md          # The research proposal this project implements
@@ -98,10 +103,11 @@
 * `evaluation/infer.py`: GPU inference helpers — `load_finetuned_model` (base + LoRA adapter, `disable_adapter()` gives the zero-shot base) and `generate_summaries` (batched greedy decode over a processed split). The importable twin of `train_hf_job.py`'s inline generation block (that cloud script can't import repo code); keep the two in sync. **Remote GPU only — never call locally.**
 * `evaluation/topic_clustering.py`: Topic-clustering side-analysis (not part of the main pipeline). Embeds each article's `summary` with the Hebrew-native, clustering-tuned `dicta-il/neodictabert-bilingual-embed` (not AlephBERT — a raw BERT encoder's embeddings are anisotropic/poor for cosine-similarity clustering without Sentence-BERT-style fine-tuning), clusters with BERTopic (UMAP + HDBSCAN + c-TF-IDF, so the number of topics is inferred from density instead of a pre-chosen k, and genuine outliers are flagged as noise instead of force-fit into a cluster), then names each real cluster with one Gemini call (`cluster_dataset`, `write_topics`). The importable twin used by `notebooks/cluster_topics_databricks.py`. See `docs/superpowers/specs/2026-07-04-topic-clustering-design.md`.
 * `evaluation/stratify_by_topic.py`: Joins a predictions file to the `topics.jsonl` artifact (on exact `reference`==`summary` text match) and reuses `evaluate.py`'s `compute_rouge`/`compute_bertscore` per topic group, folding in per-topic failure rates if a matching `*.errors.json` exists. Local, CPU-only — no GPU/Databricks needed for this step.
+* `evaluation/viewer/`: A local, read-only UI for browsing `predictions.jsonl` files (article/prediction/reference), filling the gap between raw jsonl and the live Colab notebook. `data.py` has the Streamlit-free data logic (`discover_predictions_files`, `load_predictions` — applies `strip_think`, `filter_by_keyword`, `common_length`), importable from a notebook/REPL; `__init__.py` re-exports it; `app.py` is the thin Streamlit script (`streamlit run evaluation/viewer/app.py`) that renders Hebrew right-to-left, supports keyword search, and compares 2+ systems side-by-side for the same article. Local, CPU-only, no GPU/API. See `docs/superpowers/specs/2026-07-04-predictions-viewer-design.md`.
 * `notebooks/evaluation_observation.ipynb`: The **evaluation-observation** stage. A self-bootstrapping Colab notebook that runs the *real* evaluation functions live and **displays** the per-example process (article → model summary → reference → judge faithfulness/fluency → error-analysis failure labels) for finetuned/base/gemini. Loads existing Hub predictions (finetuned/base at repo root, gemini under `reports/`) and generates fresh summaries on a T4. Judge/error/browse cells are API+CPU; only the generation cell needs a GPU.
 * `notebooks/cluster_topics_databricks.py`: Databricks source-format notebook (`# Databricks notebook source` / `# COMMAND ----------` cell markers) driving `evaluation/topic_clustering.py`. Manual, occasional run on a Databricks GPU cluster — the GPU is for speed, not required (the embedding model is 0.4B params, encoder-only, the same class of job as the local-CPU AlephBERT BERTScore step). Clones the repo on the cluster so it calls the same tested functions rather than duplicating logic; writes `topics.jsonl`/`topics-summary.json` to DBFS for manual download back into `outputs/data/raw/` and `outputs/results/`. A scoped, one-off departure from AMLK's default local/HF-Jobs/Colab stack — no agent-driven Databricks deployment (no MCP connection today), the notebook is handed off for manual import/run.
 * `scripts/run_nb_cell.py`: Agent cell-runner — reads the notebook with `nbformat` and execs a chosen code cell / range against a persistent Colab session via `colab exec` (the Colab CLI has no native `.ipynb` runner). `--list` shows cell indices; the caller owns `colab new`/`stop`. This is how an agent observes the eval cell-by-cell.
-* `tests/`: 20 fast behavioral tests + 2 gated live tests (Gemini judge; BERTopic fit + Gemini topic naming), all passing.
+* `tests/`: 25 fast behavioral tests + 2 gated live tests (Gemini judge; BERTopic fit + Gemini topic naming), all passing.
 
 ---
 
@@ -172,6 +178,13 @@ hf jobs inspect <job-id>
 # Training metrics: wandb project "amlk-hebrew-summarization".
 ```
 
+**Reading model outputs (predictions viewer):**
+```bash
+source .venv/bin/activate && streamlit run evaluation/viewer/app.py
+# Opens a local browser UI over outputs/results/*.jsonl: RTL Hebrew, keyword search,
+# side-by-side comparison across systems (finetuned/base/gemini). Local, CPU-only, read-only.
+```
+
 **Running tests:**
 ```bash
 source .venv/bin/activate && python -m pytest tests/ -v
@@ -195,6 +208,8 @@ source .venv/bin/activate && python -m pytest tests/ -v
 - **2026-06-12 full run (job `6a2bc974`): training succeeded** (1 epoch, eval_loss 1.777; adapter on `avreymi/amlk-qwen3-2b-sft`), but the job timed out in its prediction loop — predictions regenerated by a patched inference-only job. Full post-mortem with cost analysis and the probe-run checklist: `docs/2026-06-12-qlora-training-job-postmortem.md`.
 - **v1 adapter flaw (addressed 2026-06-27): Qwen3-2B is a hybrid-attention model (18 linear-attention + 6 full-attention layers); the v1 LoRA `target_modules` q/k/v/o only exist in the 6 full-attention layers, so it covered 6/24 layers (0.07% trainable params).** `LoRAConfig` now adds the MLP projections `gate/up/down_proj` (present in all 24 layers) and bumps r→32/alpha→64; mirrored in `train_hf_job.py`. The next run validates this; still consider the linear-attention modules + `flash-linear-attention`/`causal-conv1d` deps (post-mortem §5.1) if coverage is still insufficient.
 - `train_hf_job.py` / `evaluation/infer.py` share a decode config: `max_new_tokens=256` (p99 reference length is 187 tokens), `min_new_tokens=16`, `no_repeat_ngram_size=3`, `repetition_penalty=1.2`, explicit `eos_token_id`/`pad_token_id`, greedy. Predictions are pushed immediately after each generation loop (timeout-safe), progress every 10 batches; inference-only jobs use a 1h timeout. `PRED_SUFFIX` env (`--pred-suffix`) appends e.g. `-v2` so a re-decode doesn't clobber v1.
+
+**2026-07-04 — Predictions viewer added.** `evaluation/viewer/` (`data.py` + `app.py`, its own subfolder): a local Streamlit app (`streamlit run evaluation/viewer/app.py`) for browsing `outputs/results/*.jsonl` — RTL Hebrew rendering, keyword search, side-by-side comparison across systems. Read-only, CPU-only, no GPU/API. Verified end-to-end against the real `predictions-finetuned.jsonl`/`predictions-base.jsonl` files with `streamlit.testing.v1.AppTest` (file discovery, multi-file compare, keyword filtering, navigation — no exceptions). Design: `docs/superpowers/specs/2026-07-04-predictions-viewer-design.md`.
 
 **2026-06-27–28 — Hebrew-summarization fix batch (decoding + training + Hebrew-aware eval). All three phases complete.**
 - *Eval (Phase 0, live):* `evaluate.py` BERTScore now defaults to `onlplab/alephbert-base` (HeSum-comparable, more discriminative than xlm-r) and reports both raw and Hebrew-normalized ROUGE.
