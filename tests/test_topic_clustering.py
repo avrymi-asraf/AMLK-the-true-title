@@ -197,7 +197,9 @@ def test_plot_clusters_adds_topic_header_annotations():
 
     assert fig is not None
     assert len(fig.layout.annotations) == 2
-    assert "נושא א" in fig.layout.annotations[0]["text"]
+    header_text = " ".join(a["text"] for a in fig.layout.annotations)
+    assert "נושא א" in header_text
+    assert "articles" in header_text
 
 
 @pytest.mark.skipif(

@@ -304,6 +304,43 @@ display(spark.createDataFrame(
 # COMMAND ----------
 
 # MAGIC %md
+# MAGIC ### Manual topic merges (optional)
+# MAGIC
+# MAGIC After reviewing the table above, edit `MERGE_LABELS` to collapse near-duplicate Gemini
+# MAGIC labels the automatic pass missed (e.g. two parliamentary-government clusters). Then re-run
+# MAGIC the cells below: bar chart → cluster plot → style labels → `write_topics`.
+
+# COMMAND ----------
+
+from evaluation.topic_clustering import _sync_topic_model_labels, merge_duplicate_labels, renumber_rows
+
+# Map *old* topic_label → *canonical* topic_label. Only keys listed here are renamed.
+MERGE_LABELS = {
+    "יחסי ממשלה-כנסת": "כנסת וממשלה",
+    # "משפט ופלילים": "משפט ופסיקות",
+    # "עיתונות ופרסומים": "עיתונות חוקרת",
+}
+
+_labels_before = {r["topic_label"] for r in rows}
+rows = [
+    {**row, "topic_label": MERGE_LABELS.get(row["topic_label"], row["topic_label"])}
+    for row in rows
+]
+rows = merge_duplicate_labels(rows)
+rows = renumber_rows(rows)
+_sync_topic_model_labels(topic_model, rows)
+_labels_after = {r["topic_label"] for r in rows}
+print(f"Distinct topic labels: {len(_labels_before)} → {len(_labels_after)}")
+
+summary_rows = topic_summary(rows)
+display(spark.createDataFrame(
+    [(t["cluster_id"], t["topic_label"], t["count"], ", ".join(t["keywords"])) for t in summary_rows],
+    ["cluster_id", "topic_label", "count", "keywords"],
+))
+
+# COMMAND ----------
+
+# MAGIC %md
 # MAGIC A bar chart makes fragmentation/imbalance (e.g. one topic dwarfing the rest) obvious at a
 # MAGIC glance in a way the table above doesn't — small chart (<=`topic_size_plot_top_n` bars), so
 # MAGIC it's shown inline, no DBFS round-trip needed (unlike the full document scatter below).
@@ -321,9 +358,8 @@ displayHTML(size_fig.to_html(include_plotlyjs="cdn", full_html=False))
 # MAGIC %md
 # MAGIC ### Visualize the clusters
 # MAGIC
-# MAGIC A 2D UMAP projection colored by topic, with a **convex-hull cloud** (semi-transparent
-# MAGIC polygon) around each cluster and a **bold Hebrew header** at the cluster centroid. Legend
-# MAGIC lists Gemini topic names. Hover shows the **summary** (short),
+# MAGIC A 2D UMAP projection with **dual-layer topic clouds** (soft outer glow + filled outline),
+# MAGIC colored points, and a **header box** at each centroid (Hebrew label + article count).
 # MAGIC not the full article body — and only a sample of points (see `plot_sample` widget) so the
 # MAGIC HTML stays under Databricks' ~20 MB cell-output cap. The plot is written to DBFS FileStore
 # MAGIC and embedded via iframe (not inline `displayHTML(fig.to_html(...))`, which exceeded the limit

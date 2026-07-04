@@ -541,28 +541,62 @@ def _sample_document_indices(topic_per_doc: list[int], sample: float | None, see
     return np.array(sorted(indices))
 
 
-def _fill_color(hex_color: str, alpha: float = 0.18) -> str:
+def _fill_color(color: str, alpha: float = 0.18) -> str:
+    import re
+
+    if color.startswith("rgb"):
+        r, g, b = (int(x) for x in re.findall(r"\d+", color)[:3])
+        return f"rgba({r},{g},{b},{alpha})"
     from plotly.colors import hex_to_rgb
 
-    r, g, b = hex_to_rgb(hex_color)
+    r, g, b = hex_to_rgb(color)
     return f"rgba({r},{g},{b},{alpha})"
 
 
-def _add_convex_hull_cloud(fig, xs, ys, color: str) -> None:
-    """Semi-transparent polygon around a topic's points so clusters read as distinct 'clouds'."""
+def _hull_ring(xs, ys):
+    """Closed polygon around points; falls back to a small circle when n < 3."""
     import numpy as np
     from scipy.spatial import ConvexHull
+
+    if len(xs) >= 3:
+        points = np.column_stack([xs, ys])
+        hull = ConvexHull(points)
+        ring = points[hull.vertices]
+        return np.vstack([ring, ring[0]])
+    if len(xs) == 2:
+        cx, cy = float(np.mean(xs)), float(np.mean(ys))
+        r = max(float(np.hypot(xs[1] - xs[0], ys[1] - ys[0])) * 0.35, 0.08)
+        t = np.linspace(0, 2 * np.pi, 48)
+        return np.column_stack([cx + r * np.cos(t), cy + r * np.sin(t)])
+    cx, cy = float(xs[0]), float(ys[0])
+    r = 0.08
+    t = np.linspace(0, 2 * np.pi, 48)
+    return np.column_stack([cx + r * np.cos(t), cy + r * np.sin(t)])
+
+
+def _expand_ring(ring, scale: float):
+    import numpy as np
+
+    center = ring.mean(axis=0)
+    return center + (ring - center) * scale
+
+
+def _add_topic_cloud(fig, xs, ys, color: str) -> None:
+    """Dual-layer cloud: soft outer glow + filled inner hull with a bold outline."""
     import plotly.graph_objects as go
 
-    if len(xs) < 3:
-        return
-    points = np.column_stack([xs, ys])
-    hull = ConvexHull(points)
-    ring = points[hull.vertices]
-    ring = np.vstack([ring, ring[0]])
+    ring = _hull_ring(xs, ys)
+    outer = _expand_ring(ring, 1.22)
+    fig.add_trace(go.Scatter(
+        x=outer[:, 0], y=outer[:, 1], mode="lines", fill="toself",
+        fillcolor=_fill_color(color, 0.07),
+        line=dict(color=_fill_color(color, 0.45), width=3),
+        showlegend=False, hoverinfo="skip",
+    ))
     fig.add_trace(go.Scatter(
         x=ring[:, 0], y=ring[:, 1], mode="lines", fill="toself",
-        fillcolor=_fill_color(color), line=dict(color=color, width=1.5),
+        fillcolor=_fill_color(color, 0.28),
+        line=dict(color=color, width=2.5),
         showlegend=False, hoverinfo="skip",
     ))
 
@@ -570,9 +604,8 @@ def _add_convex_hull_cloud(fig, xs, ys, color: str) -> None:
 def plot_clusters(topic_model, cluster_docs: list[str], embeddings, *,
                   hover_texts: list[str] | None = None, sample: float | None = 0.15,
                   show_clouds: bool = True, show_headers: bool = True):
-    """2D UMAP scatter of discovered clusters with optional convex-hull 'clouds' and a bold
-    Hebrew topic header at each cluster centroid — clearer separation than BERTopic's default
-    visualize_documents (which also breaks when cluster IDs are non-contiguous).
+    """2D UMAP scatter of discovered clusters with dual-layer hull 'clouds' (outer glow +
+    filled outline) and a bold Hebrew topic header + doc count at each centroid.
 
     Pass short `hover_texts` (e.g. summaries) when `cluster_docs` are long article bodies.
     `sample` keeps at most that fraction of docs per topic (fine for smoke runs: None = all).
@@ -593,53 +626,78 @@ def plot_clusters(topic_model, cluster_docs: list[str], embeddings, *,
     ])
     topic_per_doc = [r["cluster_id"] for r in pseudo_rows]
     label_by_id = {r["cluster_id"]: r["topic_label"] for r in pseudo_rows}
+    topic_counts = Counter(topic_per_doc)
 
     indices = _sample_document_indices(topic_per_doc, sample)
     embeddings = np.asarray(embeddings)
-    emb_2d = UMAP(n_neighbors=15, n_components=2, min_dist=0.1, metric="cosine",
+    emb_2d = UMAP(n_neighbors=15, n_components=2, min_dist=0.08, metric="cosine",
                   random_state=42).fit_transform(embeddings[indices])
 
     topics_sampled = [topic_per_doc[i] for i in indices]
-    palette = px.colors.qualitative.Plotly + px.colors.qualitative.Set2 + px.colors.qualitative.Pastel
-    topic_ids = sorted(set(topics_sampled), key=lambda t: (t == NOISE_TOPIC_ID, t))
+    # Bold, distinct hues — readable behind Hebrew headers.
+    palette = (
+        px.colors.qualitative.Bold
+        + px.colors.qualitative.Safe
+        + px.colors.qualitative.Prism
+    )
+    topic_ids = sorted(set(topics_sampled), key=lambda t: (t == NOISE_TOPIC_ID, -topic_counts.get(t, 0)))
+    color_by_topic = {
+        tid: ("#90A4AE" if tid == NOISE_TOPIC_ID else palette[i % len(palette)])
+        for i, tid in enumerate(topic_ids)
+    }
 
     fig = go.Figure()
     annotations = []
 
-    for j, topic_id in enumerate(topic_ids):
+    # Pass 1 — cloud outlines (largest topics drawn first, sit in the background).
+    if show_clouds:
+        for topic_id in reversed([t for t in topic_ids if t != NOISE_TOPIC_ID]):
+            mask = np.array([t == topic_id for t in topics_sampled])
+            if not mask.any():
+                continue
+            _add_topic_cloud(fig, emb_2d[mask, 0], emb_2d[mask, 1], color_by_topic[topic_id])
+
+    # Pass 2 — points + headers.
+    for topic_id in topic_ids:
         mask = np.array([t == topic_id for t in topics_sampled])
+        if not mask.any():
+            continue
         xs, ys = emb_2d[mask, 0], emb_2d[mask, 1]
         label = label_by_id.get(topic_id, f"cluster_{topic_id}")
-        if topic_id == NOISE_TOPIC_ID:
-            color = "#B0BEC5"
-            fig.add_trace(go.Scattergl(
-                x=xs, y=ys, mode="markers", name=label,
-                marker=dict(color=color, size=5, opacity=0.45),
-                text=[hover_texts[i] for i in indices[mask]], hoverinfo="text",
-            ))
-            continue
+        color = color_by_topic[topic_id]
+        n_docs = topic_counts.get(topic_id, int(mask.sum()))
 
-        color = palette[j % len(palette)]
-        if show_clouds:
-            _add_convex_hull_cloud(fig, xs, ys, color)
-        fig.add_trace(go.Scattergl(
+        fig.add_trace(go.Scatter(
             x=xs, y=ys, mode="markers", name=label,
-            marker=dict(color=color, size=7, opacity=0.75, line=dict(width=0.5, color="white")),
+            marker=dict(
+                color=color, size=8 if topic_id != NOISE_TOPIC_ID else 5,
+                opacity=0.82 if topic_id != NOISE_TOPIC_ID else 0.4,
+                line=dict(width=0.8, color="white"),
+            ),
             text=[hover_texts[i] for i in indices[mask]], hoverinfo="text",
         ))
-        if show_headers and len(xs):
+        if show_headers and topic_id != NOISE_TOPIC_ID:
+            cx, cy = float(xs.mean()), float(ys.mean())
             annotations.append(dict(
-                x=float(xs.mean()), y=float(ys.mean()), text=f"<b>{label}</b>",
-                showarrow=False, font=dict(size=12, color="#212121"),
-                bgcolor="rgba(255,255,255,0.92)", bordercolor=color, borderwidth=2, borderpad=4,
+                x=cx, y=cy,
+                text=(f"<b>{label}</b><br>"
+                      f"<span style='font-size:11px;color:#555'>{n_docs:,} articles</span>"),
+                showarrow=False, align="center",
+                font=dict(size=13, color="#1a1a1a"),
+                bgcolor="rgba(255,255,255,0.96)",
+                bordercolor=color, borderwidth=3, borderpad=10,
             ))
 
     fig.update_layout(
-        title="<b>Topic clusters</b> — 2D UMAP of article embeddings",
-        template="plotly_white", height=800, width=1200,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0, font=dict(size=11)),
-        xaxis=dict(visible=False, scaleanchor="y"), yaxis=dict(visible=False),
-        annotations=annotations, margin=dict(t=80, b=40),
+        title=dict(text="<b>Topic clusters</b><br><sup>2D UMAP · shaded regions = topic clouds</sup>",
+                   x=0.5, xanchor="center"),
+        template="plotly_white", height=860, width=1280,
+        paper_bgcolor="#F8F9FA", plot_bgcolor="#FFFFFF",
+        legend=dict(orientation="v", yanchor="top", y=1, x=1.01, font=dict(size=10),
+                    bgcolor="rgba(255,255,255,0.8)", bordercolor="#E0E0E0", borderwidth=1),
+        xaxis=dict(visible=False, scaleanchor="y", showgrid=False),
+        yaxis=dict(visible=False, showgrid=False),
+        annotations=annotations, margin=dict(t=90, b=40, r=180),
     )
     return fig
 
