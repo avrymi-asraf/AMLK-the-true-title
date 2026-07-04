@@ -95,7 +95,10 @@ dbutils.widgets.text(
 )
 dbutils.widgets.text("secret_scope", "", "Databricks secret scope (optional)")
 dbutils.widgets.text("gemini_api_key", "", "GEMINI_API_KEY (last resort — prefer .env or a secret scope)")
-dbutils.widgets.text("min_cluster_size", "100", "HDBSCAN min_cluster_size")
+dbutils.widgets.text("min_cluster_size", "40", "HDBSCAN min_cluster_size (topic granularity)")
+dbutils.widgets.text("min_samples", "10", "HDBSCAN min_samples (lower = less raw noise; blank = tie to min_cluster_size)")
+dbutils.widgets.dropdown("reduce_outliers", "True", ["True", "False"], "Reassign noise docs to nearest topic (embedding similarity)")
+dbutils.widgets.text("nr_topics", "auto", "Merge near-duplicate topics: 'auto', an int, or blank to skip")
 dbutils.widgets.text("record_limit", "0", "Max records (0 = all; try 500 for a smoke test)")
 
 # COMMAND ----------
@@ -186,6 +189,18 @@ print(f"Loaded {len(records)} records from {combined_path}")
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC **Tuning note (2026-07-04):** the first full run put 51% of docs in noise (cluster -1) and
+# MAGIC produced near-duplicate topic names ("תקשורת ומדיה" vs "תקשורת וטלוויזיה") whose keywords
+# MAGIC were mostly years/IDs/Latin site names (ynet, nrg, bbc...) rather than real Hebrew topic
+# MAGIC words — the vectorizer's default English-tuned token pattern let them dominate. Fixed in
+# MAGIC `evaluation/topic_clustering.py`: a Hebrew-only c-TF-IDF vectorizer, `min_samples` decoupled
+# MAGIC from `min_cluster_size` (less raw noise), and BERTopic's own outlier-reduction +
+# MAGIC "auto" topic-merging passes (mitigate remaining noise / near-duplicates). See that module's
+# MAGIC `fit_topics()` docstring for details. Re-run this notebook end to end to pick up the fix.
+
+# COMMAND ----------
+
 from evaluation.topic_clustering import cluster_dataset, topic_summary, write_topics
 
 # Smoke-test first: set record_limit widget to e.g. 500 before a full 10k run.
@@ -194,8 +209,18 @@ if record_limit > 0:
     print(f"record_limit={record_limit} — using a subset for this run", flush=True)
     records = records[:record_limit]
 
+_min_samples_raw = dbutils.widgets.get("min_samples").strip()
+_nr_topics_raw = dbutils.widgets.get("nr_topics").strip()
+_nr_topics = _nr_topics_raw if not _nr_topics_raw or _nr_topics_raw == "auto" else int(_nr_topics_raw)
+
 print(f"Starting cluster_dataset on {len(records)} records...", flush=True)
-rows, topic_model, embeddings = cluster_dataset(records, min_cluster_size=int(dbutils.widgets.get("min_cluster_size")))
+rows, topic_model, embeddings = cluster_dataset(
+    records,
+    min_cluster_size=int(dbutils.widgets.get("min_cluster_size")),
+    min_samples=int(_min_samples_raw) if _min_samples_raw else None,
+    reduce_outliers=dbutils.widgets.get("reduce_outliers") == "True",
+    nr_topics=_nr_topics or None,
+)
 n_clusters = len(set(r["cluster_id"] for r in rows))
 print(f"Discovered {n_clusters} clusters (including noise, cluster_id=-1)")
 

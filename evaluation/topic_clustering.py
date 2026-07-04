@@ -2,8 +2,10 @@
 Topic clustering: discovers topic clusters over the whole Hebrew news corpus so evaluation
 results can later be broken down by topic (e.g. "does the model hallucinate more on economy
 articles than sports?"). Embeds each article's summary with a Hebrew-native, clustering-tuned
-sentence-embedding model, clusters with BERTopic (UMAP + HDBSCAN + c-TF-IDF), then names each
-cluster with one Gemini call. This module holds the real, testable clustering logic; the
+sentence-embedding model, clusters with BERTopic (UMAP + HDBSCAN + a Hebrew-only c-TF-IDF
+vectorizer, plus outlier-reduction/topic-merging passes to keep noise and near-duplicate topics
+in check — see fit_topics()'s docstring), then names each cluster with one Gemini call. This
+module holds the real, testable clustering logic; the
 Databricks notebook (notebooks/cluster_topics_databricks.py) is a thin driver that clones the
 repo, supplies the data + GPU, and calls cluster_dataset()/write_topics() from here — the same
 "importable twin" pattern as evaluation/infer.py for train_hf_job.py. Its output (topics.jsonl)
@@ -31,6 +33,33 @@ EMBEDDING_MODEL = "dicta-il/neodictabert-bilingual-embed"
 NOISE_TOPIC_ID = -1
 NOISE_LABEL = "לא מסווג"
 
+# BERTopic's default CountVectorizer (token pattern \w+, English stop_words) lets years, numeric
+# IDs, and Latin media-brand tokens (ynet, nrg, bbc...) dominate c-TF-IDF keyword lists instead of
+# actual Hebrew topic words — this range-class pattern matches Hebrew-letter sequences only
+# (covers final forms ך/ם/ן/ף/ץ, all within U+05D0-U+05EA), so digits/Latin tokens never become
+# keywords. A curated, non-exhaustive list of the most common Hebrew function words, since
+# scikit-learn ships no built-in Hebrew stopword list.
+HEBREW_TOKEN_PATTERN = r"(?u)[א-ת]{2,}"
+HEBREW_STOPWORDS = frozenset("""
+את של על עם אל מן כי אם גם רק אבל אולם אך או כן לא אין יש היה היתה היו יהיה תהיה יהיו
+זה זאת זו אלה אלו הוא היא הם הן אני אתה אנחנו אתם אתן מי מה איך איפה מתי למה מדוע האם
+כמה איזה אילו כל כמו עוד כבר תמיד שוב בכלל בעצם למעשה דבר דברים אחד אחת שני שתי שלושה שלוש
+זהו זוהי כזה כזאת כאלה לפני אחרי תחת מעל ליד אצל נגד בעד לגבי בין עד כדי בשביל למען בעקבות
+בשל למרות אף מאוד מאד ביותר יותר פחות הרבה מעט לעולם פעם שם כאן פה הנה הרי נו וכן כלומר
+היינו וגם ולא שלא כשהוא כשהיא בו בה בהם בהן לו לה להם להן אותו אותה אותם אותן עליו עליה
+עליהם עליהן ממנו ממנה מהם מהן עצמו עצמה עצמם עצמן כולם כולן כול שהוא שהיא שיש שאין
+""".split())
+
+
+def _build_vectorizer(ngram_range: tuple[int, int] = (1, 2)):
+    """CountVectorizer for BERTopic's c-TF-IDF step, restricted to Hebrew words (see
+    HEBREW_TOKEN_PATTERN/HEBREW_STOPWORDS above)."""
+    from sklearn.feature_extraction.text import CountVectorizer
+
+    return CountVectorizer(token_pattern=HEBREW_TOKEN_PATTERN, stop_words=list(HEBREW_STOPWORDS),
+                            ngram_range=ngram_range)
+
+
 NAMING_PROMPT = """You name topic clusters of Hebrew news articles.
 Given these representative keywords and example summaries from one cluster, reply with a single
 short Hebrew topic name (2-4 words, e.g. "פוליטיקה וממשלה", "ספורט", "כלכלה ועסקים").
@@ -57,12 +86,26 @@ def embed_summaries(summaries: list[str]):
     return embeddings
 
 
-def fit_topics(summaries: list[str], embeddings, min_cluster_size: int = 100, seed: int = 42):
+def fit_topics(summaries: list[str], embeddings, min_cluster_size: int = 100,
+               min_samples: int | None = 10, seed: int = 42, reduce_outliers: bool = True,
+               nr_topics: int | str | None = "auto"):
     """Fit BERTopic (UMAP + HDBSCAN + c-TF-IDF) over precomputed embeddings.
 
-    HDBSCAN infers the number of topics from density instead of requiring a pre-chosen k, and
-    explicitly flags genuine outliers (cluster id -1, NOISE_TOPIC_ID) instead of force-fitting
-    every article into some cluster the way KMeans would.
+    HDBSCAN infers the number of topics from density instead of requiring a pre-chosen k. Three
+    knobs address the two failure modes seen on the full ~10k-doc corpus (~50% noise; near-
+    duplicate topic names like "תקשורת ומדיה" vs "תקשורת וטלוויזיה"):
+    - `_build_vectorizer()` (module-level) makes c-TF-IDF keywords Hebrew words instead of years/
+      IDs/Latin site names, which is what made those topics look like duplicates in the first
+      place (their real keywords are genuinely different once numbers/brand tokens are dropped).
+    - `min_samples` decoupled from `min_cluster_size`: HDBSCAN ties min_samples to
+      min_cluster_size unless told otherwise, which is unusually conservative about what counts
+      as a core point; per BERTopic's FAQ, a smaller fixed min_samples produces less raw noise
+      without having to loosen min_cluster_size (which controls topic granularity instead).
+    - `reduce_outliers`/`nr_topics`: BERTopic's own outlier-reduction (reassigns -1 docs to their
+      nearest topic by embedding cosine similarity) and "auto" topic-merging (HDBSCAN over the
+      topics' own c-TF-IDF vectors, so only genuinely near-duplicate topics merge — dissimilar
+      ones stay separate) passes. Both are opt-out (set to False/None) if you'd rather keep
+      HDBSCAN's raw, more conservative "explicit outlier" behavior.
 
     Returns (topic_model, cluster_ids) — cluster_ids aligns 1:1 with summaries.
     """
@@ -72,13 +115,37 @@ def fit_topics(summaries: list[str], embeddings, min_cluster_size: int = 100, se
 
     print(f"Fitting BERTopic on {len(summaries)} docs (UMAP → HDBSCAN)...", flush=True)
     umap_model = UMAP(random_state=seed, n_neighbors=15, n_components=5, metric="cosine")
-    hdbscan_model = HDBSCAN(min_cluster_size=min_cluster_size, metric="euclidean",
-                             cluster_selection_method="eom", prediction_data=True)
+    hdbscan_model = HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples,
+                             metric="euclidean", cluster_selection_method="eom",
+                             prediction_data=True)
     topic_model = BERTopic(umap_model=umap_model, hdbscan_model=hdbscan_model,
-                            calculate_probabilities=False, verbose=True)
-    cluster_ids, _ = topic_model.fit_transform(summaries, embeddings)
-    n_topics = len(set(int(c) for c in cluster_ids if int(c) != NOISE_TOPIC_ID))
-    n_noise = sum(int(c) == NOISE_TOPIC_ID for c in cluster_ids)
+                            vectorizer_model=_build_vectorizer(), calculate_probabilities=False,
+                            verbose=True)
+    raw_cluster_ids, _ = topic_model.fit_transform(summaries, embeddings)
+    cluster_ids = [int(c) for c in raw_cluster_ids]
+    n_noise = sum(c == NOISE_TOPIC_ID for c in cluster_ids)
+    n_topics = len(set(cluster_ids) - {NOISE_TOPIC_ID})
+    print(f"Raw HDBSCAN: {n_topics} topics, {n_noise}/{len(cluster_ids)} noise "
+          f"({n_noise / len(cluster_ids):.1%}).", flush=True)
+
+    if reduce_outliers and n_noise:
+        print("Reassigning noise docs to their nearest topic by embedding similarity...", flush=True)
+        cluster_ids = topic_model.reduce_outliers(summaries, cluster_ids, strategy="embeddings",
+                                                    embeddings=embeddings)
+        topic_model.update_topics(summaries, topics=cluster_ids, vectorizer_model=_build_vectorizer())
+        n_noise = sum(c == NOISE_TOPIC_ID for c in cluster_ids)
+        print(f"After outlier reduction: {n_noise}/{len(cluster_ids)} noise "
+              f"({n_noise / len(cluster_ids):.1%}).", flush=True)
+
+    if nr_topics:
+        n_before = len(set(cluster_ids) - {NOISE_TOPIC_ID})
+        print(f"Merging near-duplicate topics (nr_topics={nr_topics!r})...", flush=True)
+        cluster_ids, _ = topic_model.reduce_topics(summaries, cluster_ids, nr_topics=nr_topics)
+        n_after = len(set(cluster_ids) - {NOISE_TOPIC_ID})
+        print(f"Topics merged: {n_before} -> {n_after}.", flush=True)
+
+    n_topics = len(set(cluster_ids) - {NOISE_TOPIC_ID})
+    n_noise = sum(c == NOISE_TOPIC_ID for c in cluster_ids)
     print(f"Clustering done: {n_topics} topics, {n_noise} noise docs.", flush=True)
     return topic_model, cluster_ids
 
@@ -98,8 +165,10 @@ def name_topic(gemini_model, topic_model, topic_id: int, n_examples: int = 8) ->
 
 
 def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: int = 100,
-                     seed: int = 42):
+                     min_samples: int | None = 10, seed: int = 42, reduce_outliers: bool = True,
+                     nr_topics: int | str | None = "auto"):
     """Full pipeline: embed -> cluster -> name. Each record needs 'summary' (and 'source').
+    See fit_topics() for what min_samples/reduce_outliers/nr_topics do.
 
     Returns (rows, topic_model, embeddings): rows align 1:1 with records —
     {summary, source, cluster_id, topic_label, keywords}. embeddings is returned (not just
@@ -108,7 +177,8 @@ def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: in
     summaries = [r["summary"] for r in records]
     print(f"cluster_dataset: {len(records)} records", flush=True)
     embeddings = embed_summaries(summaries)
-    topic_model, cluster_ids = fit_topics(summaries, embeddings, min_cluster_size, seed)
+    topic_model, cluster_ids = fit_topics(summaries, embeddings, min_cluster_size, min_samples,
+                                           seed, reduce_outliers, nr_topics)
 
     if gemini_model is None:
         import google.generativeai as genai

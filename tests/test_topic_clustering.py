@@ -5,8 +5,26 @@ that test is gated behind RUN_LIVE_TESTS, mirroring the live Gemini judge test i
 tests/test_evaluation.py.
 """
 import os
+import re
 
 import pytest
+
+from evaluation.topic_clustering import HEBREW_STOPWORDS, HEBREW_TOKEN_PATTERN
+
+
+def test_hebrew_token_pattern_keeps_only_hebrew_words():
+    tokens = re.findall(HEBREW_TOKEN_PATTERN, "10 24 ynet nrg כדורגל ניצחון 2013")
+
+    assert tokens == ["כדורגל", "ניצחון"]
+
+
+def test_hebrew_token_pattern_matches_final_form_letters():
+    assert re.findall(HEBREW_TOKEN_PATTERN, "שוק") == ["שוק"]
+    assert re.findall(HEBREW_TOKEN_PATTERN, "כלכלן") == ["כלכלן"]
+
+
+def test_hebrew_stopwords_cover_common_function_words():
+    assert {"של", "את", "על", "גם", "לא"} <= HEBREW_STOPWORDS
 
 
 @pytest.mark.skipif(
