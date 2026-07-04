@@ -1,0 +1,147 @@
+"""
+Topic clustering: discovers topic clusters over the whole Hebrew news corpus so evaluation
+results can later be broken down by topic (e.g. "does the model hallucinate more on economy
+articles than sports?"). Embeds each article's summary with a Hebrew-native, clustering-tuned
+sentence-embedding model, clusters with BERTopic (UMAP + HDBSCAN + c-TF-IDF), then names each
+cluster with one Gemini call. This module holds the real, testable clustering logic; the
+Databricks notebook (notebooks/cluster_topics_databricks.py) is a thin driver that clones the
+repo, supplies the data + GPU, and calls cluster_dataset()/write_topics() from here — the same
+"importable twin" pattern as evaluation/infer.py for train_hf_job.py. Its output (topics.jsonl)
+is consumed locally, with no GPU needed, by evaluation/stratify_by_topic.py. See
+docs/superpowers/specs/2026-07-04-topic-clustering-design.md for the full design.
+
+Execution environment: the embedding step benefits from a GPU (faster) but doesn't require one
+— dicta-il/neodictabert-bilingual-embed is a 0.4B-parameter encoder-only model, the same class
+of job as the AlephBERT-base BERTScore step this project already runs locally on CPU (see
+evaluation/evaluate.py). BERTopic/HDBSCAN clustering and the Gemini naming calls are always
+CPU/API-only regardless of where embedding happened.
+"""
+import json
+import os
+from pathlib import Path
+
+from evaluation.evaluate import gemini_json
+from evaluation.gemini_client import GEMINI_MODEL
+
+# A raw BERT encoder (e.g. onlplab/alephbert-base, used for BERTScore) is deliberately not
+# reused here: without Sentence-BERT-style fine-tuning, whole-sentence BERT embeddings are
+# anisotropic (poor cosine-similarity geometry), which makes them cluster badly. This model was
+# fine-tuned specifically for clustering/semantic search in Hebrew.
+EMBEDDING_MODEL = "dicta-il/neodictabert-bilingual-embed"
+NOISE_TOPIC_ID = -1
+NOISE_LABEL = "לא מסווג"
+
+NAMING_PROMPT = """You name topic clusters of Hebrew news articles.
+Given these representative keywords and example summaries from one cluster, reply with a single
+short Hebrew topic name (2-4 words, e.g. "פוליטיקה וממשלה", "ספורט", "כלכלה ועסקים").
+Reply with ONLY a JSON object: {{"label": "<short Hebrew topic name>"}}
+
+KEYWORDS: {keywords}
+
+EXAMPLE SUMMARIES:
+{examples}
+"""
+
+
+def embed_summaries(summaries: list[str]):
+    """Encode summaries with the Hebrew-native, clustering-tuned embedding model."""
+    from sentence_transformers import SentenceTransformer
+
+    model = SentenceTransformer(EMBEDDING_MODEL, trust_remote_code=True)
+    return model.encode(summaries, show_progress_bar=True)
+
+
+def fit_topics(summaries: list[str], embeddings, min_cluster_size: int = 100, seed: int = 42):
+    """Fit BERTopic (UMAP + HDBSCAN + c-TF-IDF) over precomputed embeddings.
+
+    HDBSCAN infers the number of topics from density instead of requiring a pre-chosen k, and
+    explicitly flags genuine outliers (cluster id -1, NOISE_TOPIC_ID) instead of force-fitting
+    every article into some cluster the way KMeans would.
+
+    Returns (topic_model, cluster_ids) — cluster_ids aligns 1:1 with summaries.
+    """
+    from bertopic import BERTopic
+    from hdbscan import HDBSCAN
+    from umap import UMAP
+
+    umap_model = UMAP(random_state=seed, n_neighbors=15, n_components=5, metric="cosine")
+    hdbscan_model = HDBSCAN(min_cluster_size=min_cluster_size, metric="euclidean",
+                             cluster_selection_method="eom", prediction_data=True)
+    topic_model = BERTopic(umap_model=umap_model, hdbscan_model=hdbscan_model,
+                            calculate_probabilities=False, verbose=True)
+    cluster_ids, _ = topic_model.fit_transform(summaries, embeddings)
+    return topic_model, cluster_ids
+
+
+def name_topic(gemini_model, topic_model, topic_id: int, n_examples: int = 8) -> str:
+    """One Gemini call: turn a cluster's c-TF-IDF keywords + representative examples into a
+    short Hebrew label. Never called for the noise cluster (see NOISE_LABEL) — it's expected to
+    be too heterogeneous for one label."""
+    keywords = [word for word, _ in topic_model.get_topic(topic_id)][:10]
+    examples = topic_model.get_representative_docs(topic_id)[:n_examples]
+    prompt = NAMING_PROMPT.format(
+        keywords=", ".join(keywords),
+        examples="\n".join(f"- {e}" for e in examples),
+    )
+    result = gemini_json(gemini_model, prompt)
+    return result.get("label", "").strip() or f"cluster_{topic_id}"
+
+
+def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: int = 100,
+                     seed: int = 42):
+    """Full pipeline: embed -> cluster -> name. Each record needs 'summary' (and 'source').
+
+    Returns (rows, topic_model): rows align 1:1 with records —
+    {summary, source, cluster_id, topic_label, keywords}.
+    """
+    summaries = [r["summary"] for r in records]
+    embeddings = embed_summaries(summaries)
+    topic_model, cluster_ids = fit_topics(summaries, embeddings, min_cluster_size, seed)
+
+    if gemini_model is None:
+        import google.generativeai as genai
+
+        genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+        gemini_model = genai.GenerativeModel(GEMINI_MODEL)
+
+    labels_by_topic: dict[int, str] = {}
+    keywords_by_topic: dict[int, list[str]] = {}
+    for topic_id in set(int(c) for c in cluster_ids):
+        if topic_id == NOISE_TOPIC_ID:
+            labels_by_topic[topic_id] = NOISE_LABEL
+            keywords_by_topic[topic_id] = []
+            continue
+        keywords_by_topic[topic_id] = [w for w, _ in topic_model.get_topic(topic_id)][:10]
+        labels_by_topic[topic_id] = name_topic(gemini_model, topic_model, topic_id)
+
+    rows = [
+        {"summary": r["summary"], "source": r.get("source"), "cluster_id": int(cid),
+         "topic_label": labels_by_topic[int(cid)], "keywords": keywords_by_topic[int(cid)]}
+        for r, cid in zip(records, cluster_ids)
+    ]
+    return rows, topic_model
+
+
+def topic_summary(rows: list[dict]) -> list[dict]:
+    """Cluster sizes + labels + keywords, sorted largest-first, for a quick sanity check of the
+    discovered taxonomy before trusting it."""
+    by_topic: dict[int, dict] = {}
+    for row in rows:
+        cid = row["cluster_id"]
+        if cid not in by_topic:
+            by_topic[cid] = {"cluster_id": cid, "topic_label": row["topic_label"],
+                              "keywords": row["keywords"], "count": 0}
+        by_topic[cid]["count"] += 1
+    return sorted(by_topic.values(), key=lambda t: -t["count"])
+
+
+def write_topics(rows: list[dict], topics_path: Path, summary_path: Path) -> None:
+    """Write topics.jsonl (one row per article) + topics-summary.json (per-cluster rollup)."""
+    topics_path = Path(topics_path)
+    summary_path = Path(summary_path)
+    topics_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(topics_path, "w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text(json.dumps(topic_summary(rows), ensure_ascii=False, indent=2))

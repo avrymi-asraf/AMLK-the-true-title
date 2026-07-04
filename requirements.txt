@@ -12,3 +12,6 @@ requests>=2.32.0
 torch>=2.4.0
 wandb>=0.18.0
 nbformat>=5.10.0
+bertopic>=0.16.0
+sentence-transformers>=3.0.0
+python-docx>=1.1.0
