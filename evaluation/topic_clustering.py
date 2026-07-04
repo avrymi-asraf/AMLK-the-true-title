@@ -101,16 +101,88 @@ EXAMPLE SUMMARIES:
 """
 
 
-def embed_texts(texts: list[str]):
-    """Encode texts with the Hebrew-native, clustering-tuned embedding model."""
+def _cuda_free_gib() -> float | None:
+    """Free GPU memory in GiB, or None when CUDA is unavailable."""
+    import torch
+
+    if not torch.cuda.is_available():
+        return None
+    free, _total = torch.cuda.mem_get_info()
+    return free / (1024 ** 3)
+
+
+def _resolve_embed_device(prefer: str = "auto", min_free_gib: float = 2.0) -> str:
+    """Pick cuda vs cpu. `auto` uses cuda only when enough memory is free — on a shared
+    Databricks cluster another notebook can leave <100 MB free and a blind cuda pick OOMs."""
+    import torch
+
+    prefer = prefer.lower()
+    if prefer not in {"auto", "cpu", "cuda"}:
+        raise ValueError(f"embed_device must be 'auto', 'cpu', or 'cuda', got {prefer!r}")
+    if prefer == "cpu":
+        return "cpu"
+    if not torch.cuda.is_available():
+        if prefer == "cuda":
+            raise RuntimeError("embed_device='cuda' requested but no CUDA device is available")
+        print("CUDA not available — embedding on CPU.", flush=True)
+        return "cpu"
+    free_gib = _cuda_free_gib()
+    if prefer == "cuda":
+        print(f"Using CUDA ({free_gib:.2f} GiB free).", flush=True)
+        return "cuda"
+    # auto
+    if free_gib is not None and free_gib < min_free_gib:
+        print(f"CUDA has only {free_gib:.2f} GiB free (< {min_free_gib} GiB) — likely another "
+              "process on this cluster GPU; embedding on CPU instead.", flush=True)
+        return "cpu"
+    print(f"Using CUDA ({free_gib:.2f} GiB free).", flush=True)
+    return "cuda"
+
+
+def _release_cuda() -> None:
+    import gc
+
+    import torch
+
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def embed_texts(texts: list[str], *, device: str = "auto", batch_size: int = 8,
+                min_free_gib: float = 2.0):
+    """Encode texts with the Hebrew-native, clustering-tuned embedding model.
+
+    Defaults to batch_size=8 (not 64) because embed_field='text' feeds ~4k-char article
+    snippets — large batches OOM even on a clean 22 GB GPU. When device='auto', cuda is
+    skipped if less than min_free_gib is free (common on shared Databricks clusters); on
+    cuda OOM the call retries on CPU automatically.
+    """
     import torch
     from sentence_transformers import SentenceTransformer
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"Loading {EMBEDDING_MODEL} on {device}...", flush=True)
-    model = SentenceTransformer(EMBEDDING_MODEL, trust_remote_code=True, device=device)
-    print(f"Embedding {len(texts)} texts...", flush=True)
-    embeddings = model.encode(texts, show_progress_bar=True, batch_size=64)
+    resolved = _resolve_embed_device(device, min_free_gib)
+    _release_cuda()
+
+    def _encode(on_device: str, bs: int):
+        print(f"Loading {EMBEDDING_MODEL} on {on_device} (batch_size={bs})...", flush=True)
+        model = SentenceTransformer(EMBEDDING_MODEL, trust_remote_code=True, device=on_device)
+        print(f"Embedding {len(texts)} texts...", flush=True)
+        try:
+            return model.encode(texts, show_progress_bar=True, batch_size=bs)
+        finally:
+            del model
+            _release_cuda()
+
+    try:
+        embeddings = _encode(resolved, batch_size)
+    except torch.cuda.OutOfMemoryError:
+        if resolved != "cuda":
+            raise
+        print("CUDA OOM during encode — retrying on CPU...", flush=True)
+        _release_cuda()
+        embeddings = _encode("cpu", max(4, batch_size // 2))
+
     print(f"Embedding done ({embeddings.shape}).", flush=True)
     return embeddings
 
@@ -241,7 +313,8 @@ def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: in
                      min_samples: int | None = 15, seed: int = 42, reduce_outliers: bool = True,
                      outlier_threshold: float = 0.35, nr_topics: int | str | None = None,
                      embed_field: str = "text", max_embed_chars: int = 4000,
-                     merge_duplicates: bool = True):
+                     merge_duplicates: bool = True, embed_device: str = "auto",
+                     embed_batch_size: int = 8):
     """Full pipeline: embed -> cluster -> name. Each record needs `summary` (join key) and, when
     embed_field='text', `text` (article body). Cluster geometry + c-TF-IDF keywords come from
     truncated article bodies by default — summaries alone collapse into one media-meta mega-topic.
@@ -261,7 +334,7 @@ def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: in
         raise ValueError(f"embed_field must be 'text' or 'summary', got {embed_field!r}")
 
     print(f"cluster_dataset: {len(records)} records (embed_field={embed_field!r})", flush=True)
-    embeddings = embed_texts(cluster_docs)
+    embeddings = embed_texts(cluster_docs, device=embed_device, batch_size=embed_batch_size)
     topic_model, cluster_ids = fit_topics(cluster_docs, embeddings, min_cluster_size, min_samples,
                                            seed, reduce_outliers, outlier_threshold, nr_topics)
 

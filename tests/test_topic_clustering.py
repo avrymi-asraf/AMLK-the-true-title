@@ -12,11 +12,23 @@ import pytest
 from evaluation.topic_clustering import (
     HEBREW_STOPWORDS,
     HEBREW_TOKEN_PATTERN,
+    _resolve_embed_device,
     _truncate_text,
     merge_duplicate_labels,
     plot_topic_sizes,
     topic_summary,
 )
+
+
+def test_resolve_embed_device_cpu():
+    assert _resolve_embed_device("cpu") == "cpu"
+
+
+def test_resolve_embed_device_rejects_unknown():
+    import pytest
+
+    with pytest.raises(ValueError, match="embed_device"):
+        _resolve_embed_device("tpu")
 
 
 def test_truncate_text_limits_article_body():

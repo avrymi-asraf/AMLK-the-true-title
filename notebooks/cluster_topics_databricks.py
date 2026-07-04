@@ -42,6 +42,12 @@ import torch
 print(f"GPU available: {torch.cuda.is_available()}")
 if torch.cuda.is_available():
     print(f"Device: {torch.cuda.get_device_name(0)}")
+    free_gib, total_gib = (b / (1024 ** 3) for b in torch.cuda.mem_get_info())
+    print(f"GPU memory: {free_gib:.2f} GiB free / {total_gib:.2f} GiB total")
+    if free_gib < 2.0:
+        print("WARNING: very little GPU memory free — another process may be using this GPU. "
+              "embed_device=auto will fall back to CPU, or restart/detach other notebooks on "
+              "this cluster.")
 else:
     print("No GPU detected — this will still work on CPU, just slower (see notebook header).")
 
@@ -98,6 +104,8 @@ dbutils.widgets.text("gemini_api_key", "", "GEMINI_API_KEY (last resort — pref
 dbutils.widgets.text("min_cluster_size", "60", "HDBSCAN min_cluster_size (lower = more, smaller topics)")
 dbutils.widgets.text("min_samples", "15", "HDBSCAN min_samples (lower = less raw noise; blank = tie to min_cluster_size)")
 dbutils.widgets.dropdown("embed_field", "text", ["text", "summary"], "Embed/cluster on article text or summary")
+dbutils.widgets.dropdown("embed_device", "auto", ["auto", "cpu", "cuda"], "Embedding device (auto skips cuda when GPU is nearly full)")
+dbutils.widgets.text("embed_batch_size", "8", "Embedding batch size (lower if CUDA OOM)")
 dbutils.widgets.text("max_embed_chars", "4000", "Chars of article body to embed (embed_field=text)")
 dbutils.widgets.dropdown("reduce_outliers", "True", ["True", "False"], "Reassign noise docs above similarity threshold")
 dbutils.widgets.text("outlier_threshold", "0.35", "Min cosine sim to reassign a noise doc (0 = assign all)")
@@ -215,6 +223,11 @@ print(f"Loaded {len(records)} records from {combined_path}")
 # MAGIC **Tuning notes:**
 # MAGIC - **embed_field=text** (default): cluster on truncated article bodies, not headlines.
 # MAGIC   Summaries alone collapsed ~99% of docs into one "חדשות ותקשורת" mega-topic.
+# MAGIC - **embed_device=auto** (default): uses CUDA only when ≥2 GiB is free; otherwise CPU.
+# MAGIC   On a shared cluster another notebook can leave the GPU nearly full — set `cpu` explicitly
+# MAGIC   to skip the cuda attempt, or restart/detach other GPU workloads on this cluster.
+# MAGIC - **embed_batch_size=8**: lowered from an implicit 64; 4k-char article bodies OOM at large
+# MAGIC   batches even on a clean 22 GB GPU.
 # MAGIC - **outlier_threshold=0.35**: only reassign noise docs with decent embedding similarity.
 # MAGIC   threshold=0 force-assigns everything and floods the largest cluster.
 # MAGIC - **nr_topics**: leave blank to keep HDBSCAN's granularity; `auto` over-merges domains.
@@ -250,6 +263,8 @@ rows, topic_model, embeddings = cluster_dataset(
     min_samples=int(_min_samples_raw) if _min_samples_raw else None,
     embed_field=_embed_field,
     max_embed_chars=int(dbutils.widgets.get("max_embed_chars") or "4000"),
+    embed_device=dbutils.widgets.get("embed_device"),
+    embed_batch_size=int(dbutils.widgets.get("embed_batch_size") or "8"),
     reduce_outliers=dbutils.widgets.get("reduce_outliers") == "True",
     outlier_threshold=float(dbutils.widgets.get("outlier_threshold") or "0.35"),
     nr_topics=_nr_topics or None,
