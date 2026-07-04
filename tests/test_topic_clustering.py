@@ -9,12 +9,74 @@ import re
 
 import pytest
 
-from evaluation.topic_clustering import HEBREW_STOPWORDS, HEBREW_TOKEN_PATTERN, _truncate_text
+from evaluation.topic_clustering import (
+    HEBREW_STOPWORDS,
+    HEBREW_TOKEN_PATTERN,
+    _truncate_text,
+    merge_duplicate_labels,
+    plot_topic_sizes,
+    topic_summary,
+)
 
 
 def test_truncate_text_limits_article_body():
     body = "א" * 10_000
     assert len(_truncate_text(body, max_chars=4000)) == 4000
+
+
+def test_merge_duplicate_labels_collapses_same_label_clusters():
+    rows = [
+        {"summary": "a", "source": "s", "cluster_id": 3, "topic_label": "ספורט", "keywords": ["כדורגל"]},
+        {"summary": "b", "source": "s", "cluster_id": 7, "topic_label": "ספורט", "keywords": ["כדורסל"]},
+        {"summary": "c", "source": "s", "cluster_id": 1, "topic_label": "פוליטיקה", "keywords": ["ממשלה"]},
+    ]
+
+    merged = merge_duplicate_labels(rows)
+
+    sport_ids = {row["cluster_id"] for row in merged if row["topic_label"] == "ספורט"}
+    assert sport_ids == {3}  # collapsed onto the smallest original cluster_id
+    sport_keywords = next(row["keywords"] for row in merged if row["topic_label"] == "ספורט")
+    assert sport_keywords == ["כדורגל", "כדורסל"]  # union, order-preserving, deduped
+    assert {row["cluster_id"] for row in merged if row["topic_label"] == "פוליטיקה"} == {1}
+
+
+def test_merge_duplicate_labels_reduces_topic_summary_row_count():
+    rows = [
+        {"summary": "a", "source": "s", "cluster_id": 0, "topic_label": "ביטחון", "keywords": []},
+        {"summary": "b", "source": "s", "cluster_id": 5, "topic_label": "ביטחון", "keywords": []},
+    ]
+
+    merged = merge_duplicate_labels(rows)
+
+    assert len(topic_summary(merged)) == 1
+    assert topic_summary(merged)[0]["count"] == 2
+
+
+def test_merge_duplicate_labels_handles_empty_input():
+    assert merge_duplicate_labels([]) == []
+
+
+def test_plot_topic_sizes_returns_a_figure_with_a_bar_per_topic():
+    summary_rows = [
+        {"cluster_id": 0, "topic_label": "ספורט", "keywords": [], "count": 100},
+        {"cluster_id": 1, "topic_label": "פוליטיקה", "keywords": [], "count": 50},
+    ]
+
+    fig = plot_topic_sizes(summary_rows)
+
+    assert fig is not None
+    assert len(fig.data[0].x) == 2
+
+
+def test_plot_topic_sizes_respects_top_n():
+    summary_rows = [
+        {"cluster_id": i, "topic_label": f"topic{i}", "keywords": [], "count": 100 - i}
+        for i in range(10)
+    ]
+
+    fig = plot_topic_sizes(summary_rows, top_n=3)
+
+    assert len(fig.data[0].x) == 3
 
 
 def test_hebrew_token_pattern_keeps_only_hebrew_words():

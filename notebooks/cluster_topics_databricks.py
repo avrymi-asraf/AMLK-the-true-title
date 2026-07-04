@@ -95,15 +95,17 @@ dbutils.widgets.text(
 )
 dbutils.widgets.text("secret_scope", "", "Databricks secret scope (optional)")
 dbutils.widgets.text("gemini_api_key", "", "GEMINI_API_KEY (last resort — prefer .env or a secret scope)")
-dbutils.widgets.text("min_cluster_size", "25", "HDBSCAN min_cluster_size (lower = more topics)")
-dbutils.widgets.text("min_samples", "5", "HDBSCAN min_samples (lower = less raw noise; blank = tie to min_cluster_size)")
+dbutils.widgets.text("min_cluster_size", "60", "HDBSCAN min_cluster_size (lower = more, smaller topics)")
+dbutils.widgets.text("min_samples", "15", "HDBSCAN min_samples (lower = less raw noise; blank = tie to min_cluster_size)")
 dbutils.widgets.dropdown("embed_field", "text", ["text", "summary"], "Embed/cluster on article text or summary")
 dbutils.widgets.text("max_embed_chars", "4000", "Chars of article body to embed (embed_field=text)")
 dbutils.widgets.dropdown("reduce_outliers", "True", ["True", "False"], "Reassign noise docs above similarity threshold")
 dbutils.widgets.text("outlier_threshold", "0.35", "Min cosine sim to reassign a noise doc (0 = assign all)")
 dbutils.widgets.text("nr_topics", "", "Merge near-duplicate topics: 'auto', an int, or blank to skip")
+dbutils.widgets.dropdown("merge_duplicate_labels", "True", ["True", "False"], "Collapse clusters Gemini named identically into one topic")
 dbutils.widgets.text("record_limit", "0", "Max records (0 = all; try 500 for a smoke test)")
 dbutils.widgets.text("plot_sample", "0.15", "Fraction of docs per topic in cluster plot (blank = all)")
+dbutils.widgets.text("topic_size_plot_top_n", "30", "Max topics shown in the cluster-size bar chart")
 
 # COMMAND ----------
 
@@ -216,7 +218,14 @@ print(f"Loaded {len(records)} records from {combined_path}")
 # MAGIC - **outlier_threshold=0.35**: only reassign noise docs with decent embedding similarity.
 # MAGIC   threshold=0 force-assigns everything and floods the largest cluster.
 # MAGIC - **nr_topics**: leave blank to keep HDBSCAN's granularity; `auto` over-merges domains.
-# MAGIC - **min_cluster_size=25, min_samples=5**: more topics than the earlier 40/10 defaults.
+# MAGIC - **min_cluster_size=60, min_samples=15**: raised from an earlier 25/5 pass, which produced
+# MAGIC   ~100 topics — many near-duplicate labels (e.g. "תקשורת ומדיה"/"תקשורת וטלוויזיה") for
+# MAGIC   what was really the same domain seen through slightly different HDBSCAN sub-clusters.
+# MAGIC   Coarser HDBSCAN granularity + the boilerplate-stopword and merge-duplicate-labels fixes
+# MAGIC   below together aim for fewer, more distinct topics. Lower these again if too coarse.
+# MAGIC - **merge_duplicate_labels=True**: any clusters Gemini still names identically are collapsed
+# MAGIC   into one reported topic (evaluation.topic_clustering.merge_duplicate_labels) — no re-run
+# MAGIC   needed, this is a free local post-processing step.
 # MAGIC Re-run end-to-end after pulling the latest `evaluation/topic_clustering.py`.
 
 # COMMAND ----------
@@ -244,6 +253,7 @@ rows, topic_model, embeddings = cluster_dataset(
     reduce_outliers=dbutils.widgets.get("reduce_outliers") == "True",
     outlier_threshold=float(dbutils.widgets.get("outlier_threshold") or "0.35"),
     nr_topics=_nr_topics or None,
+    merge_duplicates=dbutils.widgets.get("merge_duplicate_labels") == "True",
 )
 n_clusters = len(set(r["cluster_id"] for r in rows))
 print(f"Discovered {n_clusters} clusters (including noise, cluster_id=-1)")
@@ -260,6 +270,21 @@ display(spark.createDataFrame(
     [(t["cluster_id"], t["topic_label"], t["count"], ", ".join(t["keywords"])) for t in summary_rows],
     ["cluster_id", "topic_label", "count", "keywords"],
 ))
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC A bar chart makes fragmentation/imbalance (e.g. one topic dwarfing the rest) obvious at a
+# MAGIC glance in a way the table above doesn't — small chart (<=`topic_size_plot_top_n` bars), so
+# MAGIC it's shown inline, no DBFS round-trip needed (unlike the full document scatter below).
+
+# COMMAND ----------
+
+from evaluation.topic_clustering import plot_topic_sizes
+
+topic_size_plot_top_n = int(dbutils.widgets.get("topic_size_plot_top_n") or "30")
+size_fig = plot_topic_sizes(summary_rows, top_n=topic_size_plot_top_n)
+displayHTML(size_fig.to_html(include_plotlyjs="cdn", full_html=False))
 
 # COMMAND ----------
 
@@ -304,29 +329,45 @@ displayHTML('<iframe src="/files/amlk/cluster-plot.html" width="100%" height="70
 # COMMAND ----------
 
 from evaluation.style_labels import label_dataset as label_style
-from evaluation.style_labels import style_summary
+from evaluation.style_labels import plot_style_distribution, style_summary
 
 style_rows = label_style(records)  # aligned 1:1 with records/rows — same order, no join needed
 for row, style_row in zip(rows, style_rows):
     row["style_label"] = style_row["style_label"]
 
+style_dist = style_summary(style_rows)
 print("Style label distribution:")
-print(json.dumps(style_summary(style_rows), indent=2, ensure_ascii=False))
+print(json.dumps(style_dist, indent=2, ensure_ascii=False))
+
+style_fig = plot_style_distribution(style_dist)
+displayHTML(style_fig.to_html(include_plotlyjs="cdn", full_html=False))
 
 # COMMAND ----------
 
 # MAGIC %md
 # MAGIC ### Topic x style crosstab
 # MAGIC
-# MAGIC E.g. do certain topics skew toward multi-headline digests more than others?
+# MAGIC E.g. do certain topics skew toward multi-headline digests more than others? Shown as both
+# MAGIC a table and a stacked bar chart (top topics by size, so the chart stays readable).
 
 # COMMAND ----------
 
 import pandas as pd
+import plotly.express as px
 
 df = pd.DataFrame(rows)
 crosstab = pd.crosstab(df["topic_label"], df["style_label"]).reset_index()
 display(spark.createDataFrame(crosstab))
+
+top_labels = [t["topic_label"] for t in summary_rows if t["topic_label"] != "לא מסווג"][:topic_size_plot_top_n]
+crosstab_long = df[df["topic_label"].isin(top_labels)]
+crosstab_fig = px.histogram(
+    crosstab_long, y="topic_label", color="style_label", barmode="stack",
+    category_orders={"topic_label": top_labels},
+    labels={"topic_label": "topic", "style_label": "style"},
+    title=f"Style breakdown for top {len(top_labels)} topics",
+)
+displayHTML(crosstab_fig.to_html(include_plotlyjs="cdn", full_html=False))
 
 # COMMAND ----------
 

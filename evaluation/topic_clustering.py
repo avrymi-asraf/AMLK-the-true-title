@@ -4,7 +4,9 @@ results can later be broken down by topic (e.g. "does the model hallucinate more
 articles than sports?"). Embeds each article's summary with a Hebrew-native, clustering-tuned
 sentence-embedding model, clusters with BERTopic (UMAP + HDBSCAN + a Hebrew-only c-TF-IDF
 vectorizer, plus outlier-reduction/topic-merging passes to keep noise and near-duplicate topics
-in check — see fit_topics()'s docstring), then names each cluster with one Gemini call. This
+in check — see fit_topics()'s docstring), then names each cluster with one Gemini call, then
+collapses any clusters Gemini still named identically (merge_duplicate_labels()) so the final
+report has one row per distinct real-world topic. This
 module holds the real, testable clustering logic; the
 Databricks notebook (notebooks/cluster_topics_databricks.py) is a thin driver that clones the
 repo, supplies the data + GPU, and calls cluster_dataset()/write_topics() from here — the same
@@ -58,6 +60,16 @@ MEDIA_STOPWORDS = frozenset("""
 התקשורת העיתונות בעיתונות מהעיתונות בתקשורת
 """.split())
 
+# Layout/journalism-meta words ("front page headline", "as reported this morning") that show up
+# as top keywords across many unrelated topics — they describe the *article format*, not its
+# subject, and were the reason several full-corpus clusters got a fake "חדשות בישראל"-style label
+# (2026-07-04 run) instead of their real domain. Dropping them lets c-TF-IDF surface the actual
+# distinguishing subject words, which also reduces the number of near-duplicate topic names.
+BOILERPLATE_STOPWORDS = frozenset("""
+כותרת הכותרת הראשית בכותרת נכתב כותב עיתון העיתון בעיתון מהעיתון הבוקר שער גיליון מוסף
+כתבה ידיעה דיווח מדווח לינק קישור אתמול אמש השבוע
+""".split())
+
 
 def _truncate_text(text: str, max_chars: int = 4000) -> str:
     """First N chars of article body — enough topical signal; the embedding model truncates further."""
@@ -70,7 +82,7 @@ def _build_vectorizer(ngram_range: tuple[int, int] = (1, 2)):
     from sklearn.feature_extraction.text import CountVectorizer
 
     return CountVectorizer(token_pattern=HEBREW_TOKEN_PATTERN,
-                            stop_words=list(HEBREW_STOPWORDS | MEDIA_STOPWORDS),
+                            stop_words=list(HEBREW_STOPWORDS | MEDIA_STOPWORDS | BOILERPLATE_STOPWORDS),
                             ngram_range=ngram_range, lowercase=False)
 
 
@@ -107,8 +119,8 @@ def embed_texts(texts: list[str]):
 embed_summaries = embed_texts
 
 
-def fit_topics(cluster_docs: list[str], embeddings, min_cluster_size: int = 25,
-               min_samples: int | None = 5, seed: int = 42, reduce_outliers: bool = True,
+def fit_topics(cluster_docs: list[str], embeddings, min_cluster_size: int = 60,
+               min_samples: int | None = 15, seed: int = 42, reduce_outliers: bool = True,
                outlier_threshold: float = 0.35, nr_topics: int | str | None = None):
     """Fit BERTopic (UMAP + HDBSCAN + c-TF-IDF) over precomputed embeddings.
 
@@ -122,7 +134,12 @@ def fit_topics(cluster_docs: list[str], embeddings, min_cluster_size: int = 25,
       nearest topic, flooding the largest cluster. Use outlier_threshold (~0.35 cosine sim) so
       uncertain docs stay -1.
     - `nr_topics='auto'` over-merges distinct domains into a few media-meta topics — off by default.
-    - Lower min_cluster_size (25) + min_samples (5) yields more granular HDBSCAN topics than 40/10.
+    - `min_cluster_size=60`/`min_samples=15` (raised from an initial 25/5 pass that produced ~100
+      topics, many of them near-duplicate Gemini labels for what was really the same domain seen
+      through slightly different HDBSCAN sub-clusters) — coarser HDBSCAN granularity up front means
+      fewer, larger, more distinct topics before naming even runs. See also
+      `cluster_dataset(merge_duplicate_labels=True)`, which additionally collapses any topics that
+      still end up sharing an identical Gemini label.
     - `language='multilingual'` is required — English mode strips all Hebrew before c-TF-IDF.
 
     Returns (topic_model, cluster_ids) — cluster_ids aligns 1:1 with cluster_docs.
@@ -190,13 +207,46 @@ def name_topic(gemini_model, topic_model, topic_id: int, n_examples: int = 8) ->
     return result.get("label", "").strip() or f"cluster_{topic_id}"
 
 
-def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: int = 25,
-                     min_samples: int | None = 5, seed: int = 42, reduce_outliers: bool = True,
+def merge_duplicate_labels(rows: list[dict]) -> list[dict]:
+    """Collapse clusters that ended up with the same Gemini topic_label into one logical topic.
+
+    Even with a coarser HDBSCAN (see fit_topics) and boilerplate-stripped keywords, a few raw
+    clusters can still be near-duplicate slices of the same real-world domain (e.g. two clusters
+    both named "ביטחון וצבא") and Gemini has no visibility across clusters to avoid repeating a
+    label. This is a cheap, local, no-extra-API-call fix: pick the smallest cluster_id per label
+    as the canonical id and union the keyword lists, so topic_summary()/write_topics() report one
+    row per distinct label instead of several. Does not touch topic_model — only the row-level
+    `cluster_id`/`keywords` used for reporting and stratification.
+    """
+    if not rows:
+        return rows
+    canonical_id_by_label: dict[str, int] = {}
+    keywords_by_label: dict[str, list[str]] = {}
+    for row in rows:
+        label = row["topic_label"]
+        canonical_id_by_label[label] = min(canonical_id_by_label.get(label, row["cluster_id"]), row["cluster_id"])
+        bucket = keywords_by_label.setdefault(label, [])
+        for kw in row["keywords"]:
+            if kw not in bucket:
+                bucket.append(kw)
+
+    return [
+        {**row, "cluster_id": canonical_id_by_label[row["topic_label"]],
+         "keywords": keywords_by_label[row["topic_label"]][:10]}
+        for row in rows
+    ]
+
+
+def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: int = 60,
+                     min_samples: int | None = 15, seed: int = 42, reduce_outliers: bool = True,
                      outlier_threshold: float = 0.35, nr_topics: int | str | None = None,
-                     embed_field: str = "text", max_embed_chars: int = 4000):
+                     embed_field: str = "text", max_embed_chars: int = 4000,
+                     merge_duplicates: bool = True):
     """Full pipeline: embed -> cluster -> name. Each record needs `summary` (join key) and, when
     embed_field='text', `text` (article body). Cluster geometry + c-TF-IDF keywords come from
     truncated article bodies by default — summaries alone collapse into one media-meta mega-topic.
+    `merge_duplicates` runs merge_duplicate_labels() on the result (see its docstring) so clusters
+    Gemini happened to name identically are reported as one topic.
 
     Returns (rows, topic_model, embeddings): rows align 1:1 with records —
     {summary, source, cluster_id, topic_label, keywords}. embeddings is returned (not just
@@ -239,6 +289,11 @@ def cluster_dataset(records: list[dict], gemini_model=None, min_cluster_size: in
          "topic_label": labels_by_topic[int(cid)], "keywords": keywords_by_topic[int(cid)]}
         for r, cid in zip(records, cluster_ids)
     ]
+    if merge_duplicates:
+        n_before = len(set(r["cluster_id"] for r in rows))
+        rows = merge_duplicate_labels(rows)
+        n_after = len(set(r["cluster_id"] for r in rows))
+        print(f"Merged duplicate-labeled clusters: {n_before} -> {n_after}.", flush=True)
     return rows, topic_model, embeddings
 
 
@@ -259,6 +314,23 @@ def plot_clusters(topic_model, cluster_docs: list[str], embeddings, *,
         raise ValueError(f"hover_texts length {len(hover_texts)} != embeddings length {len(embeddings)}")
     return topic_model.visualize_documents(hover_texts, embeddings=embeddings, hide_annotations=True,
                                             sample=sample)
+
+
+def plot_topic_sizes(summary_rows: list[dict], top_n: int = 30):
+    """Horizontal bar chart of cluster sizes (topic_summary() output), largest first — a quick
+    visual complement to the numeric table for spotting fragmentation/imbalance (e.g. one
+    mega-topic dwarfing the rest) at a glance. Small (<=top_n bars), so unlike plot_clusters() it
+    never risks the Databricks cell-output cap and can be shown inline with displayHTML.
+    """
+    import plotly.express as px
+
+    top = summary_rows[:top_n]
+    labels = [f"{t['topic_label']} ({t['cluster_id']})" for t in top]
+    counts = [t["count"] for t in top]
+    fig = px.bar(x=counts[::-1], y=labels[::-1], orientation="h",
+                 labels={"x": "articles", "y": "topic"},
+                 title=f"Top {len(top)} topic cluster sizes")
+    return fig
 
 
 def write_plot_html(fig, path: Path) -> Path:

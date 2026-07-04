@@ -1,5 +1,13 @@
 """Tests for evaluation.style_labels: pure regex classification, no model/API calls, no GPU."""
-from evaluation.style_labels import MULTI_SENTENCE, PIPE_DIGEST, QUESTION, SINGLE_SENTENCE, classify_style, style_summary
+from evaluation.style_labels import (
+    MULTI_SENTENCE,
+    PIPE_DIGEST,
+    QUESTION,
+    SINGLE_SENTENCE,
+    classify_style,
+    plot_style_distribution,
+    style_summary,
+)
 
 
 def test_classify_style_detects_pipe_digest():
@@ -24,3 +32,12 @@ def test_style_summary_counts_and_percentages():
     assert summary[PIPE_DIGEST]["count"] == 2
     assert summary[SINGLE_SENTENCE]["count"] == 1
     assert summary[PIPE_DIGEST]["pct"] == round(2 / 3, 3)
+
+
+def test_plot_style_distribution_returns_a_figure_with_a_bar_per_style():
+    summary = {PIPE_DIGEST: {"count": 2, "pct": 0.667}, SINGLE_SENTENCE: {"count": 1, "pct": 0.333}}
+
+    fig = plot_style_distribution(summary)
+
+    assert fig is not None
+    assert len(fig.data[0].x) == 2

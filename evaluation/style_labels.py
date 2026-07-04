@@ -66,6 +66,18 @@ def style_summary(rows: list[dict]) -> dict:
             for label, c in sorted(counts.items(), key=lambda kv: -kv[1])}
 
 
+def plot_style_distribution(summary: dict):
+    """Bar chart of classify_style() category counts (style_summary() output) — a quick visual
+    complement to the numeric breakdown, e.g. for the Databricks notebook pipeline."""
+    import plotly.express as px
+
+    labels = list(summary.keys())
+    counts = [summary[label]["count"] for label in labels]
+    fig = px.bar(x=labels, y=counts, labels={"x": "style", "y": "count"},
+                 title="Summary style distribution")
+    return fig
+
+
 def write_style_labels(rows: list[dict], output_path: Path) -> None:
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
