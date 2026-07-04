@@ -118,6 +118,7 @@ dbutils.widgets.text("refine_min_samples", "20", "HDBSCAN min_samples for refine
 dbutils.widgets.text("refine_nr_topics", "12", "Cap sub-topics after refinement merge (blank = no cap)")
 dbutils.widgets.text("record_limit", "0", "Max records (0 = all; try 500 for a smoke test)")
 dbutils.widgets.text("plot_sample", "0.15", "Fraction of docs per topic in cluster plot (blank = all)")
+dbutils.widgets.dropdown("plot_dimensions", "2", ["2", "3"], "Cluster plot UMAP dimensions (2 = flat, 3 = rotatable)")
 dbutils.widgets.text("topic_size_plot_top_n", "30", "Max topics shown in the cluster-size bar chart")
 
 # COMMAND ----------
@@ -358,8 +359,8 @@ displayHTML(size_fig.to_html(include_plotlyjs="cdn", full_html=False))
 # MAGIC %md
 # MAGIC ### Visualize the clusters
 # MAGIC
-# MAGIC A 2D UMAP projection with **dual-layer topic clouds** (soft outer glow + filled outline),
-# MAGIC colored points, and a **header box** at each centroid (Hebrew label + article count).
+# MAGIC A 2D or 3D UMAP projection (`plot_dimensions` widget) with topic clouds, colored points,
+# MAGIC and a **header** at each centroid (Hebrew label + article count). Hover shows the summary,
 # MAGIC not the full article body — and only a sample of points (see `plot_sample` widget) so the
 # MAGIC HTML stays under Databricks' ~20 MB cell-output cap. The plot is written to DBFS FileStore
 # MAGIC and embedded via iframe (not inline `displayHTML(fig.to_html(...))`, which exceeded the limit
@@ -373,13 +374,24 @@ from evaluation.topic_clustering import plot_clusters, write_plot_html
 
 _plot_sample_raw = dbutils.widgets.get("plot_sample").strip()
 plot_sample = float(_plot_sample_raw) if _plot_sample_raw else None
+plot_dimensions = int(dbutils.widgets.get("plot_dimensions") or "2")
 hover_texts = [r["summary"] for r in records]
-fig = plot_clusters(topic_model, hover_texts, embeddings, sample=plot_sample)
+fig = plot_clusters(
+    topic_model, hover_texts, embeddings,
+    sample=plot_sample, dimensions=plot_dimensions,
+)
 
 plot_path = Path("/dbfs/FileStore/amlk/cluster-plot.html")
 write_plot_html(fig, plot_path)
-print(f"Wrote cluster plot to {plot_path} ({len(records)} docs, plot_sample={plot_sample})")
-displayHTML('<iframe src="/files/amlk/cluster-plot.html" width="100%" height="700" frameborder="0"></iframe>')
+plot_height = 900 if plot_dimensions == 3 else 700
+print(
+    f"Wrote cluster plot to {plot_path} "
+    f"({len(records)} docs, plot_sample={plot_sample}, dimensions={plot_dimensions}D)"
+)
+displayHTML(
+    f'<iframe src="/files/amlk/cluster-plot.html" width="100%" height="{plot_height}" '
+    f'frameborder="0"></iframe>'
+)
 
 # COMMAND ----------
 

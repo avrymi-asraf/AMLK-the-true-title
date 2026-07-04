@@ -601,19 +601,29 @@ def _add_topic_cloud(fig, xs, ys, color: str) -> None:
     ))
 
 
-def plot_clusters(topic_model, cluster_docs: list[str], embeddings, *,
-                  hover_texts: list[str] | None = None, sample: float | None = 0.15,
-                  show_clouds: bool = True, show_headers: bool = True):
-    """2D UMAP scatter of discovered clusters with dual-layer hull 'clouds' (outer glow +
-    filled outline) and a bold Hebrew topic header + doc count at each centroid.
+def _add_topic_cloud_3d(fig, xs, ys, zs, color: str) -> None:
+    """Semi-transparent convex hull around a topic's 3D UMAP points."""
+    import numpy as np
+    import plotly.graph_objects as go
+    from scipy.spatial import ConvexHull
 
-    Pass short `hover_texts` (e.g. summaries) when `cluster_docs` are long article bodies.
-    `sample` keeps at most that fraction of docs per topic (fine for smoke runs: None = all).
-    """
+    if len(xs) < 4:
+        return
+    points = np.column_stack([xs, ys, zs])
+    hull = ConvexHull(points)
+    fig.add_trace(go.Mesh3d(
+        x=points[:, 0], y=points[:, 1], z=points[:, 2],
+        i=hull.simplices[:, 0], j=hull.simplices[:, 1], k=hull.simplices[:, 2],
+        color=color, opacity=0.16,
+        showlegend=False, hoverinfo="skip",
+    ))
+
+
+def _build_cluster_plot_state(topic_model, cluster_docs: list[str], embeddings, *,
+                              hover_texts: list[str] | None, sample: float | None):
+    """Shared sampling, labels, and palette for 2D/3D cluster plots."""
     import numpy as np
     import plotly.express as px
-    import plotly.graph_objects as go
-    from umap import UMAP
 
     if hover_texts is None:
         hover_texts = cluster_docs
@@ -630,11 +640,7 @@ def plot_clusters(topic_model, cluster_docs: list[str], embeddings, *,
 
     indices = _sample_document_indices(topic_per_doc, sample)
     embeddings = np.asarray(embeddings)
-    emb_2d = UMAP(n_neighbors=15, n_components=2, min_dist=0.08, metric="cosine",
-                  random_state=42).fit_transform(embeddings[indices])
-
     topics_sampled = [topic_per_doc[i] for i in indices]
-    # Bold, distinct hues — readable behind Hebrew headers.
     palette = (
         px.colors.qualitative.Bold
         + px.colors.qualitative.Safe
@@ -645,24 +651,40 @@ def plot_clusters(topic_model, cluster_docs: list[str], embeddings, *,
         tid: ("#90A4AE" if tid == NOISE_TOPIC_ID else palette[i % len(palette)])
         for i, tid in enumerate(topic_ids)
     }
+    return dict(
+        embeddings=embeddings, indices=indices, topics_sampled=topics_sampled,
+        label_by_id=label_by_id, topic_counts=topic_counts, topic_ids=topic_ids,
+        color_by_topic=color_by_topic, hover_texts=hover_texts,
+    )
+
+
+def _render_clusters_2d(state: dict, emb_proj, *, show_clouds: bool, show_headers: bool):
+    import numpy as np
+    import plotly.graph_objects as go
+
+    indices = state["indices"]
+    topics_sampled = state["topics_sampled"]
+    label_by_id = state["label_by_id"]
+    topic_counts = state["topic_counts"]
+    topic_ids = state["topic_ids"]
+    color_by_topic = state["color_by_topic"]
+    hover_texts = state["hover_texts"]
 
     fig = go.Figure()
     annotations = []
 
-    # Pass 1 — cloud outlines (largest topics drawn first, sit in the background).
     if show_clouds:
         for topic_id in reversed([t for t in topic_ids if t != NOISE_TOPIC_ID]):
             mask = np.array([t == topic_id for t in topics_sampled])
             if not mask.any():
                 continue
-            _add_topic_cloud(fig, emb_2d[mask, 0], emb_2d[mask, 1], color_by_topic[topic_id])
+            _add_topic_cloud(fig, emb_proj[mask, 0], emb_proj[mask, 1], color_by_topic[topic_id])
 
-    # Pass 2 — points + headers.
     for topic_id in topic_ids:
         mask = np.array([t == topic_id for t in topics_sampled])
         if not mask.any():
             continue
-        xs, ys = emb_2d[mask, 0], emb_2d[mask, 1]
+        xs, ys = emb_proj[mask, 0], emb_proj[mask, 1]
         label = label_by_id.get(topic_id, f"cluster_{topic_id}")
         color = color_by_topic[topic_id]
         n_docs = topic_counts.get(topic_id, int(mask.sum()))
@@ -700,6 +722,101 @@ def plot_clusters(topic_model, cluster_docs: list[str], embeddings, *,
         annotations=annotations, margin=dict(t=90, b=40, r=180),
     )
     return fig
+
+
+def _render_clusters_3d(state: dict, emb_proj, *, show_clouds: bool, show_headers: bool):
+    import numpy as np
+    import plotly.graph_objects as go
+
+    indices = state["indices"]
+    topics_sampled = state["topics_sampled"]
+    label_by_id = state["label_by_id"]
+    topic_counts = state["topic_counts"]
+    topic_ids = state["topic_ids"]
+    color_by_topic = state["color_by_topic"]
+    hover_texts = state["hover_texts"]
+
+    fig = go.Figure()
+
+    if show_clouds:
+        for topic_id in reversed([t for t in topic_ids if t != NOISE_TOPIC_ID]):
+            mask = np.array([t == topic_id for t in topics_sampled])
+            if not mask.any():
+                continue
+            _add_topic_cloud_3d(
+                fig, emb_proj[mask, 0], emb_proj[mask, 1], emb_proj[mask, 2],
+                color_by_topic[topic_id],
+            )
+
+    for topic_id in topic_ids:
+        mask = np.array([t == topic_id for t in topics_sampled])
+        if not mask.any():
+            continue
+        xs, ys, zs = emb_proj[mask, 0], emb_proj[mask, 1], emb_proj[mask, 2]
+        label = label_by_id.get(topic_id, f"cluster_{topic_id}")
+        color = color_by_topic[topic_id]
+        n_docs = topic_counts.get(topic_id, int(mask.sum()))
+
+        fig.add_trace(go.Scatter3d(
+            x=xs, y=ys, z=zs, mode="markers", name=label,
+            marker=dict(
+                color=color, size=4 if topic_id != NOISE_TOPIC_ID else 3,
+                opacity=0.82 if topic_id != NOISE_TOPIC_ID else 0.4,
+                line=dict(width=0.5, color="white"),
+            ),
+            text=[hover_texts[i] for i in indices[mask]], hoverinfo="text",
+        ))
+        if show_headers and topic_id != NOISE_TOPIC_ID:
+            cx, cy, cz = float(xs.mean()), float(ys.mean()), float(zs.mean())
+            fig.add_trace(go.Scatter3d(
+                x=[cx], y=[cy], z=[cz], mode="text",
+                text=[f"<b>{label}</b><br>{n_docs:,} articles"],
+                textfont=dict(size=12, color="#1a1a1a"),
+                showlegend=False, hoverinfo="skip",
+            ))
+
+    fig.update_layout(
+        title=dict(text="<b>Topic clusters</b><br><sup>3D UMAP · drag to rotate</sup>",
+                   x=0.5, xanchor="center"),
+        template="plotly_white", height=900, width=1280,
+        paper_bgcolor="#F8F9FA",
+        scene=dict(
+            xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False),
+            bgcolor="#FFFFFF",
+        ),
+        legend=dict(orientation="v", yanchor="top", y=1, x=1.01, font=dict(size=10),
+                    bgcolor="rgba(255,255,255,0.8)", bordercolor="#E0E0E0", borderwidth=1),
+        margin=dict(t=90, b=40, r=180),
+    )
+    return fig
+
+
+def plot_clusters(topic_model, cluster_docs: list[str], embeddings, *,
+                  hover_texts: list[str] | None = None, sample: float | None = 0.15,
+                  dimensions: int = 2, show_clouds: bool = True, show_headers: bool = True):
+    """UMAP scatter of discovered clusters — 2D (default) or interactive 3D.
+
+    2D: dual-layer hull clouds + layout annotations at each centroid.
+    3D: convex-hull mesh clouds + centroid text labels (rotate/zoom in the browser).
+
+    Pass short `hover_texts` (e.g. summaries) when `cluster_docs` are long article bodies.
+    `sample` keeps at most that fraction of docs per topic (fine for smoke runs: None = all).
+    """
+    from umap import UMAP
+
+    if dimensions not in (2, 3):
+        raise ValueError(f"dimensions must be 2 or 3, got {dimensions}")
+
+    state = _build_cluster_plot_state(
+        topic_model, cluster_docs, embeddings, hover_texts=hover_texts, sample=sample,
+    )
+    emb_proj = UMAP(
+        n_neighbors=15, n_components=dimensions, min_dist=0.08, metric="cosine", random_state=42,
+    ).fit_transform(state["embeddings"][state["indices"]])
+
+    if dimensions == 3:
+        return _render_clusters_3d(state, emb_proj, show_clouds=show_clouds, show_headers=show_headers)
+    return _render_clusters_2d(state, emb_proj, show_clouds=show_clouds, show_headers=show_headers)
 
 
 def _topic_label_for_plot(topic_model, topic_id: int) -> str:

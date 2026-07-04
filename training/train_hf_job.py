@@ -195,6 +195,27 @@ else:
 trained_model.config.use_cache = True
 
 
+def build_input_text(prompt: str, label: str) -> str:
+    """Format the prompt for generation, per system.
+
+    The LoRA adapter was trained on the raw completion-style prompt (build_prompt), so
+    "finetuned" must keep using it verbatim. The zero-shot "base" system never saw that
+    format in training — fed raw, Qwen3's reasoning prior free-associates into an
+    open-ended English <think> block that often never closes within max_new_tokens (97%
+    of a 100-sample judge run had no Hebrew output at all). Wrapping it in the real chat
+    template with enable_thinking=False closes the think block immediately
+    (`<think>\n\n</think>\n\n`) and puts the model in its actual assistant-response mode,
+    giving the baseline a fair chance to answer in Hebrew instead of an artifact of prompt
+    mismatch. See docs/obsidian/Current Results.md (2026-07-04 failure clustering).
+    """
+    if label != "base":
+        return prompt
+    return tokenizer.apply_chat_template(
+        [{"role": "user", "content": prompt}],
+        tokenize=False, add_generation_prompt=True, enable_thinking=False,
+    )
+
+
 def generate_predictions(label: str) -> list[dict]:
     """Generate test-set summaries in batches of 8 with progress logging.
 
@@ -209,7 +230,7 @@ def generate_predictions(label: str) -> list[dict]:
     batch_size = 8
     for i in range(0, len(test_ds), batch_size):
         batch = test_ds[i:i + batch_size]
-        prompts: list[str] = batch["prompt"]
+        prompts: list[str] = [build_input_text(p, label) for p in batch["prompt"]]
         inputs = tokenizer(
             prompts, return_tensors="pt", truncation=True,
             max_length=2048 - 128, padding=True,

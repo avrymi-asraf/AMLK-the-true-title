@@ -1,13 +1,32 @@
-"""Build docs/failure-examples.md — Google Docs / Word friendly (no tables, no code fences).
+"""Build docs/failure-examples.docx (and .md) from error-analysis JSON.
 
 Run from repo root: python scripts/build_failure_examples.py
+Requires: python-docx (uv pip install python-docx)
 """
 import json
 import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-OUT = ROOT / "docs/failure-examples.md"
+OUT_MD = ROOT / "docs/failure-examples.md"
+OUT_DOCX = ROOT / "docs/failure-examples.docx"
+
+# Lines that introduce a following text block (article / prediction / reference).
+BLOCK_LABELS = {
+    "Article (full):",
+    "Model prediction (full):",
+    "Reference summary (full):",
+}
+
+# Top-level section headings (not examples).
+SECTION_HEADINGS = {
+    "Summary failure rates (n=100 each)",
+    "Multi-header format (pipe-separated digests)",
+    "Reference summaries (ground truth)",
+    "Finetuned v3 predictions",
+    "Finetuned v3 — example failures",
+    "Base v3 (zero-shot, raw prompt — known baseline bug)",
+}
 
 
 def has_hebrew(text: str, n: int = 100) -> bool:
@@ -249,8 +268,98 @@ def main() -> None:
         write_example(lines, e, combo, key)
         lines.append("")
 
-    OUT.write_text("\n".join(lines), encoding="utf-8")
-    print(f"Wrote {OUT} ({len(lines)} lines)")
+    OUT_MD.write_text("\n".join(lines), encoding="utf-8")
+    write_docx(lines, OUT_DOCX)
+    print(f"Wrote {OUT_MD} ({len(lines)} lines)")
+    print(f"Wrote {OUT_DOCX}")
+
+
+def _set_rtl(paragraph) -> None:
+    """Right-align and mark paragraph RTL for Hebrew text."""
+    from docx.enum.text import WD_ALIGN_PARAGRAPH
+    from docx.oxml import OxmlElement
+
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    p_pr = paragraph._element.get_or_add_pPr()
+    bidi = OxmlElement("w:bidi")
+    p_pr.append(bidi)
+
+
+def write_docx(lines: list[str], path: Path) -> None:
+    """Render the plain-text report as a Word file (opens in Google Docs via upload)."""
+    from docx import Document
+
+    doc = Document()
+    title = lines[0] if lines else "Failure Examples"
+    doc.add_heading(title, level=0)
+
+    i = 1
+    while i < len(lines):
+        line = lines[i]
+        if not line.strip():
+            i += 1
+            continue
+
+        if line.startswith("Example "):
+            doc.add_heading(line, level=2)
+            i += 1
+            continue
+
+        if line in SECTION_HEADINGS:
+            doc.add_heading(line, level=1)
+            i += 1
+            continue
+
+        if line in BLOCK_LABELS:
+            p = doc.add_paragraph()
+            p.add_run(line).bold = True
+            i += 1
+            # Collect block until blank line or next structural line.
+            block: list[str] = []
+            while i < len(lines):
+                nxt = lines[i]
+                if not nxt.strip():
+                    break
+                if nxt in BLOCK_LABELS or nxt.startswith("Example ") or nxt in SECTION_HEADINGS:
+                    break
+                if nxt == "What went wrong:":
+                    break
+                block.append(nxt)
+                i += 1
+            text = "\n".join(block).strip()
+            if text:
+                body = doc.add_paragraph(text)
+                if has_hebrew(text):
+                    _set_rtl(body)
+            continue
+
+        if line == "What went wrong:":
+            p = doc.add_paragraph()
+            p.add_run(line).bold = True
+            i += 1
+            while i < len(lines) and lines[i].strip().startswith("•"):
+                doc.add_paragraph(lines[i].strip()[2:].strip(), style="List Bullet")
+                i += 1
+            continue
+
+        if line.startswith("•"):
+            doc.add_paragraph(line[2:].strip(), style="List Bullet")
+            i += 1
+            continue
+
+        if line.startswith("Failure labels:"):
+            p = doc.add_paragraph()
+            p.add_run(line).bold = True
+            i += 1
+            continue
+
+        # Body paragraph (intro, interpretation, notes).
+        body = doc.add_paragraph(line)
+        if has_hebrew(line):
+            _set_rtl(body)
+        i += 1
+
+    doc.save(path)
 
 
 if __name__ == "__main__":

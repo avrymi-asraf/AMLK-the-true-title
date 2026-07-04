@@ -45,6 +45,24 @@ def load_finetuned_model(adapter_repo: str, model_id: str = MODEL_ID, quantize: 
     return model, tokenizer, device
 
 
+def build_input_text(tokenizer, prompt: str, label: str) -> str:
+    """Format the prompt for generation, per system. Mirrors train_hf_job.py:build_input_text —
+    keep the two in sync by hand (that script can't import repo code).
+
+    The LoRA adapter was trained on the raw completion-style prompt, so "finetuned" keeps
+    using it verbatim. The zero-shot "base" system never saw that format in training — fed
+    raw, Qwen3's reasoning prior free-associates into an open-ended English <think> block
+    that often never closes. The real chat template with enable_thinking=False closes the
+    think block immediately, giving the baseline a fair chance to answer in Hebrew.
+    """
+    if label != "base":
+        return prompt
+    return tokenizer.apply_chat_template(
+        [{"role": "user", "content": prompt}],
+        tokenize=False, add_generation_prompt=True, enable_thinking=False,
+    )
+
+
 def generate_summaries(
     model, tokenizer, dataset, variant: str, device,
     batch_size: int = 8, max_new_tokens: int = 256, label: str = "finetuned",
@@ -61,7 +79,7 @@ def generate_summaries(
     rows = []
     for i in range(0, len(dataset), batch_size):
         batch = dataset[i:i + batch_size]
-        prompts: list[str] = batch["prompt"]
+        prompts: list[str] = [build_input_text(tokenizer, p, label) for p in batch["prompt"]]
         inputs = tokenizer(
             prompts, return_tensors="pt", truncation=True,
             max_length=2048 - 128, padding=True,

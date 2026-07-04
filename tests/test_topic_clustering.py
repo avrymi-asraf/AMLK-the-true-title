@@ -176,6 +176,36 @@ def test_bertopic_reduce_topics_uses_topics_on_model_not_second_arg():
     assert "topics" not in params
 
 
+def test_plot_clusters_3d_uses_scatter3d():
+    pytest.importorskip("umap")
+    import numpy as np
+    from unittest.mock import MagicMock
+
+    from evaluation.topic_clustering import plot_clusters
+
+    topic_model = MagicMock()
+    topic_model.topics_ = [0] * 30 + [1] * 30
+    topic_model.custom_labels_ = ["נושא א", "נושא ב"]
+    rng = np.random.default_rng(0)
+    embeddings = np.concatenate([
+        rng.normal(scale=0.3, size=(30, 16)),
+        rng.normal(scale=0.3, size=(30, 16)) + 4.0,
+    ])
+    hover = [f"doc{i}" for i in range(60)]
+
+    fig = plot_clusters(topic_model, hover, embeddings, sample=1.0, dimensions=3)
+
+    assert fig is not None
+    assert fig.layout.scene is not None
+    trace_names = {type(t).__name__ for t in fig.data}
+    assert "Scatter3d" in trace_names
+    header_text = " ".join(
+        t.text[0] for t in fig.data if type(t).__name__ == "Scatter3d" and t.mode == "text"
+    )
+    assert "נושא א" in header_text
+    assert "articles" in header_text
+
+
 def test_plot_clusters_adds_topic_header_annotations():
     pytest.importorskip("umap")
     import numpy as np

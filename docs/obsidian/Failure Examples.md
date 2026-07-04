@@ -1,5 +1,7 @@
 # Failure Examples
 
-Canonical file (Google Docs / Word friendly — paste or File → Import): **[failure-examples.md](../failure-examples.md)**
+Canonical file for Google Docs: upload **[failure-examples.docx](../failure-examples.docx)** (File → Open in Google Docs).
 
-Regenerate with: `python scripts/build_failure_examples.py`
+Plain-text copy: [failure-examples.md](../failure-examples.md)
+
+Regenerate both: `python scripts/build_failure_examples.py`
