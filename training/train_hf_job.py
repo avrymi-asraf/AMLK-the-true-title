@@ -13,8 +13,9 @@
 # ]
 # ///
 """
-Pipeline step 3 (remote variant): self-contained QLoRA fine-tuning of Qwen/Qwen3-2B,
-run on HuggingFace Jobs. Submitted inline by training/train.py --submit-hf; never run
+Pipeline step 3 (remote variant): self-contained QLoRA fine-tuning of
+dicta-il/DictaLM-3.0-1.7B-Base, run on HuggingFace Jobs. Submitted inline by
+training/train.py --submit-hf; never run
 directly. All settings arrive as environment variables (the repo is NOT uploaded with
 the script). Downloads the processed splits from the Hub, trains with completion_only_loss,
 logs to Weights & Biases, and pushes the trained adapter back to the Hub.
@@ -51,14 +52,18 @@ INFERENCE_ONLY = os.environ.get("INFERENCE_ONLY", "0") == "1"
 # Suffix appended to pushed prediction filenames, e.g. "-v2" so a re-decode of an existing
 # adapter doesn't clobber the v1 predictions and the two can be scored side by side.
 PRED_SUFFIX = os.environ.get("PRED_SUFFIX", "")
-# Full-run epoch count. v1 used 1 epoch (undertrained — the model never learned to stop);
-# 3 epochs is the default for the abstractive-generation retrain. Overridable via --epochs.
+# Full-run epoch count; a single epoch risks the model never learning to stop generating
+# cleanly, so 3 is the default for abstractive-generation training. Overridable via --epochs.
 EPOCHS = int(os.environ.get("EPOCHS") or 3)
-MODEL_ID = "Qwen/Qwen3-2B"
+# Base checkpoint to fine-tune. Overridable via --base-model to swap in a different base
+# (e.g. to compare against Qwen/Qwen3-2B). This script is submitted inline and cannot import
+# training/config.py, so the default is duplicated here on purpose — keep the two in sync.
+MODEL_ID = os.environ.get("BASE_MODEL") or "dicta-il/DictaLM-3.0-1.7B-Base"
 os.environ.setdefault("WANDB_PROJECT", os.environ.get("WANDB_PROJECT", "amlk-hebrew-summarization"))
 
 mode = "inference-only" if INFERENCE_ONLY else f"train+infer  Method={METHOD}"
 print(f"Mode: {mode}  Variant: {VARIANT}  Smoke: {SMOKE_TEST}  Mini: {MINI_TEST}")
+print(f"Base model: {MODEL_ID}")
 print(f"Dataset: {DATASET_REPO}  ->  Output: {OUTPUT_REPO}")
 
 local_data = Path("./data")
@@ -110,8 +115,8 @@ if INFERENCE_ONLY:
     device = next(trained_model.parameters()).device
     use_lora = True  # adapter is always a LoRA adapter
 else:
-    # Mirrors training/config.py:LoRAConfig — r=32 + MLP projections for generation capacity
-    # (v1's attention-only r=16 underfit: repetition loops and lead-copying).
+    # Mirrors training/config.py:LoRAConfig — r=32 + MLP projections (not just attention) for
+    # enough capacity to generate abstractively rather than degenerate into lead-copying/looping.
     peft_config = LoraConfig(
         r=32, lora_alpha=64, lora_dropout=0.05,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
@@ -167,8 +172,7 @@ else:
         gradient_checkpointing=True,
         # TRL's SFTTrainer auto-appends tokenizer.eos_token to each completion (non-conversational
         # prompt/completion path), and completion_only_loss keeps that EOS inside the loss mask, so
-        # the model is trained to stop. v1 ran on for 256 tokens because of 1-epoch undertraining +
-        # greedy decode, not a missing EOS — fixed by EPOCHS=3 and the decode config above.
+        # the model is trained to stop rather than running to the generation cap.
         completion_only_loss=True,
         max_length=2048,
         report_to="wandb",
@@ -184,6 +188,12 @@ else:
         peft_config=peft_config,
     )
 
+    if use_lora:
+        # Some base models (e.g. Qwen3-2B's hybrid attention) only have q/k/v/o in a subset of
+        # layers, so LoRAConfig's target_modules can silently cover far fewer layers than
+        # expected. Print the count so a base-model swap can never regress that silently.
+        trainer.model.print_trainable_parameters()
+
     print("Starting training...")
     trainer.train()
     trainer.push_to_hub()
@@ -198,17 +208,20 @@ trained_model.config.use_cache = True
 def build_input_text(prompt: str, label: str) -> str:
     """Format the prompt for generation, per system.
 
-    The LoRA adapter was trained on the raw completion-style prompt (build_prompt), so
-    "finetuned" must keep using it verbatim. The zero-shot "base" system never saw that
-    format in training — fed raw, Qwen3's reasoning prior free-associates into an
-    open-ended English <think> block that often never closes within max_new_tokens (97%
-    of a 100-sample judge run had no Hebrew output at all). Wrapping it in the real chat
-    template with enable_thinking=False closes the think block immediately
+    The LoRA adapter is trained on the raw completion-style prompt (build_prompt), so
+    "finetuned" must keep using it verbatim. The zero-shot "base" system never sees that
+    format in training — on a chat-capable model, feeding it the raw prompt risks the
+    model's reasoning prior free-associating into an open-ended <think> block that never
+    closes within max_new_tokens, or drifting into the wrong language. Wrapping it in the
+    real chat template with enable_thinking=False closes the think block immediately
     (`<think>\n\n</think>\n\n`) and puts the model in its actual assistant-response mode,
-    giving the baseline a fair chance to answer in Hebrew instead of an artifact of prompt
-    mismatch. See docs/obsidian/Current Results.md (2026-07-04 failure clustering).
+    giving the baseline a fair chance instead of an artifact of prompt mismatch.
+
+    Pure base checkpoints (e.g. dicta-il/DictaLM-3.0-1.7B-Base) ship no chat template at
+    all — there is no assistant mode to enter, so the raw completion prompt is the only
+    option, and the zero-shot baseline should be expected to drift off-task/off-language.
     """
-    if label != "base":
+    if label != "base" or not tokenizer.chat_template:
         return prompt
     return tokenizer.apply_chat_template(
         [{"role": "user", "content": prompt}],
@@ -237,11 +250,10 @@ def generate_predictions(label: str) -> list[dict]:
         ).to(device)
         with torch.no_grad():
             outs = trained_model.generate(
-                # 256 covers p99 of reference-summary lengths (p95=151, p99=187 tokens);
-                # the old cap of 128 truncated ~9% of summaries mid-sentence.
-                # no_repeat_ngram_size + repetition_penalty kill the greedy degeneration
-                # loops (46% of v1 finetuned outputs); min_new_tokens + explicit eos let the
-                # model stop cleanly instead of running to the cap.
+                # 256 covers p99 of reference-summary lengths (p95=151, p99=187 tokens).
+                # no_repeat_ngram_size + repetition_penalty guard against greedy-decode
+                # degeneration loops; min_new_tokens + explicit eos let the model stop
+                # cleanly instead of running to the cap.
                 **inputs, max_new_tokens=256, min_new_tokens=16, do_sample=False,
                 no_repeat_ngram_size=3, repetition_penalty=1.2,
                 eos_token_id=tokenizer.eos_token_id,
@@ -264,7 +276,7 @@ api = HfApi(token=os.environ.get("HF_TOKEN"))
 
 def generate_and_push(label: str):
     """Generate one system's predictions and push the file immediately — a later
-    timeout must never destroy finished work (see the 2026-06-12 post-mortem)."""
+    job timeout must never destroy finished work."""
     rows = generate_predictions(label)
     path = Path(f"predictions-{label}{PRED_SUFFIX}.jsonl")
     path.write_text("\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8")

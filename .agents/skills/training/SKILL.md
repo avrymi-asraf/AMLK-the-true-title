@@ -1,6 +1,6 @@
 ---
 name: training
-description: AMLK training process — fine-tune Qwen3-2B for Hebrew summarization (qlora|lora|full) locally or on HF Jobs, with wandb logging and adapter push to the Hub.
+description: AMLK training process — fine-tune dicta-il/DictaLM-3.0-1.7B-Base for Hebrew summarization (qlora|lora|full) locally or on HF Jobs, with wandb logging and adapter push to the Hub.
 ---
 
 # AMLK Training Process
@@ -15,7 +15,8 @@ self-contained `training/train_hf_job.py` is the same logic packaged for Hugging
 1. Load the processed Arrow splits from `outputs/data/processed/<variant>/{train,val}`.
    Each row is a `(prompt, completion)` pair, so SFT uses `completion_only_loss=True`
    (loss on the summary only — the model learns to generate the summary, not restate the article).
-2. Load Qwen3-2B: 4-bit NF4 (`qlora`) or bf16 (`lora`, `full`).
+2. Load the base model (`dicta-il/DictaLM-3.0-1.7B-Base` by default, overridable via
+   `--base-model`): 4-bit NF4 (`qlora`) or bf16 (`lora`, `full`).
 3. `SFTTrainer` with `peft_config` (LoRA for qlora/lora, `None` for full) +
    `processing_class=tokenizer`.
 4. wandb logs every step (project `amlk-hebrew-summarization`, group = variant).
@@ -40,11 +41,10 @@ python -m training.train --submit-hf --hf-user avreymi              # a10g-large
 python -m training.train --submit-hf --hf-user avreymi --inference-only  # regen predictions from pushed adapter (a10g-small, 1h)
 ```
 
-> **Cost note (2026-06-12 post-mortem):** a10g-small and a10g-large have the **same 24 GB
-> A10G GPU** — large only adds vCPUs/RAM ($1.50/h vs $1.00/h). For this GPU-bound 2B job,
-> prefer a10g-small for full runs, and prefer `--method lora` (bf16) over qlora — the 2B
-> model doesn't need quantization on 24 GB and nf4 dequant slows every step ~20-40%.
-> Full analysis: `docs/2026-06-12-qlora-training-job-postmortem.md`.
+> **Cost note:** a10g-small and a10g-large have the **same 24 GB A10G GPU** — large only adds
+> vCPUs/RAM ($1.50/h vs $1.00/h). For a ~1.7-2B-parameter model this job is GPU-bound, so prefer
+> a10g-small for full runs, and prefer `--method lora` (bf16) over qlora — a model this size
+> doesn't need quantization on 24 GB and nf4 dequant slows every step ~20-40%.
 
 `train.py` does keep a local code path (`--method ... --output ...`) for machines with a real
 GPU, but it is not used here.
@@ -98,37 +98,24 @@ Monitor URL: `https://huggingface.co/jobs/avreymi/<job-id>`. wandb dashboard:
 - The Hub adapter is the **LoRA adapter only** (not merged into the base). Evaluation loads
   base 4-bit + `PeftModel.from_pretrained(model, adapter)` — see `evaluation/predict.py`.
 - All training and model inference run on HF Jobs — never on the local 8 GB GPU (it freezes).
-- **Qwen3-2B is a HYBRID-attention model** (`model_type: qwen3_5`): 24 text layers = 18
-  linear-attention (Gated DeltaNet: `linear_attn.{in_proj_qkv,in_proj_z,out_proj,...}`) + 6
-  full-attention (`self_attn.{q,k,v,o}_proj`), plus an unused vision tower. The current LoRA
-  `target_modules=["q_proj","k_proj","v_proj","o_proj"]` therefore attaches to **only 6 of 24
-  layers** (1.48 M trainable params, 0.07% — the 2.96 MB adapter is the tell). Before the next
-  training run, extend `target_modules` to include `in_proj_qkv`, `in_proj_z`, `out_proj`,
-  `gate_proj`, `up_proj`, `down_proj` (≈15.6 M params) and A/B it at mini-test scale. Do NOT
-  use PEFT's `"all-linear"` — it can catch the vision tower and `mtp` head. See post-mortem §5.1.
-- The same hybrid layers have an optimized kernel path that needs `flash-linear-attention` and
-  `causal-conv1d` installed — they are missing from the job deps, so transformers logs a
-  "fast path is not available" warning and falls back to slow torch kernels. Add them to the
-  PEP 723 block and benchmark in a mini-test before the probe runs.
+- **If you swap `--base-model` to a hybrid-attention Qwen3 variant** (e.g. `Qwen/Qwen3-2B`,
+  `model_type: qwen3_5`): those models mix linear-attention (Gated DeltaNet) and full-attention
+  layers, so the default LoRA `target_modules=["q_proj","k_proj","v_proj","o_proj",...]` only
+  attaches to the full-attention subset — check `print_trainable_parameters()` after the swap
+  (a suspiciously small trainable% / adapter size is the tell) before trusting the run. Do NOT
+  use PEFT's `"all-linear"` on such models — it can catch the vision tower and `mtp` head.
+  `dicta-il/DictaLM-3.0-1.7B-Base` (the default) is a plain dense `Qwen3ForCausalLM` — this
+  does not apply to it; LoRA covers all layers out of the box.
 - **Cloud-job crash economics:** any artifact not yet pushed has zero value when the timeout
-  hits. `train_hf_job.py` pushes each `predictions-*.jsonl` immediately after its loop (since
-  d8bf268) — keep it that way. Generation uses `max_new_tokens=256` (p99 of reference summaries
-  is 187 tokens; the old 128 cap truncated ~9%).
+  hits. `train_hf_job.py` pushes each `predictions-*.jsonl` immediately after its loop — keep
+  it that way. Generation uses `max_new_tokens=256` (p99 of reference summaries is 187 tokens).
 - For wandb specifics (axis alignment, downloading curves), see the global `wandb-for-trl` skill.
 
 ## Completed runs
 
 <!-- Append run IDs + wandb URLs here as runs complete. -->
-- 2026-06-12 smoke (qlora-whole, 10 steps): HF job `6a2bc7558806fe3ef5852983` COMPLETED —
-  verified train → eval → predict (finetuned + zero-shot base via `disable_adapter`) → push to
-  `avreymi/amlk-qwen3-2b-sft`. Surfaced + fixed: secret literal-401, run_uv_job path, eval-batch OOM,
-  English-output prompt, and the long-article truncation→nan-eval-loss bug.
-- 2026-06-12 full (qlora-whole, 1 epoch): HF job `6a2bc974822d86c524179991` (a10g-large, 6h) —
-  **training succeeded** (500 steps, 3h54m, eval_loss 1.777; adapter on `avreymi/amlk-qwen3-2b-sft`)
-  but the job was CANCELED at the 6h timeout inside an unbatched, push-at-the-end prediction loop,
-  losing all predictions. Post-mortem: `docs/2026-06-12-qlora-training-job-postmortem.md`.
-- 2026-06-12 mini (qlora-whole, 100 examples / 5 epochs): HF job `6a2bcd887c68f455eff13113` (a10g-small, 1h) — validation run; check wandb for real loss curves and finite eval_loss.
-- 2026-06-12 inference-only rerun #1: `6a2c2088871c005b5352b4ac` — canceled at ~24m; its 30-min
-  timeout could not fit 2,000 generations and it still pushed only at the end.
-- 2026-06-12 inference-only rerun #2: `6a2c26ea7c68f455eff13d1c` (a10g-small, 1h) — patched
-  script: incremental per-file pushes, `max_new_tokens=256`, fixed progress prints.
+- 2026-07-09 smoke (lora, `dicta-il/DictaLM-3.0-1.7B-Base`, 10 steps): HF job `6a4f43e41fba25b8ea3b2fe1`
+  COMPLETED in 4m03s (a10g-small) — validated the pipeline end-to-end on the new base model:
+  `print_trainable_parameters()` showed all 28 layers covered (34,865,152 / 1.9861%), loss and
+  eval_loss both finite and decreasing, adapter + predictions pushed to
+  `avreymi/amlk-dictalm3-1.7b-smoke`. No full training run has happened yet.

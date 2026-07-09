@@ -38,7 +38,7 @@ test cannot tell you whether a summary is faithful or fluent; do not try to make
 
 ## Heavy tests (model load / live API) — always opt-in
 
-Any test that loads Qwen3-2B or calls Gemini **must** be gated:
+Any test that loads the base model or calls Gemini **must** be gated:
 
 ```python
 @pytest.mark.skipif(

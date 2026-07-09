@@ -1,5 +1,5 @@
 """
-Pipeline step 3 of 3: fine-tune Qwen/Qwen3-2B on Hebrew summarization.
+Pipeline step 3 of 3: fine-tune dicta-il/DictaLM-3.0-1.7B-Base on Hebrew summarization.
 One entry point for all three regimes the paper compares — --method qlora | lora | full
 — differing only by the small METHOD_PRESETS deltas in config.py. Trains with the trl
 SFT trainer using completion_only_loss=True (loss on the summary only), logs every step
@@ -34,7 +34,7 @@ from training.config import (
 
 
 def build_model_and_tokenizer(method: str, hf_token: str):
-    """Load Qwen3-2B for the chosen regime: 4-bit (qlora) or bf16 (lora, full)."""
+    """Load the base model for the chosen regime: 4-bit (qlora) or bf16 (lora, full)."""
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
@@ -87,13 +87,18 @@ def wandb_api_key() -> str:
 
 def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
                   smoke_test: bool, mini_test: bool = False, inference_only: bool = False,
-                  pred_suffix: str = "", epochs: int = 0):
+                  pred_suffix: str = "", epochs: int = 0, base_model: str = "",
+                  output_repo: str = "", skip_data_upload: bool = False):
     """Upload the processed splits to the Hub and submit train_hf_job.py to HF Jobs.
 
     inference_only=True skips dataset re-upload and training; loads the already-pushed
     adapter and regenerates predictions only (fast: a10g-small, 1h timeout). pred_suffix
     (e.g. "-v2") keeps a re-decode from clobbering the v1 predictions. epochs overrides the
-    default epoch count (0 = use the job's default).
+    default epoch count (0 = use the job's default). base_model swaps the base checkpoint
+    (defaults to config.MODEL_ID); output_repo must then be set too, so a different base
+    model never pushes its adapter over another one's repo. skip_data_upload reuses the
+    splits already on the Hub (the processed data is base-model independent — it stores
+    text, which SFTTrainer tokenizes at train time).
     """
     import warnings
     warnings.filterwarnings("ignore", category=UserWarning)
@@ -101,9 +106,9 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
 
     api = HfApi(token=hf_token)
     data_repo = dataset_repo(hf_user, variant)
-    out_repo = model_repo(hf_user, variant)
+    out_repo = output_repo or model_repo(hf_user, variant)
 
-    if not inference_only:
+    if not inference_only and not skip_data_upload:
         data_dir = Path(PROCESSED_DIR) / variant
         if not data_dir.exists():
             print(f"ERROR: {data_dir} not found. Run: python data/preprocess.py --variant {variant}", file=sys.stderr)
@@ -129,6 +134,8 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
 
     tag = f"{label} " if label else ""
     print(f"Submitting {tag}{method} job (flavor={flavor}, timeout={timeout})...")
+    print(f"  Base model: {base_model or MODEL_ID}")
+    print(f"  Output repo: {out_repo}")
     job = api.run_uv_job(
         script=str(script_path),
         flavor=flavor,
@@ -137,6 +144,7 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
         env={
             "METHOD": method,
             "VARIANT": variant,
+            "BASE_MODEL": base_model or MODEL_ID,
             "DATASET_REPO": data_repo,
             "OUTPUT_REPO": out_repo,
             "WANDB_PROJECT": WANDB_PROJECT,
@@ -179,7 +187,7 @@ def train_local(method: str, variant: str, output_dir: Path, max_steps: int,
         project=WANDB_PROJECT,
         name=run_name,
         group=variant,
-        tags=[method, variant, "qwen3-2b"],
+        tags=[method, variant, "dictalm3-1.7b"],
         config={"model_id": MODEL_ID, "method": method, "variant": variant,
                 "max_length": max_length, **preset},
     )
@@ -242,7 +250,7 @@ def train_local(method: str, variant: str, output_dir: Path, max_steps: int,
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Fine-tune Qwen3-2B for Hebrew summarization")
+    parser = argparse.ArgumentParser(description="Fine-tune DictaLM-3.0-1.7B-Base for Hebrew summarization")
     parser.add_argument("--method", choices=list(METHOD_PRESETS), default="qlora")
     parser.add_argument("--variant", choices=("whole", "lead", "body"), default="whole")
     parser.add_argument("--output", default=None, help="Local checkpoint dir (default: outputs/checkpoints/<method>-<variant>)")
@@ -257,6 +265,9 @@ def main():
     parser.add_argument("--inference-only", action="store_true", help="With --submit-hf: skip training, regenerate predictions from the already-pushed adapter (fast: a10g-small, 1h)")
     parser.add_argument("--pred-suffix", default="", help="With --submit-hf: suffix for pushed prediction files (e.g. -v2) so a re-decode doesn't clobber v1")
     parser.add_argument("--epochs", type=int, default=0, help="With --submit-hf: number of training epochs (0 = job default of 3)")
+    parser.add_argument("--base-model", default="", help=f"Base checkpoint to fine-tune (default: {MODEL_ID}). Requires --output-repo.")
+    parser.add_argument("--output-repo", default="", help="Hub repo for the adapter (default: derived from --hf-user/--variant)")
+    parser.add_argument("--skip-data-upload", action="store_true", help="With --submit-hf: reuse the splits already on the Hub instead of re-uploading")
     args = parser.parse_args()
 
     hf_token = os.environ.get("HF_TOKEN", "")
@@ -268,9 +279,15 @@ def main():
         if not args.hf_user:
             print("ERROR: --hf-user required with --submit-hf", file=sys.stderr)
             sys.exit(1)
+        # Without this, a swapped base model would push its adapter over the default repo's.
+        if args.base_model and not args.output_repo:
+            print("ERROR: --base-model requires --output-repo (refusing to overwrite "
+                  f"{model_repo(args.hf_user, args.variant)})", file=sys.stderr)
+            sys.exit(1)
         submit_hf_job(args.method, args.variant, hf_token, args.hf_user,
                       args.smoke_test, args.mini_test, args.inference_only,
-                      args.pred_suffix, args.epochs)
+                      args.pred_suffix, args.epochs, args.base_model,
+                      args.output_repo, args.skip_data_upload)
         return
 
     if args.push_to_hub and not args.hf_user:

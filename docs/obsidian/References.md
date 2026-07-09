@@ -21,9 +21,9 @@
 
 | Artifact | ID |
 |----------|-----|
-| Base model | `Qwen/Qwen3-2B` |
+| Base model | `dicta-il/DictaLM-3.0-1.7B-Base` |
 | HeSum dataset | `biunlp/HeSum` |
-| Trained adapter | `avreymi/amlk-qwen3-2b-sft` |
+| Trained adapter | `avreymi/amlk-dictalm3-1.7b-sft` |
 | Training data (processed) | `avreymi/amlk-training-data` |
 | HeSum mLongT5 (paper) | `biunlp/mT5LongHeSum-large` |
 | AlephBERT | `onlplab/alephbert-base` |

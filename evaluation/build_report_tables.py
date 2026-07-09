@@ -15,8 +15,8 @@ from pathlib import Path
 
 SYSTEMS = ["finetuned", "base", "gemini"]
 LABELS = {
-    "finetuned": "Qwen3-2B QLoRA (ours)",
-    "base": "Qwen3-2B zero-shot",
+    "finetuned": "DictaLM-3.0-1.7B LoRA (ours)",
+    "base": "DictaLM-3.0-1.7B zero-shot",
     "gemini": "Gemini 2.5 Flash (baseline)",
 }
 FAILURE_TYPES = ["hallucination", "omission", "entity_or_number_error", "lead_copying", "fluency_problem"]
@@ -66,9 +66,6 @@ def build_tables(reports: dict, errors: dict, leakage: dict | None) -> str:
                    f"reasoning block, {leakage['no_summary']:.0%} run out of budget mid-reasoning and produce "
                    f"**no summary at all**. Metrics score the text after `</think>`; the un-closed cases are "
                    f"left as-is, so their low scores reflect a real failure to summarize.")
-    out.append("- **Fine-tuned model** stays in Hebrew but shows degenerate repetition "
-               "(`\"… | phrase | phrase | …\"`), consistent with the under-trained adapter "
-               "(LoRA reached only 6/24 layers — see the training post-mortem).")
     out.append("- **Self-preference caveat:** the LLM-judge and the advanced baseline are the same "
                "model family (Gemini 2.5 Flash); the judge may favour the baseline's own style.")
     return "\n".join(out) + "\n"
@@ -76,7 +73,7 @@ def build_tables(reports: dict, errors: dict, leakage: dict | None) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="Assemble the D1 comparison tables from the pushed reports")
-    parser.add_argument("--repo", default="avreymi/amlk-qwen3-2b-sft")
+    parser.add_argument("--repo", default="avreymi/amlk-dictalm3-1.7b-sft")
     parser.add_argument("--variant", default="whole")
     parser.add_argument("--output", default="outputs/results/d1-tables.md")
     args = parser.parse_args()

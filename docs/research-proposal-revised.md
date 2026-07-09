@@ -16,7 +16,7 @@ the data before running, and adopt the HeSum recommendations for ROUGE in Hebrew
 
 Abstract - We propose AMLK, a study of instruction-tuned abstractive summarization for Hebrew news
 articles, a morphologically rich, medium-resource setting under-represented in current models. We
-fine-tune Qwen/Qwen3-2B on professional Hebrew article-summary pairs, compare three fine-tuning
+fine-tune dicta-il/DictaLM-3.0-1.7B-Base on professional Hebrew article-summary pairs, compare three fine-tuning
 regimes (QLoRA, LoRA, full FT), benchmark against a stronger model baseline and a simple Lead-N
 baseline under the same metrics, and probe whether the trained model aggregates global context or
 latches onto the lead. The shortcut probe is an inference-time ablation on a single whole-article
@@ -36,7 +36,7 @@ and IAHLT summarization_he provide professional news article-summary pairs; HeSu
 limits of ROUGE under Hebrew morphology and recommends morphological normalization before scoring.
 LoRA and QLoRA make 2-7B LLM fine-tuning feasible on a single GPU.
 
-Models - We use Qwen/Qwen3-2B as the primary model. Under identical data and hyperparameters we
+Models - We use dicta-il/DictaLM-3.0-1.7B-Base as the primary model. Under identical data and hyperparameters we
 compare QLoRA (~8 GB VRAM), LoRA bf16 (~16 GB), and full FT on HuggingFace Jobs. We report two
 reference points: (1) a simple extractive Lead-N baseline (first N sentences as the summary), the
 standard lead-bias lower bound for news; and (2) an advanced-model baseline - a stronger model
@@ -67,7 +67,7 @@ summarization literature (hallucination, omission, entity/number errors, lead co
 reporting rates by model - following the finding that published systems often fail on faithfulness
 despite high ROUGE.
 
-Main experiment - Three fine-tuning regimes vs zero-shot Qwen3-2B, vs the Lead-N baseline, and vs
+Main experiment - Three fine-tuning regimes vs zero-shot DictaLM-3.0-1.7B-Base, vs the Lead-N baseline, and vs
 the advanced-model baseline, all under the metric battery above.
 
 Positional-shortcut probe (inference-time ablation) - We train a single model on whole articles and

@@ -25,11 +25,9 @@ Research question: does the fine-tuned model **aggregate global context** or **l
 - `data/preprocess.py` → `--variant`
 - `evaluation/predict.py` → `--variant` for Gemini baseline
 
-## Empirical signal from current run
+## Where to look once trained
 
-From [[Prediction Failure Modes]]: **143/1000** finetuned preds have >60% word overlap with article lead — quantify as **lead_copying** rate in error analysis, not only a bug.
-
-HeSum gold summaries are **journalistic subheadings** — often lead-aligned by construction (`TODO.md` B'.4 data characterization).
+`evaluation/error_analysis.py`'s `lead_copying` rate (word overlap between prediction and article lead) is the metric to watch once a model is trained — HeSum gold summaries are **journalistic subheadings**, often lead-aligned by construction (`TODO.md` section F).
 
 ## Training-distribution experiment (optional F.7)
 
@@ -39,4 +37,4 @@ Train two whole-article models:
 
 Compare inference-time lead reliance between them.
 
-Related: [[HeSum Paper Insights]], [[Fix Plan#Phase 3]], `TODO.md` section F
+Related: [[HeSum Paper Insights]], `TODO.md` section F

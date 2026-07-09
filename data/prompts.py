@@ -8,10 +8,10 @@ Execution environment: imported locally by preprocess and predict.
 """
 import re
 
-# The "in Hebrew" instruction matters for the zero-shot baselines (base Qwen, Gemini):
-# without it they summarize in English and score near-zero against the Hebrew references.
-# "in up to 3 sentences" caps length (borrowed from HeSum's GPT prompt, Figure 2) — v1 ran on
-# for hundreds of tokens; an explicit budget anchors the model toward reference-length summaries.
+# The "in Hebrew" instruction matters for the zero-shot baselines (base model, Gemini):
+# without it they risk summarizing in English and scoring near-zero against the Hebrew
+# references. "in up to 3 sentences" caps length (borrowed from HeSum's GPT prompt, Figure 2)
+# — an explicit budget anchors the model toward reference-length summaries instead of running on.
 PROMPT_TEMPLATE = "Summarize the following Hebrew text in up to 3 sentences. Write the summary in Hebrew:\n\n{text}\n\nSummary:\n"
 
 

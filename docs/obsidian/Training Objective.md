@@ -23,36 +23,25 @@ The model is **not** trained on ROUGE, BERTScore, or judge scores.
 
 Logged to wandb; `eval/loss` summary = min.
 
-## What we do NOT do (gap vs HeSum mLongT5)
+## Gap vs HeSum mLongT5
 
 | Practice | AMLK now | HeSum mLongT5 |
 |----------|----------|---------------|
-| Early stopping | No | Yes, on **ROUGE-1** |
-| `load_best_model_at_end` | No | Implicit via early stop |
+| Early stopping / best-checkpoint selection | Yes — `load_best_model_at_end` on `eval_loss` (cheap analogue) | Yes, on **ROUGE-1** |
 | Generate during training | No | Yes (seq2seq eval) |
-| Checkpoint selection metric | Last epoch wins | Best ROUGE-1 |
 
-HF job hardcodes **`num_train_epochs=1`** despite `TrainingConfig.num_train_epochs=3` in `training/config.py`.
+Avoid ROUGE-based early stopping on HF Jobs unless `eval_loss` selection proves insufficient —
+generation on val every N steps is expensive.
 
-## Recommended addition (team consensus)
-
-Keep CE loss for SFT, but add:
-
-```python
-load_best_model_at_end=True
-metric_for_best_model="eval_loss"
-greater_is_better=False
-```
-
-Cheap (loss already computed). Avoid ROUGE-based early stopping on HF Jobs unless decode + retrain aren’t enough — generation on val every N steps is expensive.
-
-## Why loss and judge diverge
+## Why loss and judge can diverge
 
 Optimizing token likelihood does not teach:
 - when to emit EOS
-- how long to write (refs ~25 words, preds ~89 words)
+- how long to write vs. reference length
 - anti-repetition at decode time
 
-Hence high ROUGE + low faithfulness. See [[Prediction Failure Modes]].
+Watch for this gap once real training runs and judge scores exist — it's why the decode config
+(`no_repeat_ngram_size`, `repetition_penalty`, explicit EOS) and `load_best_model_at_end` are
+already wired into `training/train_hf_job.py` rather than left for a later fix pass.
 
-Related: [[Fix Plan#Phase 2]], [[HeSum Paper Insights#ROUGE vs human eval]]
+Related: [[HeSum Paper Insights#ROUGE vs human eval]]

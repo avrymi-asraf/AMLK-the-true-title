@@ -1,12 +1,12 @@
 """
-Evaluation pipeline, GPU inference helpers: load the fine-tuned Qwen3-2B + LoRA adapter and
+Evaluation pipeline, GPU inference helpers: load the fine-tuned base model + LoRA adapter and
 generate test-set summaries. This is the importable twin of the generation block inside
 training/train_hf_job.py (which is a self-contained cloud script and cannot import repo code).
 It exists so the evaluation-observation notebook (notebooks/evaluation_observation.ipynb) can
 watch the *real* model produce summaries live, using the same code path the HF job uses.
 
 Execution environment: remote GPU only (Colab T4 / HF Jobs) — NEVER call locally; this machine's
-8 GB GPU freezes on a Qwen3-2B load. Keep generate_summaries() in sync with
+8 GB GPU freezes on a model load of this size. Keep generate_summaries() in sync with
 train_hf_job.py:generate_predictions().
 """
 import torch
@@ -49,13 +49,15 @@ def build_input_text(tokenizer, prompt: str, label: str) -> str:
     """Format the prompt for generation, per system. Mirrors train_hf_job.py:build_input_text —
     keep the two in sync by hand (that script can't import repo code).
 
-    The LoRA adapter was trained on the raw completion-style prompt, so "finetuned" keeps
-    using it verbatim. The zero-shot "base" system never saw that format in training — fed
-    raw, Qwen3's reasoning prior free-associates into an open-ended English <think> block
-    that often never closes. The real chat template with enable_thinking=False closes the
-    think block immediately, giving the baseline a fair chance to answer in Hebrew.
+    The LoRA adapter is trained on the raw completion-style prompt, so "finetuned" keeps
+    using it verbatim. The zero-shot "base" system never sees that format in training — on a
+    chat-capable model, feeding it raw risks the reasoning prior free-associating into an
+    open-ended <think> block that never closes. The real chat template with
+    enable_thinking=False closes the think block immediately, giving the baseline a fairer
+    chance. Pure base checkpoints (e.g. dicta-il/DictaLM-3.0-1.7B-Base) ship no chat template
+    at all, so there is no assistant mode to enter and the raw prompt is the only option.
     """
-    if label != "base":
+    if label != "base" or not tokenizer.chat_template:
         return prompt
     return tokenizer.apply_chat_template(
         [{"role": "user", "content": prompt}],

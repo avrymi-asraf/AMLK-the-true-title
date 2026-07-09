@@ -19,7 +19,7 @@ GEMINI_TIMEOUT = 60
 
 
 def strip_think(text: str) -> str:
-    """Drop Qwen3 reasoning blocks so metrics score the summary, not the reasoning.
+    """Drop <think>...</think> reasoning blocks so metrics score the summary, not the reasoning.
 
     Only well-formed (closed) blocks are removed. A truncated, unclosed block is left as-is
     so its low score reflects that real failure instead of being hidden.

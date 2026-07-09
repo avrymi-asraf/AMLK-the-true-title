@@ -5,7 +5,7 @@ Implements `docs/ANLP Project abstract.md`, `docs/research-proposal.md`, and the
 
 ## A. Training pipeline — DONE
 - [x] A.1 Download datasets (HeSum 10,000 records; IAHLT inaccessible with current credentials)
-- [x] A.2 Base model: Qwen/Qwen3-2B
+- [x] A.2 Base model: dicta-il/DictaLM-3.0-1.7B-Base
 - [x] A.3 Fine-tune via HF `trl` SFT — one `training/train.py` for qlora | lora | full,
       completion-only loss, wandb logging, local or HF Jobs (`--submit-hf`)
 

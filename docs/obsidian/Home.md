@@ -1,34 +1,24 @@
 # AMLK — shared research notes
 
-> Hebrew news abstractive summarization with Qwen3-2B on HeSum.  
-> Last updated from team discussion: 2026-06-27.
+> Hebrew news abstractive summarization with dicta-il/DictaLM-3.0-1.7B-Base on HeSum.
+> Last updated: 2026-07-09 (base model switched to DictaLM-3.0-1.7B-Base; pre-training stage).
 
 ## Map of content
-
-### Problem & diagnosis
-- [[Current Results]] — numbers from the first full HF Jobs run
-- [[Prediction Failure Modes]] — what went wrong in fine-tuned outputs (92% broken)
-- [[Training Objective]] — what the model is actually optimized on (CE loss, not ROUGE)
 
 ### Literature & dataset
 - [[HeSum Paper Insights]] — arXiv:2406.03897 takeaways for our setup
 - [[Evaluation Metrics]] — ROUGE, AlephBERT BERTScore, judge, caveats
 - [[Lead Bias Probe]] — positional-shortcut experiment (reviewer redesign)
 
-### Plan & implementation
-- [[Fix Plan]] — phased fixes (decode → retrain → report)
-- [[Decoding Configuration]] — generation settings that caused repetition loops
+### Training design
+- [[Training Objective]] — what the model is trained on (CE loss) vs what we evaluate
 
 ### Project links
 - [[References]] — papers, Hub repos, wandb
 - Repo: `docs/research-proposal-revised.md`, `TODO.md`, `AGENTS.md`
 
-## One-sentence summary
+## Status
 
-The fine-tuned model writes fluent Hebrew but **does not stop generating** under greedy decode; most failures are **decoding + undertraining**, not “Hebrew is impossible.” Recalibrate against HeSum SOTA and trust **AlephBERT BERTScore + judge** over ROUGE.
-
-## Open decisions
-
-- [ ] Run Phase 1 re-decode on existing adapter before paying for retrain
-- [ ] Add `load_best_model_at_end` on `eval_loss` in Phase 2 (recommended)
-- [ ] Restore Gemini API billing for advanced baseline (`gemini-predict.log` 403)
+Pre-training stage: pipeline validated end-to-end (a LoRA smoke run on
+dicta-il/DictaLM-3.0-1.7B-Base completed successfully on HF Jobs), but no full training run
+has happened yet. See `AGENTS.md` Status section for the current milestone.

@@ -198,7 +198,7 @@ In 0.5.11, some missing-session paths are still rough:
 
 - Keep the default AMLK path on HuggingFace Jobs unless the task specifically benefits from
   Colab. HF Jobs is still the established training/evaluation pipeline in this repo.
-- Never run Qwen3-2B training or inference on the local GPU. If not using HF Jobs, use
+- Never run model training or inference on the local GPU. If not using HF Jobs, use
   Colab or another remote runtime.
 - For unattended experiments, prefer `colab run` over a persistent session so failed jobs
   self-clean.

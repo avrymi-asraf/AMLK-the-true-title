@@ -22,13 +22,13 @@ AMLK uses `biunlp/HeSum` via `data/download.py` → `outputs/data/raw/combined.j
 | mLongT5 (fine-tuned) | **17.5** | **7.6** | **14.7** | 57.6 |
 | Human eval (coherence / completeness) | — | — | — | GPT > mLongT5 despite lower ROUGE |
 
-**Takeaway:** High ROUGE can mean “copies surface form” (mLongT5); semantic metrics + humans favor GPT. Our finetuned ROUGE 11.4 is in the same ballpark as GPT-4, not “catastrophic.”
+**Takeaway:** High ROUGE can mean “copies surface form” (mLongT5); semantic metrics + humans favor GPT. Use this table as the ROUGE-comparability anchor, not a pass/fail bar.
 
 ## AlephBERT for BERTScore
 
 HeSum uses **AlephBERT** (`onlplab/alephbert-base`) as BERTScore backbone — Hebrew monolingual, better for MRL than generic multilingual models.
 
-AMLK currently uses `xlm-roberta-large` in `evaluation/evaluate.py` → switch planned in [[Fix Plan#Phase 0]].
+AMLK's `evaluation/evaluate.py` defaults to `onlplab/alephbert-base` (`--bertscore-model` to override).
 
 ## Prompt language (Table 8)
 
@@ -56,18 +56,18 @@ Pearson correlation between ROUGE and human scores ≈ **−0.16** (p < 2.39×10
 - Base: 18 epochs; Large: 12 epochs
 - Long-sequence encoder-decoder (designed for ~2.7k token articles)
 
-AMLK uses Qwen3-2B causal LM + QLoRA, 1 epoch — different regime but the **early-stopping-on-generation-metric** lesson still applies at the principle level.
+AMLK uses dicta-il/DictaLM-3.0-1.7B-Base (a Qwen3 causal LM, Hebrew-continued-pretrained) + LoRA/QLoRA — different regime but the **early-stopping-on-generation-metric** lesson still applies at the principle level. `load_best_model_at_end` on `eval_loss` is the cheap analogue already wired into `training/train_hf_job.py`.
 
 ## Error types (Table 4)
 
 Fine-tuned mLongT5: repetition, **copy from article** (13%), low abstractiveness.  
 GPT models: Hebrew morphology errors (gender, smixut, definiteness), hallucinations.
 
-Maps to our [[Prediction Failure Modes]] and `evaluation/error_analysis.py` labels.
+Maps to `evaluation/error_analysis.py` labels (hallucination, omission, entity/number error, lead-copying, fluency).
 
 ## Tokenizer / MRL lesson
 
-- **Generator tokenizer:** keep Qwen BPE — cannot cheaply swap without retraining embeddings.
+- **Generator tokenizer:** DictaLM-3.0-1.7B-Base keeps the Qwen3 BPE vocab — cannot cheaply swap without retraining embeddings.
 - **Evaluation tokenizer:** morpheme-aware analysis (Table 5) — apply on ROUGE side, not training.
 
-Related: [[Evaluation Metrics]], [[Lead Bias Probe]], [[Fix Plan]]
+Related: [[Evaluation Metrics]], [[Lead Bias Probe]]

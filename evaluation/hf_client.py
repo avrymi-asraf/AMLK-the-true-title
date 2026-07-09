@@ -9,7 +9,7 @@ import os
 
 from evaluation.gemini_client import call_with_retry
 
-# Different family from fine-tuned Qwen — suitable as an external judge.
+# Different family from the fine-tuned model — suitable as an external judge.
 DEFAULT_JUDGE_MODEL = "meta-llama/Meta-Llama-3-8B-Instruct"
 
 

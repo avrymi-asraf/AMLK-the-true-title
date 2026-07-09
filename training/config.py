@@ -10,7 +10,7 @@ self-contained HF Jobs script.
 from dataclasses import dataclass, field
 
 
-MODEL_ID = "Qwen/Qwen3-2B"
+MODEL_ID = "dicta-il/DictaLM-3.0-1.7B-Base"
 PROCESSED_DIR = "outputs/data/processed"   # actual data dir is <PROCESSED_DIR>/<variant>
 MAX_LENGTH = 2048
 WANDB_PROJECT = "amlk-hebrew-summarization"
@@ -25,13 +25,13 @@ def dataset_repo(hf_user: str, variant: str = "whole") -> str:
 def model_repo(hf_user: str, variant: str = "whole") -> str:
     """Hub repo for the trained LoRA adapter of a probe variant."""
     suffix = "" if variant == "whole" else f"-{variant}"
-    return f"{hf_user}/amlk-qwen3-2b-sft{suffix}"
+    return f"{hf_user}/amlk-dictalm3-1.7b-sft{suffix}"
 
 
 @dataclass
 class LoRAConfig:
-    # r=32 (up from 16) + the MLP projections (gate/up/down) give the adapter enough capacity
-    # for abstractive generation; attention-only r=16 underfit (v1 looped and over-copied).
+    # r=32 + the MLP projections (gate/up/down), not just attention, gives the adapter enough
+    # capacity for abstractive generation rather than degenerating into lead-copying/looping.
     r: int = 32
     lora_alpha: int = 64
     lora_dropout: float = 0.05

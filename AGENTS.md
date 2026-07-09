@@ -1,13 +1,13 @@
 ## Project Goal
 
-* **Description:** AMLK is a Hebrew **news** summarization research project. The goal is to fine-tune `Qwen/Qwen3-2B` on Hebrew journalism datasets (HeSum, IAHLT summarization_he), evaluate with ROUGE, BERTScore, and LLM-as-judge, and produce a research paper and presentation. Design choices are informed by **English summarization literature** (lead bias, metric limits, strong baselines) without re-running English experiments. Evaluation includes an **advanced-model baseline** (e.g. Gemini API on the same test set and prompt) so metrics can be interpreted against a stronger system. A **truncation / positional-shortcut probe** trains separate models on Whole text, Lead-only, and Body-only inputs. Optional **headline-style control** varies the instruction (short headline vs longer summary). **Error analysis** labels a sampled set of predictions for failure types common in the literature. Runs locally or on HuggingFace Jobs; all scripts are command-line Python.
+* **Description:** AMLK is a Hebrew **news** summarization research project. The goal is to fine-tune `dicta-il/DictaLM-3.0-1.7B-Base` on Hebrew journalism datasets (HeSum, IAHLT summarization_he), evaluate with ROUGE, BERTScore, and LLM-as-judge, and produce a research paper and presentation. Design choices are informed by **English summarization literature** (lead bias, metric limits, strong baselines) without re-running English experiments. Evaluation includes an **advanced-model baseline** (e.g. Gemini API on the same test set and prompt) so metrics can be interpreted against a stronger system. A **truncation / positional-shortcut probe** trains separate models on Whole text, Lead-only, and Body-only inputs. Optional **headline-style control** varies the instruction (short headline vs longer summary). **Error analysis** labels a sampled set of predictions for failure types common in the literature. Runs locally or on HuggingFace Jobs; all scripts are command-line Python.
 
 ---
 
 ## Project Structure - remember to update it when you make changes
 
 * **Architecture:** The project is divided into three sequential pipelines:
-  1. **Training pipeline** — downloads Hebrew summarization datasets (IAHLT summarization_he, HeSum), loads the `Qwen/Qwen3-2B` base model, and fine-tunes it using the HuggingFace `transformers`/`trl` stack. If local GPU is insufficient, the job is submitted to HuggingFace as a remote training job.
+  1. **Training pipeline** — downloads Hebrew summarization datasets (IAHLT summarization_he, HeSum), loads the `dicta-il/DictaLM-3.0-1.7B-Base` base model, and fine-tunes it using the HuggingFace `transformers`/`trl` stack. If local GPU is insufficient, the job is submitted to HuggingFace as a remote training job.
   2. **Evaluation pipeline** — runs fine-tuned and baseline checkpoints on the held-out test set: ROUGE, BERTScore, LLM-as-judge (Gemini), an advanced-model baseline on the same data, and systematic error analysis on a sampled subset.
   3. **Results & reporting** — aggregated metrics feed into the final paper and presentation.
 
@@ -71,8 +71,9 @@
 │   └── test_viewer.py                    # predictions-viewer load/keyword-search/discovery logic
 ├── docs/
 │   ├── obsidian/                         # Shared Obsidian vault (team research notes; open folder as vault)
-│   ├── ANLP Project abstract.md          # The research proposal this project implements
-│   ├── 2026-06-12-qlora-training-job-postmortem.md  # Full-run post-mortem: cost, root cause, probe-run recommendations
+│   ├── ANLP Project abstract.md          # Original submitted proposal (historical record — not updated for the DictaLM swap)
+│   ├── research-proposal.md              # Original submitted proposal, prose form (historical record — not updated)
+│   ├── research-proposal-revised.md      # Reviewer-updated probe design (current — kept in sync with the base model)
 │   └── superpowers/
 │       ├── specs/2026-05-26-training-pipeline-design.md
 │       └── plans/2026-05-26-stage-a-training-pipeline.md
@@ -94,17 +95,18 @@
 
 * `data/download.py`: Downloads Hebrew summarization datasets (biunlp/HeSum; IAHLT/summarization_he inaccessible with current credentials), normalises to `{text, summary, source}`, writes `outputs/data/raw/combined.jsonl`.
 * `data/preprocess.py`: Reads `combined.jsonl`, builds `(prompt, completion)` pairs for completion-only SFT, applies the `--variant whole|lead|body` truncation probe (`make_variant`), truncates each article to `MAX_LENGTH-256` tokens so the summary always survives (HeSum articles are long — median ~2500 tokens; without this, completion-only loss goes nan), splits 80/10/10, saves Arrow splits to `outputs/data/processed/<variant>/`. `build_prompt`/`make_variant` are the single source of truth, reused by `evaluation/predict.py`.
-* `training/config.py`: Shared constants: `MODEL_ID="Qwen/Qwen3-2B"`, `METHOD_PRESETS` (the qlora/lora/full deltas), `LoRAConfig` (r=32, alpha=64, q/k/v/o + gate/up/down_proj), `TrainingConfig`, `WANDB_PROJECT`, and `dataset_repo`/`model_repo` Hub-id helpers.
-* `training/train.py`: One trainer for all three regimes (`--method qlora|lora|full`). Trains with `completion_only_loss=True`, logs to wandb, saves the adapter; `--push-to-hub` or `--submit-hf` push to the Hub. Inference is NOT here — that's `evaluation/predict.py`.
-* `training/train_hf_job.py`: Self-contained PEP 723 UV script submitted inline by `train.py --submit-hf`. Reads METHOD/VARIANT/DATASET_REPO/OUTPUT_REPO/WANDB_PROJECT from env, trains on the cloud GPU, then generates fine-tuned + zero-shot base test predictions (PEFT `disable_adapter`) and pushes the adapter + `predictions-finetuned.jsonl` / `predictions-base.jsonl` to the Hub. Never run directly.
-* `evaluation/predict.py`: Generates the Gemini advanced-baseline summaries via API (no GPU, no model load), same prompt as training. Resumes from a partial file. The fine-tuned and zero-shot predictions come from the cloud training job, not here. Also defines `strip_think()` — the shared tool that drops closed Qwen3 `<think>…</think>` reasoning so metrics score the summary, not the reasoning (used by evaluate.py and error_analysis.py).
+* `training/config.py`: Shared constants: `MODEL_ID="dicta-il/DictaLM-3.0-1.7B-Base"`, `METHOD_PRESETS` (the qlora/lora/full deltas), `LoRAConfig` (r=32, alpha=64, q/k/v/o + gate/up/down_proj), `TrainingConfig`, `WANDB_PROJECT`, and `dataset_repo`/`model_repo` Hub-id helpers.
+* `training/train.py`: One trainer for all three regimes (`--method qlora|lora|full`). Trains with `completion_only_loss=True`, logs to wandb, saves the adapter; `--push-to-hub` or `--submit-hf` push to the Hub. `--base-model` swaps the base checkpoint (requires `--output-repo`, so a different base can never overwrite another's adapter); `--skip-data-upload` reuses the splits already on the Hub. Inference is NOT here — that's `evaluation/predict.py`.
+* `training/train_hf_job.py`: Self-contained PEP 723 UV script submitted inline by `train.py --submit-hf`. Reads METHOD/VARIANT/BASE_MODEL/DATASET_REPO/OUTPUT_REPO/WANDB_PROJECT from env, trains on the cloud GPU, then generates fine-tuned + zero-shot base test predictions (PEFT `disable_adapter`) and pushes the adapter + `predictions-finetuned.jsonl` / `predictions-base.jsonl` to the Hub. Prints `print_trainable_parameters()` before training so a base-model swap can't silently regress LoRA layer coverage. `BASE_MODEL` defaults to `MODEL_ID` — duplicated from `config.py` on purpose (the script is submitted inline and can't import repo code); keep in sync. Never run directly.
+* `evaluation/predict.py`: Generates the Gemini advanced-baseline summaries via API (no GPU, no model load), same prompt as training. Resumes from a partial file. The fine-tuned and zero-shot predictions come from the cloud training job, not here.
+* `evaluation/gemini_client.py`: Shared Gemini API helpers (`GEMINI_MODEL`, `call_with_retry`). Also defines `strip_think()` — the shared tool that drops closed `<think>…</think>` reasoning blocks (emitted by chat-capable Qwen3-family models) so metrics score the summary, not the reasoning (used by evaluate.py and error_analysis.py).
 * `evaluation/evaluate.py`: Scores a predictions file with raw + Hebrew-normalized ROUGE-1/2/L (`normalize_hebrew` strips niqqud + folds final-form letters), BERTScore (default `onlplab/alephbert-base`, the HeSum backbone; `--bertscore-model` to override), and the Gemini faithfulness/fluency judge (`--skip-llm` to skip; `--limit N` to cap for a smoke run). Applies `strip_think` before scoring. One JSON report per system.
 * `evaluation/error_analysis.py`: Samples ~50 predictions (post `strip_think`) and has Gemini label failure types (hallucination, omission, entity/number error, lead copying, fluency), writing per-type rates.
 * `evaluation/eval_hf_job.py`: Runs the whole D1 battery on HuggingFace Jobs so the ~4000 Gemini calls + BERTScore happen on the cloud's fast connection (the user has weak internet). One file, two modes: `--submit-hf` uploads itself to a cheap CPU job; with no args (how HF Jobs invokes it) it fetches the public repo + Hub predictions/dataset and drives the existing `evaluation/` CLIs by subprocess, pushing each report to the model repo under `reports/` as it finishes (timeout-safe).
 * `evaluation/build_report_tables.py`: Downloads the pushed `reports/*.json` and assembles the D1 markdown — a quality table (ROUGE/BERTScore/judge), a failure-rate table, and behavioural notes (base `<think>`/language leakage, fine-tuned repetition, judge self-preference caveat).
 * `evaluation/infer.py`: GPU inference helpers — `load_finetuned_model` (base + LoRA adapter, `disable_adapter()` gives the zero-shot base) and `generate_summaries` (batched greedy decode over a processed split). The importable twin of `train_hf_job.py`'s inline generation block (that cloud script can't import repo code); keep the two in sync. **Remote GPU only — never call locally.**
 * `evaluation/topic_clustering.py`: Topic-clustering side-analysis (not part of the main pipeline). Embeds truncated article `text` by default (`embed_field='text'`) — summaries alone collapsed ~99% of docs into one media-meta mega-topic — with the Hebrew-native, clustering-tuned `dicta-il/neodictabert-bilingual-embed`, clusters with BERTopic (UMAP + HDBSCAN + Hebrew-only c-TF-IDF vectorizer, `HEBREW_STOPWORDS` + `MEDIA_STOPWORDS` + `BOILERPLATE_STOPWORDS`), names each real cluster with one Gemini call, then optionally `refine_large_clusters()` — a second finer HDBSCAN pass on any cluster holding ≥30% of docs (re-uses embeddings; splits e.g. the politics mega-topic into ביטחון/כלכלה/חברה sub-domains without re-fragmenting sports/legal), then `merge_duplicate_labels()` collapses any clusters Gemini still named identically (on by default via `cluster_dataset(merge_duplicates=True)`) so the report has one row per distinct real-world topic. `fit_topics` tunables: `min_cluster_size`/`min_samples` (default 60/15 — coarser granularity means fewer near-duplicate sub-clusters of the same domain), `outlier_threshold` (only reassign noise above cosine sim — default 0.35; 0 floods the largest cluster), optional `nr_topics` merge (off by default; `auto` over-merged), `language='multilingual'` (required — English mode strips Hebrew). `plot_topic_sizes()` renders a bar chart of `topic_summary()` for the notebook. Output `topics.jsonl` still keyed by `summary` for stratification join. See `notebooks/cluster_topics_databricks.py`.
-* `evaluation/style_labels.py`: A second, independent per-summary dimension from topic clustering — not *what topic* an article is about but *what format* its summary takes (`single_sentence` / `multi_sentence` / `pipe_digest` / `question`). Pure regex (`classify_style`), no embeddings/GPU/API, so unlike topic clustering it never needs Databricks and has no `datasets` import (works even if that import is broken locally, see the lzma note below). Motivated by a real corpus pattern: ~26% of HeSum summaries are `"headline | headline | headline"` pipe-separated digests, already flagged in `docs/obsidian/Current Results.md` as shaping the fine-tuned model's output format. Produces the same `{summary: label}` artifact shape as `topic_clustering.py` so it plugs into the same stratification tool; `plot_style_distribution()` renders a bar chart of `style_summary()` for the notebook.
+* `evaluation/style_labels.py`: A second, independent per-summary dimension from topic clustering — not *what topic* an article is about but *what format* its summary takes (`single_sentence` / `multi_sentence` / `pipe_digest` / `question`). Pure regex (`classify_style`), no embeddings/GPU/API, so unlike topic clustering it never needs Databricks and has no `datasets` import (works even if that import is broken locally, see the lzma note below). Motivated by a real corpus pattern: ~26% of HeSum summaries are `"headline | headline | headline"` pipe-separated digests — a format quirk worth tracking once a model is trained on this data. Produces the same `{summary: label}` artifact shape as `topic_clustering.py` so it plugs into the same stratification tool; `plot_style_distribution()` renders a bar chart of `style_summary()` for the notebook.
 * `evaluation/stratify_by_topic.py`: Joins a predictions file to a label artifact (`topics.jsonl`'s `topic_label` from `topic_clustering.py`, or `style_labels.jsonl`'s `style_label` from `style_labels.py` — same shape, selected via `--label-field`) on exact `reference`==`summary` text match, and reuses `evaluate.py`'s `compute_rouge`/`compute_bertscore` per group, folding in per-group failure rates if a matching `*.errors.json` exists. Local, CPU-only — no GPU/Databricks needed for this step.
 * `evaluation/viewer/`: A local, read-only UI for browsing `predictions.jsonl` files (article/prediction/reference), filling the gap between raw jsonl and the live Colab notebook. `data.py` has the Streamlit-free data logic (`discover_predictions_files`, `load_predictions` — applies `strip_think`, `filter_by_keyword`, `common_length`), importable from a notebook/REPL; `__init__.py` re-exports it; `app.py` is the thin Streamlit script (`streamlit run evaluation/viewer/app.py`) that renders Hebrew right-to-left, supports keyword search, and compares 2+ systems side-by-side for the same article. Local, CPU-only, no GPU/API. See `docs/superpowers/specs/2026-07-04-predictions-viewer-design.md`.
 * `notebooks/evaluation_observation.ipynb`: The **evaluation-observation** stage. A self-bootstrapping Colab notebook that runs the *real* evaluation functions live and **displays** the per-example process (article → model summary → reference → judge faithfulness/fluency → error-analysis failure labels) for finetuned/base/gemini. Loads existing Hub predictions (finetuned/base at repo root, gemini under `reports/`) and generates fresh summaries on a T4. Judge/error/browse cells are API+CPU; only the generation cell needs a GPU.
@@ -127,7 +129,7 @@
 * Source the env and activate venv before running scripts: `source .env && source .venv/bin/activate`
 * **Always invoke scripts as modules** (`python -m data.preprocess`, `python -m training.train`, …)
   so package imports resolve from the repo root. This is the one supported way to run them.
-* **Never load or run a model on the local GPU** — this machine (8 GB) freezes. All Qwen3-2B
+* **Never load or run a model on the local GPU** — this machine (8 GB) freezes. All model
   training and inference run on **HuggingFace Jobs**. Local is only for: data download/preprocess
   (CPU), `pytest`, the Gemini baseline + judge + error analysis (API), and BERTScore (pinned to CPU).
 
@@ -164,20 +166,19 @@ python -m evaluation.build_report_tables --output outputs/results/d1-tables.md
 **HuggingFace Jobs — submit and monitor:**
 ```bash
 # --submit-hf uploads outputs/data/processed/<variant>/ to the Hub (avreymi/amlk-training-data[-<variant>])
-# then submits train_hf_job.py inline (a10g-large, 6h, 1-epoch QLoRA). It prints a Job ID.
+# then submits train_hf_job.py inline (a10g-large, 6h, 3-epoch training by default). It prints a Job ID.
 python -m training.train --submit-hf --hf-user avreymi               # full run
 python -m training.train --submit-hf --hf-user avreymi --smoke-test  # 10 steps, a10g-small, ~$0.05 — verify first
 python -m training.train --submit-hf --hf-user avreymi --inference-only  # regen predictions from pushed adapter (a10g-small, 1h)
 # Cost: a10g-small has the SAME 24 GB A10G GPU as a10g-large at $1.00/h vs $1.50/h —
-# prefer a10g-small; prefer --method lora over qlora for the 2B model.
-# See docs/2026-06-12-qlora-training-job-postmortem.md before launching the probe runs.
+# prefer a10g-small; prefer --method lora over qlora for a model this size (~1.7-2B params).
 
 hf jobs ps                    # list recent jobs
 hf jobs logs <job-id>         # snapshot; add -f to stream
 hf jobs inspect <job-id>
 
-# Trained adapter (LoRA only, not merged): https://huggingface.co/avreymi/amlk-qwen3-2b-sft  (private)
-# Evaluation loads it via: predict.py --model finetuned --adapter avreymi/amlk-qwen3-2b-sft
+# Trained adapter (LoRA only, not merged) pushes to: https://huggingface.co/avreymi/amlk-dictalm3-1.7b-sft  (private)
+# Evaluation loads it via: predict.py --model finetuned --adapter avreymi/amlk-dictalm3-1.7b-sft
 # Training metrics: wandb project "amlk-hebrew-summarization".
 ```
 
@@ -197,20 +198,42 @@ source .venv/bin/activate && python -m pytest tests/ -v
 
 ## Status - remember to update it
 
-**Stages A + B complete as of 2026-06-12.** Stack: trl 1.6.0, transformers 5.11, peft 0.19, wandb 0.27.
+**Pre-training stage as of 2026-07-09.** The base model is `dicta-il/DictaLM-3.0-1.7B-Base`; the
+pipeline (data → train → evaluate → report) is built and its mechanics are validated end-to-end,
+but **no full training run has happened yet.** Stack: trl 1.6.0, transformers 5.11, peft 0.19,
+wandb 0.27.
 - `data/download.py` — 10,000 records from biunlp/HeSum in `outputs/data/raw/combined.jsonl`. IAHLT/summarization_he is inaccessible (not on HF Hub with current credentials).
 - `data/preprocess.py` — prompt/completion pairs + `--variant whole|lead|body`; 8,000/1,000/1,000 splits in `outputs/data/processed/<variant>/`.
-- `training/train.py` — one trainer for qlora|lora|full, `completion_only_loss=True`, wandb logging, `--submit-hf` to HF Jobs. Verified: local 12-step QLoRA smoke runs and logs to wandb.
+- `training/train.py` — one trainer for qlora|lora|full, `completion_only_loss=True`, wandb logging, `--submit-hf` to HF Jobs.
 - `training/train_hf_job.py` — self-contained HF Jobs script (trl 1.6 API, wandb).
-- `evaluation/predict.py` / `evaluate.py` / `error_analysis.py` — full metric battery (ROUGE/BERTScore/Gemini judge), zero-shot + Gemini baselines, failure-type analysis. `strip_think()` (in predict.py) drops closed Qwen3 `<think>…</think>` reasoning before scoring; evaluate.py has `--limit` for smoke runs.
-- `evaluation/eval_hf_job.py` + `build_report_tables.py` — D1 eval runs on a cheap CPU HF Job (clones the public repo, drives the existing CLIs, pushes `reports/*.json`); the tables tool turns those reports into the presentation markdown. Chosen because the user has weak internet (the ~4000 Gemini calls + BERTScore run cloud-side). Smoke job `6a2cfda2` verified the path end-to-end.
-- 16 fast tests + 1 gated live Gemini test, all passing (`python -m pytest tests/`).
-- HF Jobs dataset: `avreymi/amlk-training-data` (private). Model output: `avreymi/amlk-qwen3-2b-sft` (private). wandb project: `amlk-hebrew-summarization`. Advanced baseline + judge: Gemini `gemini-2.5-flash-lite` (full 2.5-flash's ~7s/call thinking latency made the ~4000-call battery ~10h; -lite is ~1s/call, ~6x faster. 2.0-flash is retired.)
+- `evaluation/predict.py` / `evaluate.py` / `error_analysis.py` — full metric battery (ROUGE/BERTScore/Gemini judge), zero-shot + Gemini baselines, failure-type analysis. `strip_think()` (in `gemini_client.py`) drops closed `<think>…</think>` reasoning before scoring; evaluate.py has `--limit` for smoke runs.
+- `evaluation/eval_hf_job.py` + `build_report_tables.py` — D1 eval runs on a cheap CPU HF Job (clones the public repo, drives the existing CLIs, pushes `reports/*.json`); the tables tool turns those reports into the presentation markdown. Chosen because the user has weak internet (the ~4000 Gemini calls + BERTScore run cloud-side).
+- Test suite: 55 tests (fast behavioral + 2 gated live: Gemini judge, BERTopic fit + naming), all passing except a local `plotly`-not-installed gap in 3 plot tests (`python -m pytest tests/`).
+- HF Jobs dataset (uploaded, reusable across base models): `avreymi/amlk-training-data` (private). Model output repo (once a real training run pushes an adapter): `avreymi/amlk-dictalm3-1.7b-sft` (private). wandb project: `amlk-hebrew-summarization`. Advanced baseline + judge: Gemini `gemini-2.5-flash-lite` (full 2.5-flash's ~7s/call thinking latency made the ~4000-call battery ~10h; -lite is ~1s/call, ~6x faster. 2.0-flash is retired.)
 - Note: QLoRA `push_to_hub` saves the LoRA adapter only (not merged) — evaluation loads base + adapter via `PeftModel.from_pretrained` (handled in `predict.py`).
 - Note: the Gemini LLM-judge and the Gemini advanced baseline are the same model family — flag the possible self-preference bias in the paper.
-- **2026-06-12 full run (job `6a2bc974`): training succeeded** (1 epoch, eval_loss 1.777; adapter on `avreymi/amlk-qwen3-2b-sft`), but the job timed out in its prediction loop — predictions regenerated by a patched inference-only job. Full post-mortem with cost analysis and the probe-run checklist: `docs/2026-06-12-qlora-training-job-postmortem.md`.
-- **v1 adapter flaw (addressed 2026-06-27): Qwen3-2B is a hybrid-attention model (18 linear-attention + 6 full-attention layers); the v1 LoRA `target_modules` q/k/v/o only exist in the 6 full-attention layers, so it covered 6/24 layers (0.07% trainable params).** `LoRAConfig` now adds the MLP projections `gate/up/down_proj` (present in all 24 layers) and bumps r→32/alpha→64; mirrored in `train_hf_job.py`. The next run validates this; still consider the linear-attention modules + `flash-linear-attention`/`causal-conv1d` deps (post-mortem §5.1) if coverage is still insufficient.
-- `train_hf_job.py` / `evaluation/infer.py` share a decode config: `max_new_tokens=256` (p99 reference length is 187 tokens), `min_new_tokens=16`, `no_repeat_ngram_size=3`, `repetition_penalty=1.2`, explicit `eos_token_id`/`pad_token_id`, greedy. Predictions are pushed immediately after each generation loop (timeout-safe), progress every 10 batches; inference-only jobs use a 1h timeout. `PRED_SUFFIX` env (`--pred-suffix`) appends e.g. `-v2` so a re-decode doesn't clobber v1.
+- `train_hf_job.py` / `evaluation/infer.py` share a decode config: `max_new_tokens=256` (p99 reference length is 187 tokens), `min_new_tokens=16`, `no_repeat_ngram_size=3`, `repetition_penalty=1.2`, explicit `eos_token_id`/`pad_token_id`, greedy. Predictions are pushed immediately after each generation loop (timeout-safe), progress every 10 batches; inference-only jobs use a 1h timeout. `PRED_SUFFIX` env (`--pred-suffix`) appends a suffix so a re-decode doesn't clobber an earlier prediction file.
+
+**2026-07-09 — Base model switched to `dicta-il/DictaLM-3.0-1.7B-Base`, and pipeline validated
+against it on HF Jobs (job `6a4f43e4`, COMPLETED in 4m03s, a10g-small, `--method lora`).**
+`dicta-il/DictaLM-3.0-1.7B-Base` is a plain `Qwen3ForCausalLM` (28 dense layers, hidden 2048, GQA
+16/8, Qwen3 vocab 151936) — not a hybrid linear-attention architecture, so the existing
+`LoRAConfig` target modules (q/k/v/o + gate/up/down) attach to **all 28 layers** out of the box:
+`trainable params: 34,865,152 || 1.9861%`. (Some other Qwen3 variants, e.g. `Qwen/Qwen3-2B`, mix
+linear- and full-attention layers, where the same target_modules list would only cover the
+full-attention subset — not a concern for the current default, but worth checking via
+`print_trainable_parameters()` if `--base-model` is ever swapped to one.) Smoke run: loss
+1.469→1.439, eval_loss 1.791→1.772 (finite, no nan), all 10 steps, adapter + predictions pushed to
+`avreymi/amlk-dictalm3-1.7b-smoke` (a throwaway smoke-test repo, distinct from the real
+`amlk-dictalm3-1.7b-sft` output repo). After only 10 steps the fine-tuned output is already fluent
+Hebrew in the corpus's `pipe_digest` style — this is a pipeline-mechanics check, not a quality
+result. Two integration facts: (1) it ships **no chat template** (pure base checkpoint), so
+`build_input_text()` falls back to the raw prompt when `tokenizer.chat_template` is falsy — the
+zero-shot `base` system therefore can't be put into "assistant mode" and is expected to drift off
+Hebrew; (2) the processed splits are base-model independent (they store text, tokenized at train
+time by SFTTrainer) and the Qwen3 vocab is unchanged, so `avreymi/amlk-training-data` is reusable
+as-is (`--skip-data-upload`). Reproduce the smoke test with:
+`python -m training.train --submit-hf --hf-user avreymi --method lora --smoke-test --output-repo avreymi/amlk-dictalm3-1.7b-smoke --skip-data-upload`
 
 **2026-07-04 — More distinct cluster plot + tighter clustering defaults.** Plot: golden-angle color palette, UMAP `min_dist=0.35`/`spread=1.25`, optional centroid repulsion (`plot_display_spread` widget). Clustering: `min_samples` 15→20, `umap_n_neighbors` 10→15, `outlier_threshold` 0.35→0.40; `umap_n_neighbors` widget on Databricks.
 
@@ -228,16 +251,16 @@ source .venv/bin/activate && python -m pytest tests/ -v
 
 **2026-07-04 — Predictions viewer added.** `evaluation/viewer/` (`data.py` + `app.py`, its own subfolder): a local Streamlit app (`streamlit run evaluation/viewer/app.py`) for browsing `outputs/results/*.jsonl` — RTL Hebrew rendering, keyword search, side-by-side comparison across systems. Read-only, CPU-only, no GPU/API. Verified end-to-end against the real `predictions-finetuned.jsonl`/`predictions-base.jsonl` files with `streamlit.testing.v1.AppTest` (file discovery, multi-file compare, keyword filtering, navigation — no exceptions). Design: `docs/superpowers/specs/2026-07-04-predictions-viewer-design.md`.
 
-**2026-06-27–28 — Hebrew-summarization fix batch (decoding + training + Hebrew-aware eval). All three phases complete.**
-- *Eval (Phase 0, live):* `evaluate.py` BERTScore now defaults to `onlplab/alephbert-base` (HeSum-comparable, more discriminative than xlm-r) and reports both raw and Hebrew-normalized ROUGE.
-- *Decoding (Phase 1):* shared generation adds `no_repeat_ngram_size=3`, `repetition_penalty=1.2`, `min_new_tokens=16`, explicit EOS. **Job `6a3f8e18…` ran 2026-06-27.** Finding: decoding alone lowered every metric (ROUGE-1 11.4→4.7, AlephBERT F1 0.45→0.38) — the v1 repetition loops inflated ROUGE by accident; suppressing them revealed fundamental undertraining.
-- *Training (Phase 2):* 3 epochs, LoRA r→32/alpha→64 + MLP modules (`gate/up/down_proj`), "in up to 3 sentences" prompt cap. **Job `6a3fa247…` ran 2026-06-28, completed epoch 3.0** (eval_loss 1.712, best checkpoint auto-loaded). `predictions-finetuned.jsonl` + `predictions-base.jsonl` both pushed to Hub. Scored (`outputs/results/finetuned-v3.report.json`): ROUGE-1 5.1, AlephBERT F1 0.390. V3 generates fluent, format-correct Hebrew but hallucinates content (correct style, wrong facts). Marginal improvement over v2 (ROUGE-1 4.7, BS 0.383). LLM-judge required to evaluate faithfulness — **BLOCKED on Gemini API billing**.
-
 **Next steps:**
-1. **D.1 — DONE (2026-06-13).** Full eval battery ran on HF Jobs (job `6a2d1448`, gemini-2.5-flash-lite, n=1000 × 3 systems); tables in `outputs/results/d1-tables.md` via `evaluation.build_report_tables`. **Key results:** fine-tuning lifted ROUGE-1 (0.114 vs base 0.069) and BERTScore (0.850 vs 0.829) but the judge rated base *slightly higher* on faithfulness (2.98 vs 2.64) and fluency (3.80 vs 3.67) — a ROUGE-vs-human-judgement misalignment, driven by the fine-tuned model's degenerate repetition + more hallucination (0.22) and lead-copying (0.38). Gemini is a strong upper bound (faith 4.96, flu 5.00, 0% sampled failures). Zero-shot base is unusable raw: 22% non-Hebrew, 44% produce only `<think>` reasoning. (Deliverable is markdown tables — the presentation SVG is flattened paths, not editable text.)
-2. **Truncation probe** — train/evaluate whole / lead / body variants by **30.06** (`--variant` is ready). **First apply the post-mortem checklist (§7): extended LoRA target modules, a10g-small, `--method lora`, fast-path deps.**
-3. **Literature (English summarization)** — document lessons from English news summarization in the paper (lead bias, ROUGE limits, baseline practices).
-4. **Journalism / headline control (optional)** — alternate instruction templates for headline-length vs longer summaries; see `TODO.md` H.
+1. **Full training run on `dicta-il/DictaLM-3.0-1.7B-Base`** — the smoke test validated the
+   pipeline; a real multi-epoch run (`--method lora`, a10g-small) has not happened yet.
+2. **D.1 — full eval battery** on the trained adapter (`evaluation.eval_hf_job --submit-hf`),
+   scoring finetuned / zero-shot base / Gemini advanced baseline with ROUGE + BERTScore + judge +
+   error analysis, assembled via `evaluation.build_report_tables`.
+3. **Truncation probe** — train/evaluate whole / lead / body variants (`--variant` is ready in
+   `data/preprocess.py` and `training/train.py`).
+4. **Literature (English summarization)** — document lessons from English news summarization in the paper (lead bias, ROUGE limits, baseline practices).
+5. **Journalism / headline control (optional)** — alternate instruction templates for headline-length vs longer summaries; see `TODO.md` H.
 
 Final submission: **31.07**.
 

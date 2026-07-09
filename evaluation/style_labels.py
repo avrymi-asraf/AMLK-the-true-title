@@ -3,8 +3,8 @@ Structural style labeling: classifies each article's summary by its surface FORM
 sentence, multi-sentence, pipe-separated multi-headline digest, or question-style headline) —
 a second, independent dimension from evaluation/topic_clustering.py's semantic topic labels.
 Motivated by a real pattern in the corpus: ~26% of HeSum summaries are "headline | headline |
-headline" digests, already flagged in docs/obsidian/Current Results.md as shaping the
-fine-tuned model's output format. Produces the same {summary: label} artifact shape as
+headline" digests — a format quirk worth tracking once a model is trained on this data.
+Produces the same {summary: label} artifact shape as
 topic_clustering.py, so it plugs into evaluation/stratify_by_topic.py's generic --label-field
 to break down eval metrics by style instead of (or alongside) topic.
 
