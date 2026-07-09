@@ -135,12 +135,15 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
         # 2h: the anti-degeneration decode config (no_repeat_ngram + repetition_penalty) plus the
         # v1 adapter not yet stopping early runs ~256 tokens/example at ~16-20 ex/min, so 2×1,000
         # generations need well over the old 1h budget (observed: finetuned alone ~60 min).
-        flavor, timeout, label = "a10g-small", "2h", "infer"
+        flavor, label = "a10g-small", "infer"
+        timeout = timeout or "2h"
     elif smoke_test:
-        flavor, timeout, label = "a10g-small", "30m", "smoke"
+        flavor, label = "a10g-small", "smoke"
+        timeout = timeout or "30m"
     elif mini_test:
         # 80 train / 5 epochs / ~25 optimizer steps — validates full pipeline with real loss curves
-        flavor, timeout, label = "a10g-small", "1h", "mini"
+        flavor, label = "a10g-small", "mini"
+        timeout = timeout or "1h"
     else:
         flavor, label = "a10g-large", ""
         timeout = timeout or "6h"
@@ -290,6 +293,7 @@ def main():
     parser.add_argument("--drop-roundups", action="store_true",
                         help="With --clean/--submit-hf: target the -clean-drop data/adapter repos "
                              "(drops 3+ pipe references; default --clean keeps all 10k).")
+    parser.add_argument("--timeout", default="", help="With --submit-hf: override the job timeout (e.g. 8h). Default: 6h full / 2h infer / 1h mini / 30m smoke.")
     args = parser.parse_args()
 
     hf_token = os.environ.get("HF_TOKEN", "")
@@ -314,7 +318,7 @@ def main():
                       args.smoke_test, args.mini_test, args.inference_only,
                       args.pred_suffix, args.epochs, args.base_model,
                       args.output_repo, args.skip_data_upload,
-                      args.clean, args.drop_roundups)
+                      args.clean, args.drop_roundups, args.timeout)
         return
 
     if args.push_to_hub and not args.hf_user:

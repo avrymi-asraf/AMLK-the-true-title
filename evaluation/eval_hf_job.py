@@ -135,11 +135,17 @@ def run_cloud_job():
 
 # --------------------------------------------------------------------------- local side
 def submit(hf_user: str, variant: str, smoke: bool, clean: bool = False,
-           drop_roundups: bool = False):
+           drop_roundups: bool = False, output_repo: str = "", limit: int | None = None):
     """Upload this script to HF Jobs on a cheap CPU flavor and pass settings as env vars.
 
     clean=True targets the clean data/model repos and hardened Gemini prompt.
-    drop_roundups=True (requires clean) targets the -clean-drop repos.
+    drop_roundups=True (requires clean) targets the -clean-drop repos. output_repo overrides
+    the model repo scored (e.g. a one-off --output-repo repo from train.py that doesn't
+    follow the standard -sft[-clean] naming, such as a smoke/mini validation run); the
+    dataset repo is still derived normally since the processed splits are shared across
+    such repos. limit overrides the example cap (default: 5 with smoke, unlimited otherwise) —
+    e.g. matching a --mini-test model's smaller predictions-finetuned/base.jsonl row count so
+    all three systems (finetuned/base/gemini) score the same N examples.
     """
     import warnings
     warnings.filterwarnings("ignore", category=UserWarning)
@@ -159,14 +165,17 @@ def submit(hf_user: str, variant: str, smoke: bool, clean: bool = False,
         print("ERROR: HF_TOKEN and GEMINI_API_KEY must be set. Run: source .env", file=sys.stderr)
         sys.exit(1)
 
-    out_repo = model_repo(hf_user, variant, clean, drop_roundups)
+    out_repo = output_repo or model_repo(hf_user, variant, clean, drop_roundups)
     data_repo = dataset_repo(hf_user, variant, clean, drop_roundups)
     # ~4000 sequential Gemini calls (baseline + judge) can be rate-limited, so allow plenty of
     # wall-clock; each report is pushed as soon as it's ready, so a timeout never loses finished work.
-    flavor, timeout, limit = ("cpu-basic", "30m", "5") if smoke else ("cpu-upgrade", "5h", "0")
+    if limit is not None:
+        flavor, timeout, limit_str = "cpu-basic", "30m", str(limit)
+    else:
+        flavor, timeout, limit_str = ("cpu-basic", "30m", "5") if smoke else ("cpu-upgrade", "5h", "0")
     api = HfApi(token=hf_token)
     drop_label = " drop-roundups" if drop_roundups else ""
-    print(f"Submitting {'SMOKE ' if smoke else ''}eval job (flavor={flavor}, timeout={timeout}, limit={limit}, clean={clean}{drop_label})...")
+    print(f"Submitting {'SMOKE ' if smoke else ''}eval job (flavor={flavor}, timeout={timeout}, limit={limit_str}, clean={clean}{drop_label})...")
     job = api.run_uv_job(
         script=str(__import__("pathlib").Path(__file__).resolve()),
         flavor=flavor,
@@ -179,7 +188,7 @@ def submit(hf_user: str, variant: str, smoke: bool, clean: bool = False,
             "DATA_PROFILE": profile,
             "CLEAN": "1" if clean else "0",
             "DROP_ROUNDUPS": "1" if drop_roundups else "0",
-            "LIMIT": limit,
+            "LIMIT": limit_str,
         },
         token=hf_token,
     )
@@ -201,6 +210,11 @@ def main():
                         help="Clean profile: score the clean data/model repos with the hardened prompt.")
     parser.add_argument("--drop-roundups", action="store_true",
                         help="With --clean: target the -clean-drop repos (requires --clean).")
+    parser.add_argument("--output-repo", default="",
+                        help="Override the model repo to score (default: derived from --hf-user/--variant/--clean)")
+    parser.add_argument("--limit", type=int, default=None,
+                        help="Cap to N examples (default: 5 with --smoke-test, unlimited otherwise). "
+                             "Use to match a --mini-test model's smaller prediction files.")
     args = parser.parse_args()
 
     if args.drop_roundups and not args.clean:
@@ -211,7 +225,8 @@ def main():
         if not args.hf_user:
             print("ERROR: --hf-user required with --submit-hf", file=sys.stderr)
             sys.exit(1)
-        submit(args.hf_user, args.variant, args.smoke_test, args.clean, args.drop_roundups)
+        submit(args.hf_user, args.variant, args.smoke_test, args.clean, args.drop_roundups,
+               args.output_repo, args.limit)
     else:
         run_cloud_job()
 
