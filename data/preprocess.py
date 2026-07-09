@@ -20,7 +20,7 @@ import datasets as hf_datasets
 
 from data.clean import is_roundup_digest, normalize_summary
 from data.prompts import build_prompt, make_variant
-from training.config import MAX_LENGTH, MODEL_ID
+from training.config import MAX_LENGTH, MODEL_ID, processed_profile_name
 
 INPUT_PATH = Path("outputs/data/raw/combined.jsonl")
 OUTPUT_ROOT = Path("outputs/data/processed")
@@ -50,12 +50,19 @@ def main():
     parser.add_argument("--variant", choices=VARIANTS, default="whole",
                         help="Article input for the truncation probe (whole|lead|body)")
     parser.add_argument("--clean", action="store_true",
-                        help="Clean profile: drop multi-headline digest references, normalize "
-                             "pipes/bullets to prose, and use the hardened prompt. Writes to "
-                             "<variant>-clean so it never clobbers the raw pipeline.")
+                        help="Clean profile: normalize pipe/bullet references to prose and use "
+                             "the hardened prompt. Writes to <variant>-clean.")
+    parser.add_argument("--drop-roundups", action="store_true",
+                        help="With --clean: also drop 3+ pipe 'media roundup' references "
+                             "(~2.4k records). Writes to <variant>-clean-drop instead.")
     args = parser.parse_args()
 
-    output_dir = OUTPUT_ROOT / (f"{args.variant}-clean" if args.clean else args.variant)
+    if args.drop_roundups and not args.clean:
+        print("ERROR: --drop-roundups requires --clean", file=sys.stderr)
+        sys.exit(1)
+
+    output_dir = OUTPUT_ROOT / processed_profile_name(
+        args.variant, clean=args.clean, drop_roundups=args.drop_roundups)
     if output_dir.exists():
         print(f"Output already exists at {output_dir}. Delete it to re-preprocess.")
         sys.exit(0)
@@ -70,15 +77,15 @@ def main():
     print(f"Loaded {len(records)} records")
 
     if args.clean:
-        # Drop the worst multi-headline "media roundup" references (not single-article
-        # summaries), then rewrite pipe/bullet digests into natural prose. Both the training
-        # target (completion) and the eval reference (summary) are set from r["summary"] below,
-        # so cleaning it here covers both scopes at once.
-        before = len(records)
-        records = [r for r in records if not is_roundup_digest(r["summary"])]
+        # Rewrite pipe/bullet digests into natural prose. Both the training target
+        # (completion) and the eval reference (summary) come from r["summary"] below.
+        if args.drop_roundups:
+            before = len(records)
+            records = [r for r in records if not is_roundup_digest(r["summary"])]
+            print(f"[clean] Dropped {before - len(records)} roundup digests (3+ pipes)")
         for r in records:
             r["summary"] = normalize_summary(r["summary"])
-        print(f"[clean] Dropped {before - len(records)} roundup digests; normalized {len(records)} references")
+        print(f"[clean] Normalized {len(records)} references")
 
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, token=os.environ.get("HF_TOKEN") or None)

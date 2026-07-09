@@ -48,3 +48,15 @@ def test_is_roundup_digest_trips_only_on_multi_headline():
     assert is_roundup_digest("א | ב | ג") is True
     assert is_roundup_digest("כותרת אחת | כותרת שנייה") is False  # 2 segments < default threshold 3
     assert is_roundup_digest("סיכום רגיל של כתבה אחת") is False
+
+
+def test_processed_profile_names():
+    from training.config import dataset_repo, model_repo, processed_profile_name
+
+    assert processed_profile_name("whole") == "whole"
+    assert processed_profile_name("whole", clean=True) == "whole-clean"
+    assert processed_profile_name("whole", clean=True, drop_roundups=True) == "whole-clean-drop"
+    assert processed_profile_name("lead", clean=True) == "lead-clean"
+    assert dataset_repo("user", "whole", clean=True) == "user/amlk-training-data-clean"
+    assert dataset_repo("user", "whole", clean=True, drop_roundups=True) == "user/amlk-training-data-clean-drop"
+    assert model_repo("user", "lead", clean=True, drop_roundups=True) == "user/amlk-qwen3-2b-sft-lead-clean-drop"

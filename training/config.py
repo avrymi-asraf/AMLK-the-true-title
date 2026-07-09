@@ -16,24 +16,37 @@ MAX_LENGTH = 2048
 WANDB_PROJECT = "amlk-hebrew-summarization"
 
 
-def _profile_suffix(variant: str, clean: bool) -> str:
-    """Repo/dir suffix for a (variant, clean) profile. `whole` + raw = no suffix (the
-    original artifacts), so the default pipeline stays byte-for-byte compatible; the clean
-    profile appends `-clean` so it never clobbers the originals."""
+def _profile_suffix(variant: str, clean: bool = False, drop_roundups: bool = False) -> str:
+    """Repo suffix for a (variant, clean, drop_roundups) profile. `whole` + raw = no suffix
+    (the original artifacts). Clean adds `-clean`; `--drop-roundups` adds `-drop` on top."""
     suffix = "" if variant == "whole" else f"-{variant}"
     if clean:
         suffix += "-clean"
+        if drop_roundups:
+            suffix += "-drop"
     return suffix
 
 
-def dataset_repo(hf_user: str, variant: str = "whole", clean: bool = False) -> str:
+def processed_profile_name(variant: str, clean: bool = False, drop_roundups: bool = False) -> str:
+    """Local processed-data dir name under outputs/data/processed/."""
+    name = variant
+    if clean:
+        name += "-clean"
+        if drop_roundups:
+            name += "-drop"
+    return name
+
+
+def dataset_repo(hf_user: str, variant: str = "whole", clean: bool = False,
+                 drop_roundups: bool = False) -> str:
     """Hub dataset repo holding the processed Arrow splits for a probe variant/profile."""
-    return f"{hf_user}/amlk-training-data{_profile_suffix(variant, clean)}"
+    return f"{hf_user}/amlk-training-data{_profile_suffix(variant, clean, drop_roundups)}"
 
 
-def model_repo(hf_user: str, variant: str = "whole", clean: bool = False) -> str:
+def model_repo(hf_user: str, variant: str = "whole", clean: bool = False,
+               drop_roundups: bool = False) -> str:
     """Hub repo for the trained LoRA adapter of a probe variant/profile."""
-    return f"{hf_user}/amlk-qwen3-2b-sft{_profile_suffix(variant, clean)}"
+    return f"{hf_user}/amlk-qwen3-2b-sft{_profile_suffix(variant, clean, drop_roundups)}"
 
 
 @dataclass

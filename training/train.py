@@ -30,6 +30,7 @@ from training.config import (
     TrainingConfig,
     dataset_repo,
     model_repo,
+    processed_profile_name,
 )
 
 
@@ -88,28 +89,36 @@ def wandb_api_key() -> str:
 def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
                   smoke_test: bool, mini_test: bool = False, inference_only: bool = False,
                   pred_suffix: str = "", epochs: int = 0, clean: bool = False,
-                  base_model: str = ""):
+                  drop_roundups: bool = False, base_model: str = ""):
     """Upload the processed splits to the Hub and submit train_hf_job.py to HF Jobs.
 
     inference_only=True skips dataset re-upload and training; loads the already-pushed
     adapter and regenerates predictions only (fast: a10g-small, 1h timeout). pred_suffix
     (e.g. "-v2") keeps a re-decode from clobbering the v1 predictions. epochs overrides the
     default epoch count (0 = use the job's default). clean=True selects the clean pipeline
-    profile (-clean data/adapter repos + <variant>-clean processed dir + CLEAN=1 to the job).
+    profile; drop_roundups=True (requires clean) targets the -clean-drop artifacts.
     """
     import warnings
     warnings.filterwarnings("ignore", category=UserWarning)
     from huggingface_hub import HfApi
 
+    if drop_roundups and not clean:
+        print("ERROR: drop_roundups requires clean=True", file=sys.stderr)
+        sys.exit(1)
+
     api = HfApi(token=hf_token)
-    data_repo = dataset_repo(hf_user, variant, clean)
-    out_repo = model_repo(hf_user, variant, clean)
+    data_repo = dataset_repo(hf_user, variant, clean, drop_roundups)
+    out_repo = model_repo(hf_user, variant, clean, drop_roundups)
 
     if not inference_only:
-        data_dir = Path(PROCESSED_DIR) / (f"{variant}-clean" if clean else variant)
+        data_dir = Path(PROCESSED_DIR) / processed_profile_name(variant, clean, drop_roundups)
         if not data_dir.exists():
-            clean_flag = " --clean" if clean else ""
-            print(f"ERROR: {data_dir} not found. Run: python -m data.preprocess --variant {variant}{clean_flag}", file=sys.stderr)
+            flags = ""
+            if clean:
+                flags += " --clean"
+            if drop_roundups:
+                flags += " --drop-roundups"
+            print(f"ERROR: {data_dir} not found. Run: python -m data.preprocess --variant {variant}{flags}", file=sys.stderr)
             sys.exit(1)
         print(f"Uploading {data_dir} to {data_repo}...")
         api.create_repo(repo_id=data_repo, repo_type="dataset", private=True, exist_ok=True)
@@ -263,8 +272,12 @@ def main():
     parser.add_argument("--pred-suffix", default="", help="With --submit-hf: suffix for pushed prediction files (e.g. -v2) so a re-decode doesn't clobber v1")
     parser.add_argument("--epochs", type=int, default=0, help="With --submit-hf: number of training epochs (0 = job default of 3)")
     parser.add_argument("--clean", action="store_true",
-                        help="Clean pipeline profile: use the -clean data/adapter repos and the "
-                             "<variant>-clean processed dir, and enable the clean inference toggles.")
+                        help="Clean pipeline profile: normalize references + hardened prompt "
+                             "+ clean inference toggles. Use --drop-roundups to also remove "
+                             "3+ pipe roundups.")
+    parser.add_argument("--drop-roundups", action="store_true",
+                        help="With --clean/--submit-hf: target the -clean-drop data/adapter repos "
+                             "(drops 3+ pipe references; default --clean keeps all 10k).")
     parser.add_argument("--base-model", default="",
                         help="With --submit-hf: override the base model id (e.g. google/gemma-2-2b) "
                              "for the Hebrew base-model comparison; default is Qwen/Qwen3-2B.")
@@ -275,13 +288,18 @@ def main():
         print("ERROR: HF_TOKEN not set. Run: source .env", file=sys.stderr)
         sys.exit(1)
 
+    if args.drop_roundups and not args.clean:
+        print("ERROR: --drop-roundups requires --clean", file=sys.stderr)
+        sys.exit(1)
+
     if args.submit_hf:
         if not args.hf_user:
             print("ERROR: --hf-user required with --submit-hf", file=sys.stderr)
             sys.exit(1)
         submit_hf_job(args.method, args.variant, hf_token, args.hf_user,
                       args.smoke_test, args.mini_test, args.inference_only,
-                      args.pred_suffix, args.epochs, args.clean, args.base_model)
+                      args.pred_suffix, args.epochs, args.clean,
+                      args.drop_roundups, args.base_model)
         return
 
     if args.push_to_hub and not args.hf_user:
