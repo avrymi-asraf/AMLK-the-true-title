@@ -103,7 +103,7 @@
 * `data/preprocess.py`: Reads `combined.jsonl`, builds `(prompt, completion)` pairs for completion-only SFT, applies the `--variant whole|lead|body` truncation probe (`make_variant`), truncates each article to `MAX_LENGTH-256` tokens so the summary always survives (HeSum articles are long — median ~2500 tokens; without this, completion-only loss goes nan), splits 80/10/10, saves Arrow splits to `outputs/data/processed/<profile>/`. The opt-in `--clean` flag (+ `--drop-roundups`) routes references through `data/clean.py` and selects `build_prompt(clean=True)`, writing to a parallel `<variant>-clean[-drop]` dir so the original artifacts stay reproducible. `build_prompt`/`make_variant` are the single source of truth, reused by `evaluation/predict.py`.
 * `training/config.py`: Shared constants: `MODEL_ID="dicta-il/DictaLM-3.0-1.7B-Base"`, `METHOD_PRESETS` (the qlora/lora/full deltas), `LoRAConfig` (r=32, alpha=64, q/k/v/o + gate/up/down_proj), `TrainingConfig`, `WANDB_PROJECT`, and the `dataset_repo`/`model_repo`/`processed_profile_name` Hub-id helpers (each takes `clean`/`drop_roundups` and appends `-clean[-drop]` via `_profile_suffix`).
 * `training/train.py`: One trainer for all three regimes (`--method qlora|lora|full`). Trains with `completion_only_loss=True`, logs to wandb, saves the adapter; `--push-to-hub` or `--submit-hf` push to the Hub. `--base-model` swaps the base checkpoint (requires `--output-repo`, so a different base can never overwrite another's adapter); `--skip-data-upload` reuses the splits already on the Hub. `--clean`/`--drop-roundups` (with `--submit-hf`) target the clean-profile data/adapter repos instead of the original ones. Inference is NOT here — that's `evaluation/predict.py`.
-* `training/train_hf_job.py`: Self-contained PEP 723 UV script submitted inline by `train.py --submit-hf`. Reads METHOD/VARIANT/BASE_MODEL/DATASET_REPO/OUTPUT_REPO/WANDB_PROJECT/CLEAN from env, trains on the cloud GPU, then generates fine-tuned + zero-shot base test predictions (PEFT `disable_adapter`) and pushes the adapter + `predictions-finetuned.jsonl` / `predictions-base.jsonl` to the Hub. Prints `print_trainable_parameters()` before training so a base-model swap can't silently regress LoRA layer coverage. `BASE_MODEL` defaults to `MODEL_ID` — duplicated from `config.py` on purpose (the script is submitted inline and can't import repo code); keep in sync. Under `CLEAN=1`, `build_input_text` appends a `/no_think` soft switch on chat-capable bases (a no-op on DictaLM's no-chat-template base) and generation applies an inlined Hebrew-script `bad_words_ids` constraint (twin of `evaluation/hebrew_constraint.py`, since this script can't import repo code). Never run directly.
+* `training/train_hf_job.py`: Self-contained PEP 723 UV script submitted inline by `train.py --submit-hf`. Reads METHOD/VARIANT/BASE_MODEL/DATASET_REPO/OUTPUT_REPO/WANDB_PROJECT/CLEAN from env, trains on the cloud GPU, then generates fine-tuned + zero-shot base test predictions (PEFT `disable_adapter`) and pushes the adapter + `predictions-finetuned.jsonl` / `predictions-base.jsonl` to the Hub. Prints `print_trainable_parameters()` before training so a base-model swap can't silently regress LoRA layer coverage. `BASE_MODEL` defaults to `MODEL_ID` — duplicated from `config.py` on purpose (the script is submitted inline and can't import repo code); keep in sync. Under `CLEAN=1`, `build_input_text` appends a `/no_think` soft switch on chat-capable bases (a no-op on DictaLM's no-chat-template base) and generation applies an inlined Hebrew-script `bad_words_ids` constraint (twin of `evaluation/hebrew_constraint.py`, since this script can't import repo code). Training checkpoints save to `/data/output` — `run_uv_job` auto-mounts a per-job bucket at `/data` to ship this script to the container (`HfApi._create_uv_command_env_and_secrets`), and that bucket, unlike the container's local disk, survives an infra-level restart of the same job, so `trainer.train()` auto-resumes from the last checkpoint there instead of silently restarting from step 0. Never run directly.
 * `evaluation/predict.py`: Generates the Gemini advanced-baseline summaries via API (no GPU, no model load), same prompt as training (`--clean` selects the hardened clean-profile prompt). Resumes from a partial file. The fine-tuned and zero-shot predictions come from the cloud training job, not here.
 * `evaluation/gemini_client.py`: Shared Gemini API helpers (`GEMINI_MODEL`, `call_with_retry`). Also defines `strip_think()` — the shared tool that drops closed `<think>…</think>` reasoning blocks (emitted by chat-capable Qwen3-family models) so metrics score the summary, not the reasoning (used by evaluate.py and error_analysis.py).
 * `evaluation/evaluate.py`: Scores a predictions file with raw + Hebrew-normalized ROUGE-1/2/L (`normalize_hebrew` strips niqqud + folds final-form letters), BERTScore (default `onlplab/alephbert-base`, the HeSum backbone; `--bertscore-model` to override), and the Gemini faithfulness/fluency judge (`--skip-llm` to skip; `--limit N` to cap for a smoke run). Applies `strip_think` before scoring. One JSON report per system.
@@ -220,6 +220,35 @@ wandb 0.27.
 - Note: QLoRA `push_to_hub` saves the LoRA adapter only (not merged) — evaluation loads base + adapter via `PeftModel.from_pretrained` (handled in `predict.py`).
 - Note: the Gemini LLM-judge and the Gemini advanced baseline are the same model family — flag the possible self-preference bias in the paper.
 - `train_hf_job.py` / `evaluation/infer.py` share a decode config: `max_new_tokens=256` (p99 reference length is 187 tokens), `min_new_tokens=16`, `no_repeat_ngram_size=3`, `repetition_penalty=1.2`, explicit `eos_token_id`/`pad_token_id`, greedy. Predictions are pushed immediately after each generation loop (timeout-safe), progress every 10 batches; inference-only jobs use a 1h timeout. `PRED_SUFFIX` env (`--pred-suffix`) appends a suffix so a re-decode doesn't clobber an earlier prediction file.
+
+**2026-07-09 — Diagnosed and fixed a training-checkpoint-loss bug found while verifying the first
+real `--clean` LoRA run (job `6a4f55731fba25b8ea3b310b`, 1 epoch).** The job's underlying container
+was restarted at the infra level partway through training (confirmed via wandb: the first run,
+`afn9wzvk`, reached step 390/500 with a healthy loss curve then died silently around 4h in with no
+Python traceback; the retry's logs show the *entire* `uv` venv — torch, CUDA libs, everything —
+being reinstalled from scratch, i.e. a full container wipe, not a script-level exception). Root
+cause of the wasted progress: `train_hf_job.py`'s `SFTConfig(output_dir="./output")` wrote
+checkpoints to the container's ephemeral local disk, which the restart wiped, and the script never
+called `resume_from_checkpoint`, so the retry silently restarted training from step 0. Compounding
+factor: the job's `running_secs` exceeded its declared `6h` timeout (`train.py`'s full-run flavor)
+while still mid-retry — matching a precedent already noted below (job `6a3fa247` also ran past its
+declared timeout and still completed) — so timeout enforcement on this account is not reliable
+either way. Fixed: `output_dir` now points at `/data/output`. `/data` is a bucket
+(`avreymi/jobs-artifacts`) that `run_uv_job` auto-mounts to ship this script into the container
+(`HfApi._create_uv_command_env_and_secrets`, confirmed by reading its source — "Local files are
+shipped to the job via a bucket mounted at /data"), scoped to a per-job subfolder; unlike local
+disk, that bucket survives an infra-level restart of the same job. (A same-turn detour briefly
+"corrected" this to a Hub-round-trip approach after grepping `train.py` for `volumes=` and finding
+none passed explicitly — that grep missed that `run_uv_job` auto-injects the mount regardless of
+what the caller passes; `hf jobs inspect` on both this job and an earlier one confirmed the real
+`volumes` entry at `/data`, so the original `/data/output` fix was correct all along and the
+detour was reverted.) `trainer.train()` now checks for an existing `checkpoint-*` under
+`/data/output` and passes `resume_from_checkpoint=True` when found. A brand-new job submission
+gets its own fresh bucket subpath, so this can't cross-contaminate between unrelated runs — only
+retries of one job see one another's checkpoints. The job that exposed this (job
+`6a4f55731fba25b8ea3b310b`) was canceled rather than left to finish, since a second full restart
+was already ~20 min past its own timeout with ~2.5h of training still left; this corrected fix
+hasn't been tested against a real restart yet — worth watching the next full submission.
 
 **2026-07-09 — Ported the opt-in "clean" pipeline profile from `main` (`--clean`/`--drop-roundups`),
 keeping this branch pinned to DictaLM.** `main` added a parallel pipeline profile addressing the

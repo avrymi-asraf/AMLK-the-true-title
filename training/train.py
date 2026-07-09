@@ -90,7 +90,7 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
                   smoke_test: bool, mini_test: bool = False, inference_only: bool = False,
                   pred_suffix: str = "", epochs: int = 0, base_model: str = "",
                   output_repo: str = "", skip_data_upload: bool = False,
-                  clean: bool = False, drop_roundups: bool = False):
+                  clean: bool = False, drop_roundups: bool = False, timeout: str = ""):
     """Upload the processed splits to the Hub and submit train_hf_job.py to HF Jobs.
 
     inference_only=True skips dataset re-upload and training; loads the already-pushed
@@ -142,7 +142,8 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
         # 80 train / 5 epochs / ~25 optimizer steps — validates full pipeline with real loss curves
         flavor, timeout, label = "a10g-small", "1h", "mini"
     else:
-        flavor, timeout, label = "a10g-large", "6h", ""
+        flavor, label = "a10g-large", ""
+        timeout = timeout or "6h"
     wandb_key = wandb_api_key()
 
     tag = f"{label} " if label else ""

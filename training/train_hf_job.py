@@ -23,6 +23,12 @@ logs to Weights & Biases, and pushes the trained adapter back to the Hub.
 INFERENCE_ONLY=1 skips training and loads an already-pushed adapter from OUTPUT_REPO —
 use this to re-generate predictions when the training job ran out of time.
 
+Training checkpoints save to /data/output, not the container's local disk: run_uv_job (see
+huggingface_hub.HfApi._create_uv_command_env_and_secrets) auto-mounts a per-job bucket at /data
+to ship this script to the container in the first place, and that same bucket volume — unlike
+local disk — survives an infra-level restart of the same job, so trainer.train() auto-resumes
+from the last checkpoint there instead of silently restarting the whole run from step 0.
+
 Execution environment: ephemeral HuggingFace Jobs GPU container (a10g-large by default;
 a10g-small is sufficient for inference-only runs).
 """
@@ -149,8 +155,12 @@ else:
         n_epochs, max_steps_cfg = EPOCHS, -1
         log_steps, eval_steps_cfg, save_steps_cfg = 10, 200, 200
 
+    # /data is the bucket run_uv_job auto-mounts to ship this script to the container — that
+    # bucket volume (unlike the container's local disk) survives an infra-level restart of the
+    # same job, so a checkpoint written here is still there when trainer.train() resumes below.
+    output_dir = "/data/output"
     sft_config = SFTConfig(
-        output_dir="./output",
+        output_dir=output_dir,
         push_to_hub=True,
         hub_model_id=OUTPUT_REPO,
         hub_strategy="every_save",
@@ -199,8 +209,15 @@ else:
         # expected. Print the count so a base-model swap can never regress that silently.
         trainer.model.print_trainable_parameters()
 
+    resume_from_checkpoint = None
+    if os.path.isdir(output_dir) and any(
+        d.startswith("checkpoint-") for d in os.listdir(output_dir)
+    ):
+        resume_from_checkpoint = True
+        print(f"Found existing checkpoint(s) in {output_dir} — resuming training.")
+
     print("Starting training...")
-    trainer.train()
+    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     trainer.push_to_hub()
 
     trained_model = trainer.model.eval()
