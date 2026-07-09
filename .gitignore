@@ -3,6 +3,8 @@
 
 # Virtual environment
 .venv/
+.idea/
+venv/
 
 # Python
 __pycache__/
