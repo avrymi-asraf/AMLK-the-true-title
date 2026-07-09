@@ -45,7 +45,7 @@ def load_finetuned_model(adapter_repo: str, model_id: str = MODEL_ID, quantize: 
     return model, tokenizer, device
 
 
-def build_input_text(tokenizer, prompt: str, label: str) -> str:
+def build_input_text(tokenizer, prompt: str, label: str, clean: bool = False) -> str:
     """Format the prompt for generation, per system. Mirrors train_hf_job.py:build_input_text —
     keep the two in sync by hand (that script can't import repo code).
 
@@ -54,13 +54,16 @@ def build_input_text(tokenizer, prompt: str, label: str) -> str:
     chat-capable model, feeding it raw risks the reasoning prior free-associating into an
     open-ended <think> block that never closes. The real chat template with
     enable_thinking=False closes the think block immediately, giving the baseline a fairer
-    chance. Pure base checkpoints (e.g. dicta-il/DictaLM-3.0-1.7B-Base) ship no chat template
-    at all, so there is no assistant mode to enter and the raw prompt is the only option.
+    chance; the clean profile additionally appends a `/no_think` soft switch for extra
+    reinforcement on chat-capable models. Pure base checkpoints (e.g.
+    dicta-il/DictaLM-3.0-1.7B-Base) ship no chat template at all, so there is no assistant mode
+    to enter and the raw prompt is the only option — clean's `/no_think` is then a no-op.
     """
     if label != "base" or not tokenizer.chat_template:
         return prompt
+    content = f"{prompt}\n/no_think" if clean else prompt
     return tokenizer.apply_chat_template(
-        [{"role": "user", "content": prompt}],
+        [{"role": "user", "content": content}],
         tokenize=False, add_generation_prompt=True, enable_thinking=False,
     )
 
@@ -68,6 +71,7 @@ def build_input_text(tokenizer, prompt: str, label: str) -> str:
 def generate_summaries(
     model, tokenizer, dataset, variant: str, device,
     batch_size: int = 8, max_new_tokens: int = 256, label: str = "finetuned",
+    clean: bool = False,
 ) -> list[dict]:
     """Generate summaries for a (processed) test split, in batches, greedily.
 
@@ -75,13 +79,18 @@ def generate_summaries(
     baked into them by data/preprocess.py — do NOT re-apply make_variant). Left-padding keeps
     every sequence in a batch right-aligned so `out[:, input_len:]` extracts only the generated
     tokens. Returns the standard prediction rows that evaluate.py / error_analysis.py consume.
-    Mirrors train_hf_job.py:generate_predictions().
+    `clean=True` enables the clean-profile decode toggles (base /no_think + Hebrew-script
+    constraint). Mirrors train_hf_job.py:generate_predictions().
     """
     tokenizer.padding_side = "left"
+    bad_words_ids = None
+    if clean:
+        from evaluation.hebrew_constraint import build_bad_words_ids
+        bad_words_ids = build_bad_words_ids(tokenizer)
     rows = []
     for i in range(0, len(dataset), batch_size):
         batch = dataset[i:i + batch_size]
-        prompts: list[str] = [build_input_text(tokenizer, p, label) for p in batch["prompt"]]
+        prompts: list[str] = [build_input_text(tokenizer, p, label, clean=clean) for p in batch["prompt"]]
         inputs = tokenizer(
             prompts, return_tensors="pt", truncation=True,
             max_length=2048 - 128, padding=True,
@@ -94,6 +103,7 @@ def generate_summaries(
                 no_repeat_ngram_size=3, repetition_penalty=1.2,
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.pad_token_id,
+                bad_words_ids=bad_words_ids,
             )
         input_len = inputs["input_ids"].shape[1]
         for j in range(len(prompts)):

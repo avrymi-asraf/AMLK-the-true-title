@@ -30,6 +30,7 @@ from training.config import (
     TrainingConfig,
     dataset_repo,
     model_repo,
+    processed_profile_name,
 )
 
 
@@ -88,7 +89,8 @@ def wandb_api_key() -> str:
 def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
                   smoke_test: bool, mini_test: bool = False, inference_only: bool = False,
                   pred_suffix: str = "", epochs: int = 0, base_model: str = "",
-                  output_repo: str = "", skip_data_upload: bool = False):
+                  output_repo: str = "", skip_data_upload: bool = False,
+                  clean: bool = False, drop_roundups: bool = False):
     """Upload the processed splits to the Hub and submit train_hf_job.py to HF Jobs.
 
     inference_only=True skips dataset re-upload and training; loads the already-pushed
@@ -98,20 +100,31 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
     (defaults to config.MODEL_ID); output_repo must then be set too, so a different base
     model never pushes its adapter over another one's repo. skip_data_upload reuses the
     splits already on the Hub (the processed data is base-model independent — it stores
-    text, which SFTTrainer tokenizes at train time).
+    text, which SFTTrainer tokenizes at train time). clean=True selects the clean pipeline
+    profile (-clean data/adapter repos + clean inference toggles); drop_roundups=True
+    (requires clean) targets the -clean-drop artifacts.
     """
     import warnings
     warnings.filterwarnings("ignore", category=UserWarning)
     from huggingface_hub import HfApi
 
+    if drop_roundups and not clean:
+        print("ERROR: drop_roundups requires clean=True", file=sys.stderr)
+        sys.exit(1)
+
     api = HfApi(token=hf_token)
-    data_repo = dataset_repo(hf_user, variant)
-    out_repo = output_repo or model_repo(hf_user, variant)
+    data_repo = dataset_repo(hf_user, variant, clean, drop_roundups)
+    out_repo = output_repo or model_repo(hf_user, variant, clean, drop_roundups)
 
     if not inference_only and not skip_data_upload:
-        data_dir = Path(PROCESSED_DIR) / variant
+        data_dir = Path(PROCESSED_DIR) / processed_profile_name(variant, clean, drop_roundups)
         if not data_dir.exists():
-            print(f"ERROR: {data_dir} not found. Run: python data/preprocess.py --variant {variant}", file=sys.stderr)
+            flags = ""
+            if clean:
+                flags += " --clean"
+            if drop_roundups:
+                flags += " --drop-roundups"
+            print(f"ERROR: {data_dir} not found. Run: python -m data.preprocess --variant {variant}{flags}", file=sys.stderr)
             sys.exit(1)
         print(f"Uploading {data_dir} to {data_repo}...")
         api.create_repo(repo_id=data_repo, repo_type="dataset", private=True, exist_ok=True)
@@ -151,6 +164,7 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
             "SMOKE_TEST": "1" if smoke_test else "0",
             "MINI_TEST": "1" if mini_test else "0",
             "INFERENCE_ONLY": "1" if inference_only else "0",
+            "CLEAN": "1" if clean else "0",
             "PRED_SUFFIX": pred_suffix,
             "EPOCHS": str(epochs) if epochs else "",
         },
@@ -268,11 +282,22 @@ def main():
     parser.add_argument("--base-model", default="", help=f"Base checkpoint to fine-tune (default: {MODEL_ID}). Requires --output-repo.")
     parser.add_argument("--output-repo", default="", help="Hub repo for the adapter (default: derived from --hf-user/--variant)")
     parser.add_argument("--skip-data-upload", action="store_true", help="With --submit-hf: reuse the splits already on the Hub instead of re-uploading")
+    parser.add_argument("--clean", action="store_true",
+                        help="Clean pipeline profile: normalize references + hardened prompt "
+                             "+ clean inference toggles. Use --drop-roundups to also remove "
+                             "3+ pipe roundups.")
+    parser.add_argument("--drop-roundups", action="store_true",
+                        help="With --clean/--submit-hf: target the -clean-drop data/adapter repos "
+                             "(drops 3+ pipe references; default --clean keeps all 10k).")
     args = parser.parse_args()
 
     hf_token = os.environ.get("HF_TOKEN", "")
     if not hf_token:
         print("ERROR: HF_TOKEN not set. Run: source .env", file=sys.stderr)
+        sys.exit(1)
+
+    if args.drop_roundups and not args.clean:
+        print("ERROR: --drop-roundups requires --clean", file=sys.stderr)
         sys.exit(1)
 
     if args.submit_hf:
@@ -282,12 +307,13 @@ def main():
         # Without this, a swapped base model would push its adapter over the default repo's.
         if args.base_model and not args.output_repo:
             print("ERROR: --base-model requires --output-repo (refusing to overwrite "
-                  f"{model_repo(args.hf_user, args.variant)})", file=sys.stderr)
+                  f"{model_repo(args.hf_user, args.variant, args.clean, args.drop_roundups)})", file=sys.stderr)
             sys.exit(1)
         submit_hf_job(args.method, args.variant, hf_token, args.hf_user,
                       args.smoke_test, args.mini_test, args.inference_only,
                       args.pred_suffix, args.epochs, args.base_model,
-                      args.output_repo, args.skip_data_upload)
+                      args.output_repo, args.skip_data_upload,
+                      args.clean, args.drop_roundups)
         return
 
     if args.push_to_hub and not args.hf_user:

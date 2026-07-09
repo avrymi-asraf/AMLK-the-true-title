@@ -49,6 +49,11 @@ OUTPUT_REPO = os.environ["OUTPUT_REPO"]
 SMOKE_TEST = os.environ.get("SMOKE_TEST", "0") == "1"
 MINI_TEST = os.environ.get("MINI_TEST", "0") == "1"
 INFERENCE_ONLY = os.environ.get("INFERENCE_ONLY", "0") == "1"
+# Clean pipeline profile: base /no_think reinforcement (on chat-capable models) + Hebrew-script
+# decode constraint at inference. The cleaned references + hardened prompt are already baked
+# into the dataset's prompt/completion columns, so training itself needs no CLEAN branch —
+# only generation does.
+CLEAN = os.environ.get("CLEAN", "0") == "1"
 # Suffix appended to pushed prediction filenames, e.g. "-v2" so a re-decode of an existing
 # adapter doesn't clobber the v1 predictions and the two can be scored side by side.
 PRED_SUFFIX = os.environ.get("PRED_SUFFIX", "")
@@ -220,13 +225,40 @@ def build_input_text(prompt: str, label: str) -> str:
     Pure base checkpoints (e.g. dicta-il/DictaLM-3.0-1.7B-Base) ship no chat template at
     all — there is no assistant mode to enter, so the raw completion prompt is the only
     option, and the zero-shot baseline should be expected to drift off-task/off-language.
+    Under CLEAN, also append a `/no_think` soft switch for extra reinforcement on chat-capable
+    models; on a no-chat-template base it is inert (falls through to the raw-prompt branch).
     """
     if label != "base" or not tokenizer.chat_template:
         return prompt
+    content = f"{prompt}\n/no_think" if CLEAN else prompt
     return tokenizer.apply_chat_template(
-        [{"role": "user", "content": prompt}],
+        [{"role": "user", "content": content}],
         tokenize=False, add_generation_prompt=True, enable_thinking=False,
     )
+
+
+def _build_bad_words_ids():
+    """Clean-profile only: forbid emitting tokens containing foreign scripts (Latin/Cyrillic/
+    Greek/Arabic) so summaries stay in Hebrew. Inlined twin of evaluation/hebrew_constraint.py
+    (this script can't import repo code). Returns None when disabled or nothing matches."""
+    if not CLEAN:
+        return None
+    import re
+    forbidden = re.compile(
+        "[A-Za-zÀ-ɏЀ-ӿͰ-Ͽ؀-ۿ]")
+    special_ids = set(tokenizer.all_special_ids)
+    bad = []
+    for token_id in range(tokenizer.vocab_size):
+        if token_id in special_ids:
+            continue
+        piece = tokenizer.decode([token_id])
+        if piece and forbidden.search(piece):
+            bad.append([token_id])
+    print(f"[clean] Hebrew-script constraint: forbidding {len(bad)} foreign-script tokens")
+    return bad or None
+
+
+BAD_WORDS_IDS = _build_bad_words_ids()
 
 
 def generate_predictions(label: str) -> list[dict]:
@@ -258,6 +290,7 @@ def generate_predictions(label: str) -> list[dict]:
                 no_repeat_ngram_size=3, repetition_penalty=1.2,
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.pad_token_id,
+                bad_words_ids=BAD_WORDS_IDS,
             )
         input_len = inputs["input_ids"].shape[1]
         for j, prompt in enumerate(prompts):

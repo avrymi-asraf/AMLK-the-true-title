@@ -16,16 +16,37 @@ MAX_LENGTH = 2048
 WANDB_PROJECT = "amlk-hebrew-summarization"
 
 
-def dataset_repo(hf_user: str, variant: str = "whole") -> str:
-    """Hub dataset repo holding the processed Arrow splits for a probe variant."""
+def _profile_suffix(variant: str, clean: bool = False, drop_roundups: bool = False) -> str:
+    """Repo suffix for a (variant, clean, drop_roundups) profile. `whole` + raw = no suffix
+    (the original artifacts). Clean adds `-clean`; `--drop-roundups` adds `-drop` on top."""
     suffix = "" if variant == "whole" else f"-{variant}"
-    return f"{hf_user}/amlk-training-data{suffix}"
+    if clean:
+        suffix += "-clean"
+        if drop_roundups:
+            suffix += "-drop"
+    return suffix
 
 
-def model_repo(hf_user: str, variant: str = "whole") -> str:
-    """Hub repo for the trained LoRA adapter of a probe variant."""
-    suffix = "" if variant == "whole" else f"-{variant}"
-    return f"{hf_user}/amlk-dictalm3-1.7b-sft{suffix}"
+def processed_profile_name(variant: str, clean: bool = False, drop_roundups: bool = False) -> str:
+    """Local processed-data dir name under outputs/data/processed/."""
+    name = variant
+    if clean:
+        name += "-clean"
+        if drop_roundups:
+            name += "-drop"
+    return name
+
+
+def dataset_repo(hf_user: str, variant: str = "whole", clean: bool = False,
+                 drop_roundups: bool = False) -> str:
+    """Hub dataset repo holding the processed Arrow splits for a probe variant/profile."""
+    return f"{hf_user}/amlk-training-data{_profile_suffix(variant, clean, drop_roundups)}"
+
+
+def model_repo(hf_user: str, variant: str = "whole", clean: bool = False,
+               drop_roundups: bool = False) -> str:
+    """Hub repo for the trained LoRA adapter of a probe variant/profile."""
+    return f"{hf_user}/amlk-dictalm3-1.7b-sft{_profile_suffix(variant, clean, drop_roundups)}"
 
 
 @dataclass

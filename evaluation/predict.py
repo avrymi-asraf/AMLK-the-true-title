@@ -22,11 +22,12 @@ from data.prompts import build_prompt, make_variant
 from evaluation.gemini_client import GEMINI_MODEL, GEMINI_TIMEOUT, call_with_retry
 
 
-def build_gemini_generator():
+def build_gemini_generator(clean: bool = False):
     """Return a generate(text)->summary fn backed by the Gemini advanced baseline.
 
-    Returns empty string for blocked prompts (PROHIBITED_CONTENT) so resume logic
-    (line-count index) stays aligned with the dataset.
+    clean=True uses the hardened clean-profile prompt so the baseline is comparable to the
+    clean fine-tuned model. Returns empty string for blocked prompts (PROHIBITED_CONTENT) so
+    resume logic (line-count index) stays aligned with the dataset.
     """
     import google.generativeai as genai
 
@@ -36,7 +37,7 @@ def build_gemini_generator():
     def generate(text: str) -> str:
         try:
             return call_with_retry(lambda: model.generate_content(
-                build_prompt(text), request_options={"timeout": GEMINI_TIMEOUT}).text).strip()
+                build_prompt(text, clean=clean), request_options={"timeout": GEMINI_TIMEOUT}).text).strip()
         except Exception as e:
             if "candidates" in str(e).lower() or "blocked" in str(e).lower() or "prohibited" in str(e).lower():
                 print("  [SKIPPED] Blocked prompt — writing empty prediction.", file=sys.stderr)
@@ -54,6 +55,8 @@ def main():
     parser.add_argument("--limit", type=int, default=0, help="Cap examples for a quick check")
     parser.add_argument("--from-predictions", default="",
                         help="Reuse text/reference rows from an existing predictions.jsonl (skips datasets)")
+    parser.add_argument("--clean", action="store_true",
+                        help="Clean profile: use the hardened anti-elaboration prompt.")
     args = parser.parse_args()
 
     if not os.environ.get("GEMINI_API_KEY"):
@@ -80,8 +83,8 @@ def main():
     if done:
         print(f"Resuming: {done} predictions already in {output_path}")
 
-    generate = build_gemini_generator()
-    print(f"Generating {len(test_rows) - done} Gemini predictions (variant={args.variant})...")
+    generate = build_gemini_generator(clean=args.clean)
+    print(f"Generating {len(test_rows) - done} Gemini predictions (variant={args.variant}, clean={args.clean})...")
     with open(output_path, "a", encoding="utf-8") as f:
         for i in range(done, len(test_rows)):
             ex = test_rows[i]
