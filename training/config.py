@@ -16,16 +16,24 @@ MAX_LENGTH = 2048
 WANDB_PROJECT = "amlk-hebrew-summarization"
 
 
-def dataset_repo(hf_user: str, variant: str = "whole") -> str:
-    """Hub dataset repo holding the processed Arrow splits for a probe variant."""
+def _profile_suffix(variant: str, clean: bool) -> str:
+    """Repo/dir suffix for a (variant, clean) profile. `whole` + raw = no suffix (the
+    original artifacts), so the default pipeline stays byte-for-byte compatible; the clean
+    profile appends `-clean` so it never clobbers the originals."""
     suffix = "" if variant == "whole" else f"-{variant}"
-    return f"{hf_user}/amlk-training-data{suffix}"
+    if clean:
+        suffix += "-clean"
+    return suffix
 
 
-def model_repo(hf_user: str, variant: str = "whole") -> str:
-    """Hub repo for the trained LoRA adapter of a probe variant."""
-    suffix = "" if variant == "whole" else f"-{variant}"
-    return f"{hf_user}/amlk-qwen3-2b-sft{suffix}"
+def dataset_repo(hf_user: str, variant: str = "whole", clean: bool = False) -> str:
+    """Hub dataset repo holding the processed Arrow splits for a probe variant/profile."""
+    return f"{hf_user}/amlk-training-data{_profile_suffix(variant, clean)}"
+
+
+def model_repo(hf_user: str, variant: str = "whole", clean: bool = False) -> str:
+    """Hub repo for the trained LoRA adapter of a probe variant/profile."""
+    return f"{hf_user}/amlk-qwen3-2b-sft{_profile_suffix(variant, clean)}"
 
 
 @dataclass

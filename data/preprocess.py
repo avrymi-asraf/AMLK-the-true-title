@@ -18,6 +18,7 @@ from pathlib import Path
 
 import datasets as hf_datasets
 
+from data.clean import is_roundup_digest, normalize_summary
 from data.prompts import build_prompt, make_variant
 from training.config import MAX_LENGTH, MODEL_ID
 
@@ -48,9 +49,13 @@ def main():
     parser = argparse.ArgumentParser(description="Format and split Hebrew summarization data")
     parser.add_argument("--variant", choices=VARIANTS, default="whole",
                         help="Article input for the truncation probe (whole|lead|body)")
+    parser.add_argument("--clean", action="store_true",
+                        help="Clean profile: drop multi-headline digest references, normalize "
+                             "pipes/bullets to prose, and use the hardened prompt. Writes to "
+                             "<variant>-clean so it never clobbers the raw pipeline.")
     args = parser.parse_args()
 
-    output_dir = OUTPUT_ROOT / args.variant
+    output_dir = OUTPUT_ROOT / (f"{args.variant}-clean" if args.clean else args.variant)
     if output_dir.exists():
         print(f"Output already exists at {output_dir}. Delete it to re-preprocess.")
         sys.exit(0)
@@ -64,6 +69,17 @@ def main():
         records = [json.loads(line) for line in f]
     print(f"Loaded {len(records)} records")
 
+    if args.clean:
+        # Drop the worst multi-headline "media roundup" references (not single-article
+        # summaries), then rewrite pipe/bullet digests into natural prose. Both the training
+        # target (completion) and the eval reference (summary) are set from r["summary"] below,
+        # so cleaning it here covers both scopes at once.
+        before = len(records)
+        records = [r for r in records if not is_roundup_digest(r["summary"])]
+        for r in records:
+            r["summary"] = normalize_summary(r["summary"])
+        print(f"[clean] Dropped {before - len(records)} roundup digests; normalized {len(records)} references")
+
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, token=os.environ.get("HF_TOKEN") or None)
     print(f"Building variant '{args.variant}' and truncating articles to {ARTICLE_TOKEN_BUDGET} tokens...")
@@ -73,7 +89,7 @@ def main():
         "text": texts,
         "summary": [r["summary"] for r in records],
         "source": [r["source"] for r in records],
-        "prompt": [build_prompt(t) for t in texts],
+        "prompt": [build_prompt(t, clean=args.clean) for t in texts],
         "completion": [r["summary"] for r in records],
     })
 

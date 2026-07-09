@@ -48,11 +48,12 @@ def run_cloud_job():
     model_repo = os.environ["MODEL_REPO"]
     dataset_repo = os.environ["DATASET_REPO"]
     variant = os.environ.get("VARIANT", "whole")
+    clean = os.environ.get("CLEAN", "0") == "1"
     limit = int(os.environ.get("LIMIT", "0"))
     n_errors = limit if limit else 50
     hf_token = os.environ["HF_TOKEN"]
     api = HfApi(token=hf_token)
-    print(f"Eval job: model={model_repo} dataset={dataset_repo} variant={variant} limit={limit or 'full'}")
+    print(f"Eval job: model={model_repo} dataset={dataset_repo} variant={variant} clean={clean} limit={limit or 'full'}")
 
     # 1. Unpack the public repo so we can reuse evaluation/ + data/ verbatim.
     print("Downloading repo tarball...")
@@ -103,8 +104,9 @@ def run_cloud_job():
         copyfile(cached, results / "predictions-gemini.jsonl")
         print(f"Reusing Gemini baseline from the Hub ({line_count(cached)} rows)")
     else:
+        clean_flag = ["--clean"] if clean else []
         step(["evaluation.predict", "--variant", variant,
-              "--output", "outputs/results/predictions-gemini.jsonl", *lim])
+              "--output", "outputs/results/predictions-gemini.jsonl", *clean_flag, *lim])
         push("predictions-gemini.jsonl")
 
     # 4. Score + error-analyse every system; skip any whose report is already complete (resume),
@@ -128,8 +130,12 @@ def run_cloud_job():
 
 
 # --------------------------------------------------------------------------- local side
-def submit(hf_user: str, variant: str, smoke: bool):
-    """Upload this script to HF Jobs on a cheap CPU flavor and pass settings as env vars."""
+def submit(hf_user: str, variant: str, smoke: bool, clean: bool = False):
+    """Upload this script to HF Jobs on a cheap CPU flavor and pass settings as env vars.
+
+    clean=True targets the -clean data/model repos and tells the cloud runner to use the
+    hardened prompt for the Gemini baseline, so the whole battery scores the clean profile.
+    """
     import warnings
     warnings.filterwarnings("ignore", category=UserWarning)
     from huggingface_hub import HfApi
@@ -142,20 +148,23 @@ def submit(hf_user: str, variant: str, smoke: bool):
         print("ERROR: HF_TOKEN and GEMINI_API_KEY must be set. Run: source .env", file=sys.stderr)
         sys.exit(1)
 
+    out_repo = model_repo(hf_user, variant, clean)
+    data_repo = dataset_repo(hf_user, variant, clean)
     # ~4000 sequential Gemini calls (baseline + judge) can be rate-limited, so allow plenty of
     # wall-clock; each report is pushed as soon as it's ready, so a timeout never loses finished work.
     flavor, timeout, limit = ("cpu-basic", "30m", "5") if smoke else ("cpu-upgrade", "5h", "0")
     api = HfApi(token=hf_token)
-    print(f"Submitting {'SMOKE ' if smoke else ''}eval job (flavor={flavor}, timeout={timeout}, limit={limit})...")
+    print(f"Submitting {'SMOKE ' if smoke else ''}eval job (flavor={flavor}, timeout={timeout}, limit={limit}, clean={clean})...")
     job = api.run_uv_job(
         script=str(__import__("pathlib").Path(__file__).resolve()),
         flavor=flavor,
         timeout=timeout,
         secrets={"HF_TOKEN": hf_token, "GEMINI_API_KEY": gemini_key},
         env={
-            "MODEL_REPO": model_repo(hf_user, variant),
-            "DATASET_REPO": dataset_repo(hf_user, variant),
+            "MODEL_REPO": out_repo,
+            "DATASET_REPO": data_repo,
             "VARIANT": variant,
+            "CLEAN": "1" if clean else "0",
             "LIMIT": limit,
         },
         token=hf_token,
@@ -163,7 +172,7 @@ def submit(hf_user: str, variant: str, smoke: bool):
     print(f"\nJob submitted. ID: {job.id}  Status: {job.status.stage}")
     print(f"  Monitor: https://huggingface.co/jobs/{hf_user}/{job.id}")
     print(f"  Logs:    hf jobs logs {job.id} -f")
-    print(f"  Reports: https://huggingface.co/{model_repo(hf_user, variant)}/tree/main/reports  (after the run)")
+    print(f"  Reports: https://huggingface.co/{out_repo}/tree/main/reports  (after the run)")
 
 
 def main():
@@ -174,13 +183,15 @@ def main():
     parser.add_argument("--hf-user", default="", help="HuggingFace username (required with --submit-hf)")
     parser.add_argument("--variant", choices=("whole", "lead", "body"), default="whole")
     parser.add_argument("--smoke-test", action="store_true", help="Cap to 5 examples to verify the path cheaply")
+    parser.add_argument("--clean", action="store_true",
+                        help="Clean profile: score the -clean data/model repos with the hardened prompt.")
     args = parser.parse_args()
 
     if args.submit_hf:
         if not args.hf_user:
             print("ERROR: --hf-user required with --submit-hf", file=sys.stderr)
             sys.exit(1)
-        submit(args.hf_user, args.variant, args.smoke_test)
+        submit(args.hf_user, args.variant, args.smoke_test, args.clean)
     else:
         run_cloud_job()
 

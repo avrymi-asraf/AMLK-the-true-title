@@ -87,26 +87,29 @@ def wandb_api_key() -> str:
 
 def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
                   smoke_test: bool, mini_test: bool = False, inference_only: bool = False,
-                  pred_suffix: str = "", epochs: int = 0):
+                  pred_suffix: str = "", epochs: int = 0, clean: bool = False,
+                  base_model: str = ""):
     """Upload the processed splits to the Hub and submit train_hf_job.py to HF Jobs.
 
     inference_only=True skips dataset re-upload and training; loads the already-pushed
     adapter and regenerates predictions only (fast: a10g-small, 1h timeout). pred_suffix
     (e.g. "-v2") keeps a re-decode from clobbering the v1 predictions. epochs overrides the
-    default epoch count (0 = use the job's default).
+    default epoch count (0 = use the job's default). clean=True selects the clean pipeline
+    profile (-clean data/adapter repos + <variant>-clean processed dir + CLEAN=1 to the job).
     """
     import warnings
     warnings.filterwarnings("ignore", category=UserWarning)
     from huggingface_hub import HfApi
 
     api = HfApi(token=hf_token)
-    data_repo = dataset_repo(hf_user, variant)
-    out_repo = model_repo(hf_user, variant)
+    data_repo = dataset_repo(hf_user, variant, clean)
+    out_repo = model_repo(hf_user, variant, clean)
 
     if not inference_only:
-        data_dir = Path(PROCESSED_DIR) / variant
+        data_dir = Path(PROCESSED_DIR) / (f"{variant}-clean" if clean else variant)
         if not data_dir.exists():
-            print(f"ERROR: {data_dir} not found. Run: python data/preprocess.py --variant {variant}", file=sys.stderr)
+            clean_flag = " --clean" if clean else ""
+            print(f"ERROR: {data_dir} not found. Run: python -m data.preprocess --variant {variant}{clean_flag}", file=sys.stderr)
             sys.exit(1)
         print(f"Uploading {data_dir} to {data_repo}...")
         api.create_repo(repo_id=data_repo, repo_type="dataset", private=True, exist_ok=True)
@@ -145,6 +148,8 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
             "INFERENCE_ONLY": "1" if inference_only else "0",
             "PRED_SUFFIX": pred_suffix,
             "EPOCHS": str(epochs) if epochs else "",
+            "CLEAN": "1" if clean else "0",
+            "MODEL_ID": base_model,
         },
         token=hf_token,
     )
@@ -257,6 +262,12 @@ def main():
     parser.add_argument("--inference-only", action="store_true", help="With --submit-hf: skip training, regenerate predictions from the already-pushed adapter (fast: a10g-small, 1h)")
     parser.add_argument("--pred-suffix", default="", help="With --submit-hf: suffix for pushed prediction files (e.g. -v2) so a re-decode doesn't clobber v1")
     parser.add_argument("--epochs", type=int, default=0, help="With --submit-hf: number of training epochs (0 = job default of 3)")
+    parser.add_argument("--clean", action="store_true",
+                        help="Clean pipeline profile: use the -clean data/adapter repos and the "
+                             "<variant>-clean processed dir, and enable the clean inference toggles.")
+    parser.add_argument("--base-model", default="",
+                        help="With --submit-hf: override the base model id (e.g. google/gemma-2-2b) "
+                             "for the Hebrew base-model comparison; default is Qwen/Qwen3-2B.")
     args = parser.parse_args()
 
     hf_token = os.environ.get("HF_TOKEN", "")
@@ -270,7 +281,7 @@ def main():
             sys.exit(1)
         submit_hf_job(args.method, args.variant, hf_token, args.hf_user,
                       args.smoke_test, args.mini_test, args.inference_only,
-                      args.pred_suffix, args.epochs)
+                      args.pred_suffix, args.epochs, args.clean, args.base_model)
         return
 
     if args.push_to_hub and not args.hf_user:

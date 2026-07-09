@@ -103,4 +103,41 @@ then smoke-test (`--smoke-test`) and the full run (`--submit-hf`).
 - Sequence: **re-decode first**, then retrain if needed
 - Prompt: **keep raw E-H-H**, add length cap in Phase 2 only
 
-Related: [[Home]], [[Training Objective]], [[Decoding Configuration]]
+---
+
+## Clean pipeline profile (2026-07-08, opt-in `--clean`)
+
+#status/code-done #status/run-pending
+
+Full Cursor plan: `.cursor/plans/clean-refs-prompt-base_911ba56f.plan.md`. An **opt-in alternative pipeline**
+selected by a single `--clean` flag; with no flag every script reproduces the v3 artifacts, with it they
+produce a parallel `-clean`-suffixed set so the two can be compared head-to-head.
+
+| Change | File | Notes |
+|--------|------|-------|
+| Reference cleaning | `data/clean.py` (`normalize_summary`, `is_roundup_digest`, `pipe_segments`) | pipes/bullets → prose; drop ≥3-segment roundups |
+| Wired into preprocess | `data/preprocess.py --clean` | filters + normalizes `summary` (covers both training target and eval reference); writes `<variant>-clean` |
+| Hardened prompt | `data/prompts.py` `PROMPT_TEMPLATE_CLEAN` + `build_prompt(text, clean=)` | concise, facts-only, no lists/pipes/speculation |
+| Base no-think | `evaluation/infer.py` + `training/train_hf_job.py` `build_input_text` | `/no_think` under `CLEAN` (base was 0.97 wrong_language / all-`<think>`) |
+| Hebrew-script constraint (optional) | `evaluation/hebrew_constraint.py` (+ inlined twin in the job) | `bad_words_ids` forbid Latin/Cyrillic/Greek/Arabic tokens; on under `CLEAN` |
+| Suffix plumbing | `training/config.py` `dataset_repo/model_repo(..., clean=)` → `-clean` | never clobbers originals |
+| `--clean` end-to-end | `training/train.py`, `evaluation/eval_hf_job.py`, `evaluation/predict.py` | passes `CLEAN=1`; Gemini baseline uses hardened prompt |
+
+Run: `python -m data.preprocess --variant whole --clean` → `train --submit-hf --clean` → `eval_hf_job --submit-hf --clean`
+→ `build_report_tables --repo <user>/amlk-qwen3-2b-sft-clean`. Compare against v3 for the paper ablation.
+
+## Hebrew base-model search (2026-07-08)
+
+#status/done (recommendation) #status/run-pending (smoke finetune)
+
+Plumbing added: `train.py --base-model` → `MODEL_ID` env override in `train_hf_job.py` (default stays `Qwen/Qwen3-2B`).
+
+**Finding:** [DictaLM-3.0-1.7B](https://huggingface.co/dicta-il/DictaLM-3.0-1.7B-Base) is **initialized from Qwen3-1.7B-Base**
+— same hybrid-attention architecture family as our Qwen3-2B, so our LoRA `target_modules` (q/k/v/o + gate/up/down_proj)
+transfer unchanged. It is Hebrew-SOTA for its weight class (Dicta Hebrew summarization benchmark **9.72** vs Qwen3-1.7B **0.4**),
+~1.7B (fits a10g-small comfortably), 65k context. **Top candidate — drop-in** via
+`--base-model dicta-il/DictaLM-3.0-1.7B-Base`. Other options (`google/gemma-3-1b-it` 0.35 summarization; larger
+DictaLM 12B/24B) are either weaker at this size or too big for the a10g-small budget.
+Next: smoke-finetune DictaLM-3.0-1.7B-Base under the clean profile and compare to the Qwen3-2B clean run.
+
+Related: [[Home]], [[Training Objective]], [[Decoding Configuration]], [[Current Results]]

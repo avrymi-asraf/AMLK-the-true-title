@@ -48,13 +48,19 @@ OUTPUT_REPO = os.environ["OUTPUT_REPO"]
 SMOKE_TEST = os.environ.get("SMOKE_TEST", "0") == "1"
 MINI_TEST = os.environ.get("MINI_TEST", "0") == "1"
 INFERENCE_ONLY = os.environ.get("INFERENCE_ONLY", "0") == "1"
+# Clean pipeline profile: base /no_think reinforcement + Hebrew-script decode constraint at
+# inference. The cleaned references + hardened prompt are already baked into the dataset's
+# prompt/completion columns, so training itself needs no CLEAN branch — only generation does.
+CLEAN = os.environ.get("CLEAN", "0") == "1"
 # Suffix appended to pushed prediction filenames, e.g. "-v2" so a re-decode of an existing
 # adapter doesn't clobber the v1 predictions and the two can be scored side by side.
 PRED_SUFFIX = os.environ.get("PRED_SUFFIX", "")
 # Full-run epoch count. v1 used 1 epoch (undertrained — the model never learned to stop);
 # 3 epochs is the default for the abstractive-generation retrain. Overridable via --epochs.
 EPOCHS = int(os.environ.get("EPOCHS") or 3)
-MODEL_ID = "Qwen/Qwen3-2B"
+# Overridable for the Hebrew base-model comparison (--base-model); default stays Qwen3-2B.
+# NB: a non-Qwen base likely needs different LoRA target_modules (see training/config.py).
+MODEL_ID = os.environ.get("MODEL_ID") or "Qwen/Qwen3-2B"
 os.environ.setdefault("WANDB_PROJECT", os.environ.get("WANDB_PROJECT", "amlk-hebrew-summarization"))
 
 mode = "inference-only" if INFERENCE_ONLY else f"train+infer  Method={METHOD}"
@@ -206,14 +212,42 @@ def build_input_text(prompt: str, label: str) -> str:
     template with enable_thinking=False closes the think block immediately
     (`<think>\n\n</think>\n\n`) and puts the model in its actual assistant-response mode,
     giving the baseline a fair chance to answer in Hebrew instead of an artifact of prompt
-    mismatch. See docs/obsidian/Current Results.md (2026-07-04 failure clustering).
+    mismatch. Under CLEAN, also append Qwen3's `/no_think` soft switch for extra reinforcement.
+    See docs/obsidian/Current Results.md (2026-07-04 failure clustering).
+
+    Importable twin (kept in sync by hand): evaluation/infer.py:build_input_text.
     """
     if label != "base":
         return prompt
+    content = f"{prompt}\n/no_think" if CLEAN else prompt
     return tokenizer.apply_chat_template(
-        [{"role": "user", "content": prompt}],
+        [{"role": "user", "content": content}],
         tokenize=False, add_generation_prompt=True, enable_thinking=False,
     )
+
+
+def _build_bad_words_ids():
+    """Clean-profile only: forbid emitting tokens containing foreign scripts (Latin/Cyrillic/
+    Greek/Arabic) so summaries stay in Hebrew. Inlined twin of evaluation/hebrew_constraint.py
+    (this script can't import repo code). Returns None when disabled or nothing matches."""
+    if not CLEAN:
+        return None
+    import re
+    forbidden = re.compile(
+        "[\u0041-\u005A\u0061-\u007A\u00C0-\u024F\u0400-\u04FF\u0370-\u03FF\u0600-\u06FF]")
+    special_ids = set(tokenizer.all_special_ids)
+    bad = []
+    for token_id in range(tokenizer.vocab_size):
+        if token_id in special_ids:
+            continue
+        piece = tokenizer.decode([token_id])
+        if piece and forbidden.search(piece):
+            bad.append([token_id])
+    print(f"[clean] Hebrew-script constraint: forbidding {len(bad)} foreign-script tokens")
+    return bad or None
+
+
+BAD_WORDS_IDS = _build_bad_words_ids()
 
 
 def generate_predictions(label: str) -> list[dict]:
@@ -246,6 +280,7 @@ def generate_predictions(label: str) -> list[dict]:
                 no_repeat_ngram_size=3, repetition_penalty=1.2,
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.pad_token_id,
+                bad_words_ids=BAD_WORDS_IDS,
             )
         input_len = inputs["input_ids"].shape[1]
         for j, prompt in enumerate(prompts):
