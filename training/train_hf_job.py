@@ -14,27 +14,24 @@
 # ///
 """
 Pipeline step 3 (remote variant): self-contained QLoRA fine-tuning of
-dicta-il/DictaLM-3.0-1.7B-Base, run on HuggingFace Jobs. Submitted inline by
-training/train.py --submit-hf; never run
-directly. All settings arrive as environment variables (the repo is NOT uploaded with
-the script). Downloads the processed splits from the Hub, trains with completion_only_loss,
-logs to Weights & Biases, and pushes the trained adapter back to the Hub.
+dicta-il/dictalm2.0-instruct, run on HuggingFace Jobs. Submitted inline by
+training/train.py --submit-hf; never run directly. All settings arrive as
+environment variables (the repo is NOT uploaded with the script).
 
-INFERENCE_ONLY=1 skips training and loads an already-pushed adapter from OUTPUT_REPO —
-use this to re-generate predictions when the training job ran out of time.
+Stability (so a long run is not lost on crash/timeout):
+  1. Checkpoints write to /data/output — the per-job bucket volume that survives
+     infra restarts of the same job; trainer.train(resume_from_checkpoint=True)
+     picks them up automatically.
+  2. hub_strategy="every_save" pushes each checkpoint as a Hub commit mid-run,
+     so partial adapters exist on OUTPUT_REPO even if the job dies later.
+  3. Predictions files are uploaded immediately after each generation loop.
 
-Training checkpoints save to /data/output, not the container's local disk: run_uv_job (see
-huggingface_hub.HfApi._create_uv_command_env_and_secrets) auto-mounts a per-job bucket at /data
-to ship this script to the container in the first place, and that same bucket volume — unlike
-local disk — survives an infra-level restart of the same job, so trainer.train() auto-resumes
-from the last checkpoint there instead of silently restarting the whole run from step 0.
-
-Execution environment: ephemeral HuggingFace Jobs GPU container (a10g-large by default;
-a10g-small is sufficient for inference-only runs).
+Execution environment: ephemeral HuggingFace Jobs GPU container.
 """
 import json
 import os
 import warnings
+from datetime import date
 from pathlib import Path
 
 import torch
@@ -55,27 +52,31 @@ OUTPUT_REPO = os.environ["OUTPUT_REPO"]
 SMOKE_TEST = os.environ.get("SMOKE_TEST", "0") == "1"
 MINI_TEST = os.environ.get("MINI_TEST", "0") == "1"
 INFERENCE_ONLY = os.environ.get("INFERENCE_ONLY", "0") == "1"
-# Clean pipeline profile: base /no_think reinforcement (on chat-capable models) + Hebrew-script
-# decode constraint at inference. The cleaned references + hardened prompt are already baked
-# into the dataset's prompt/completion columns, so training itself needs no CLEAN branch —
-# only generation does.
-CLEAN = os.environ.get("CLEAN", "0") == "1"
-# Suffix appended to pushed prediction filenames, e.g. "-v2" so a re-decode of an existing
-# adapter doesn't clobber the v1 predictions and the two can be scored side by side.
 PRED_SUFFIX = os.environ.get("PRED_SUFFIX", "")
-# Full-run epoch count; a single epoch risks the model never learning to stop generating
-# cleanly, so 3 is the default for abstractive-generation training. Overridable via --epochs.
-EPOCHS = int(os.environ.get("EPOCHS") or 3)
-# Base checkpoint to fine-tune. Overridable via --base-model to swap in a different base
-# (e.g. to compare against Qwen/Qwen3-2B). This script is submitted inline and cannot import
-# training/config.py, so the default is duplicated here on purpose — keep the two in sync.
-MODEL_ID = os.environ.get("BASE_MODEL") or "dicta-il/DictaLM-3.0-1.7B-Base"
-os.environ.setdefault("WANDB_PROJECT", os.environ.get("WANDB_PROJECT", "amlk-hebrew-summarization"))
+# One epoch per run by default (override via EPOCHS env / train.py --epochs).
+EPOCHS = int(os.environ.get("EPOCHS") or 1)
+# Base checkpoint — duplicated from training/config.py on purpose (this script is
+# submitted inline and cannot import the repo). Keep the two in sync.
+MODEL_ID = os.environ.get("BASE_MODEL") or "dicta-il/dictalm2.0-instruct"
+MODEL_SLUG = MODEL_ID.split("/")[-1].lower().replace(".", "-")
+WANDB_PROJECT = os.environ.get("WANDB_PROJECT") or f"amlk-{MODEL_SLUG}"
+if SMOKE_TEST:
+    _tag = "smoke"
+elif MINI_TEST:
+    _tag = "mini"
+else:
+    _tag = ""
+WANDB_RUN_NAME = os.environ.get("WANDB_RUN_NAME") or "_".join(
+    p for p in [date.today().isoformat(), MODEL_SLUG, METHOD, VARIANT, f"{EPOCHS}ep", _tag] if p
+)
+os.environ["WANDB_PROJECT"] = WANDB_PROJECT
 
 mode = "inference-only" if INFERENCE_ONLY else f"train+infer  Method={METHOD}"
 print(f"Mode: {mode}  Variant: {VARIANT}  Smoke: {SMOKE_TEST}  Mini: {MINI_TEST}")
 print(f"Base model: {MODEL_ID}")
 print(f"Dataset: {DATASET_REPO}  ->  Output: {OUTPUT_REPO}")
+print(f"Epochs: {EPOCHS}")
+print(f"wandb: {WANDB_PROJECT} / {WANDB_RUN_NAME}")
 
 local_data = Path("./data")
 snapshot_download(repo_id=DATASET_REPO, repo_type="dataset", local_dir=str(local_data))
@@ -90,8 +91,7 @@ if SMOKE_TEST:
     test_ds = test_ds.select(range(min(5, len(test_ds))))
     print(f"[Smoke] Truncated to train={len(train_ds)}, val={len(val_ds)}, test={len(test_ds)}")
 elif MINI_TEST:
-    # 80 train + 20 val gives ~25 optimizer steps over 5 epochs (batch=2, grad_accum=8) —
-    # enough to show a real loss curve in wandb without burning full-run budget.
+    # 80 train examples / 1 epoch — enough to show a real loss curve without full-run budget.
     train_ds = train_ds.select(range(min(80, len(train_ds))))
     val_ds = val_ds.select(range(min(20, len(val_ds))))
     test_ds = test_ds.select(range(min(10, len(test_ds))))
@@ -126,8 +126,7 @@ if INFERENCE_ONLY:
     device = next(trained_model.parameters()).device
     use_lora = True  # adapter is always a LoRA adapter
 else:
-    # Mirrors training/config.py:LoRAConfig — r=32 + MLP projections (not just attention) for
-    # enough capacity to generate abstractively rather than degenerate into lead-copying/looping.
+    # Mirrors training/config.py:LoRAConfig — r=32 + MLP projections (not just attention).
     peft_config = LoraConfig(
         r=32, lora_alpha=64, lora_dropout=0.05,
         target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
@@ -135,30 +134,23 @@ else:
         bias="none", task_type="CAUSAL_LM",
     ) if use_lora else None
 
-    if SMOKE_TEST:
-        run_suffix = "-smoke"
-    elif MINI_TEST:
-        run_suffix = "-mini"
-    else:
-        run_suffix = ""
-    run_name = f"{METHOD}-{VARIANT}-hfjob{run_suffix}"
-
-    # Mini: 5 epochs over 80 examples → ~25 optimizer steps (batch=2, grad_accum=8);
-    # log every step and eval every 5 to get ≥5 eval points visible in wandb.
+    # Mini: log every step; smoke: 10 steps; full 1-epoch: save every 100 steps so Hub
+    # gets several mid-run commits (hub_strategy=every_save).
     if MINI_TEST:
-        n_epochs, max_steps_cfg = 5, -1
+        n_epochs, max_steps_cfg = 1, -1
         log_steps, eval_steps_cfg, save_steps_cfg = 1, 5, 20
     elif SMOKE_TEST:
         n_epochs, max_steps_cfg = 1, 10
         log_steps, eval_steps_cfg, save_steps_cfg = 5, 5, 5
     else:
         n_epochs, max_steps_cfg = EPOCHS, -1
-        log_steps, eval_steps_cfg, save_steps_cfg = 10, 200, 200
+        log_steps, eval_steps_cfg, save_steps_cfg = 10, 100, 100
 
-    # /data is the bucket run_uv_job auto-mounts to ship this script to the container — that
-    # bucket volume (unlike the container's local disk) survives an infra-level restart of the
-    # same job, so a checkpoint written here is still there when trainer.train() resumes below.
+    # /data is the bucket run_uv_job auto-mounts — survives infra restarts of this job.
     output_dir = "/data/output"
+    print(f"Stability: checkpoints → {output_dir} (bucket resume)")
+    print(f"Stability: hub_strategy=every_save → {OUTPUT_REPO} every {save_steps_cfg} steps")
+
     sft_config = SFTConfig(
         output_dir=output_dir,
         push_to_hub=True,
@@ -168,7 +160,7 @@ else:
         num_train_epochs=n_epochs,
         max_steps=max_steps_cfg,
         per_device_train_batch_size=2,
-        per_device_eval_batch_size=1,   # eval defaults to 8 → OOM at seq-len 2048; keep it small
+        per_device_eval_batch_size=1,   # eval defaults to 8 → OOM at seq-len 2048
         gradient_accumulation_steps=8,
         learning_rate=2e-4,
         warmup_ratio=0.05,
@@ -179,19 +171,16 @@ else:
         save_total_limit=2,
         eval_strategy="steps",
         eval_steps=eval_steps_cfg,
-        # With EPOCHS=3 the last checkpoint can overfit; keep the lowest-eval_loss one instead.
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
         bf16=True,
         gradient_checkpointing=True,
-        # TRL's SFTTrainer auto-appends tokenizer.eos_token to each completion (non-conversational
-        # prompt/completion path), and completion_only_loss keeps that EOS inside the loss mask, so
-        # the model is trained to stop rather than running to the generation cap.
+        # TRL auto-appends EOS to each completion; completion_only_loss keeps it in the mask.
         completion_only_loss=True,
         max_length=2048,
         report_to="wandb",
-        run_name=run_name,
+        run_name=WANDB_RUN_NAME,
     )
 
     trainer = SFTTrainer(
@@ -204,9 +193,7 @@ else:
     )
 
     if use_lora:
-        # Some base models (e.g. Qwen3-2B's hybrid attention) only have q/k/v/o in a subset of
-        # layers, so LoRAConfig's target_modules can silently cover far fewer layers than
-        # expected. Print the count so a base-model swap can never regress that silently.
+        # Print so a base-model swap can never silently regress LoRA layer coverage.
         trainer.model.print_trainable_parameters()
 
     resume_from_checkpoint = None
@@ -218,7 +205,9 @@ else:
 
     print("Starting training...")
     trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+    # Final Hub commit with the best (or last) weights — mid-run saves already pushed via every_save.
     trainer.push_to_hub()
+    print(f"Final adapter push complete → {OUTPUT_REPO}")
 
     trained_model = trainer.model.eval()
     device = next(trained_model.parameters()).device
@@ -232,34 +221,28 @@ def build_input_text(prompt: str, label: str) -> str:
 
     The LoRA adapter is trained on the raw completion-style prompt (build_prompt), so
     "finetuned" must keep using it verbatim. The zero-shot "base" system never sees that
-    format in training — on a chat-capable model, feeding it the raw prompt risks the
-    model's reasoning prior free-associating into an open-ended <think> block that never
-    closes within max_new_tokens, or drifting into the wrong language. Wrapping it in the
-    real chat template with enable_thinking=False closes the think block immediately
-    (`<think>\n\n</think>\n\n`) and puts the model in its actual assistant-response mode,
-    giving the baseline a fair chance instead of an artifact of prompt mismatch.
-
-    Pure base checkpoints (e.g. dicta-il/DictaLM-3.0-1.7B-Base) ship no chat template at
-    all — there is no assistant mode to enter, so the raw completion prompt is the only
-    option, and the zero-shot baseline should be expected to drift off-task/off-language.
-    Under CLEAN, also append a `/no_think` soft switch for extra reinforcement on chat-capable
-    models; on a no-chat-template base it is inert (falls through to the raw-prompt branch).
+    format in training — on a chat-capable model, wrap it in the real chat template so the
+    model is in assistant-response mode. Append `/no_think` as soft reinforcement when a
+    chat template is present. Older Mistral / DictaLM-2 templates reject enable_thinking=
+    — fall back without that kwarg. Pure base checkpoints with no chat template use the raw prompt.
     """
     if label != "base" or not tokenizer.chat_template:
         return prompt
-    content = f"{prompt}\n/no_think" if CLEAN else prompt
-    return tokenizer.apply_chat_template(
-        [{"role": "user", "content": content}],
-        tokenize=False, add_generation_prompt=True, enable_thinking=False,
-    )
+    content = f"{prompt}\n/no_think"
+    messages = [{"role": "user", "content": content}]
+    kwargs = dict(tokenize=False, add_generation_prompt=True)
+    try:
+        return tokenizer.apply_chat_template(
+            messages, enable_thinking=False, **kwargs,
+        )
+    except TypeError:
+        return tokenizer.apply_chat_template(messages, **kwargs)
 
 
 def _build_bad_words_ids():
-    """Clean-profile only: forbid emitting tokens containing foreign scripts (Latin/Cyrillic/
-    Greek/Arabic) so summaries stay in Hebrew. Inlined twin of evaluation/hebrew_constraint.py
-    (this script can't import repo code). Returns None when disabled or nothing matches."""
-    if not CLEAN:
-        return None
+    """Forbid tokens containing foreign scripts (Latin/Cyrillic/Greek/Arabic) so summaries
+    stay in Hebrew. Inlined twin of evaluation/hebrew_constraint.py (this script can't
+    import repo code)."""
     import re
     forbidden = re.compile(
         "[A-Za-zÀ-ɏЀ-ӿͰ-Ͽ؀-ۿ]")
@@ -271,7 +254,7 @@ def _build_bad_words_ids():
         piece = tokenizer.decode([token_id])
         if piece and forbidden.search(piece):
             bad.append([token_id])
-    print(f"[clean] Hebrew-script constraint: forbidding {len(bad)} foreign-script tokens")
+    print(f"Hebrew-script constraint: forbidding {len(bad)} foreign-script tokens")
     return bad or None
 
 
@@ -300,9 +283,6 @@ def generate_predictions(label: str) -> list[dict]:
         with torch.no_grad():
             outs = trained_model.generate(
                 # 256 covers p99 of reference-summary lengths (p95=151, p99=187 tokens).
-                # no_repeat_ngram_size + repetition_penalty guard against greedy-decode
-                # degeneration loops; min_new_tokens + explicit eos let the model stop
-                # cleanly instead of running to the cap.
                 **inputs, max_new_tokens=256, min_new_tokens=16, do_sample=False,
                 no_repeat_ngram_size=3, repetition_penalty=1.2,
                 eos_token_id=tokenizer.eos_token_id,

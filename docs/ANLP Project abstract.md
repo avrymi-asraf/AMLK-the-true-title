@@ -1,3 +1,7 @@
+> **Historical record.** Original submitted abstract (Qwen3-2B era). Current plan of record:
+> [`research-proposal-revised.md`](research-proposal-revised.md) with base model
+> `dicta-il/dictalm2.0-instruct`. Do not use this file as the live training contract.
+
 **ANLP Research Proposal**
 
 **AMLK — Fine-tuning for Hebrew abstractive summarization**

@@ -2,7 +2,7 @@
 
 Behaviour covered: pipe/bullet digests become natural prose, leading list markers are dropped,
 the result ends with a terminal period, cleaning is idempotent, and the roundup-digest filter
-trips only on genuine multi-headline references.
+trips only on genuine multi-headline references. Also covers Hub/repo naming helpers.
 """
 from data.clean import is_roundup_digest, normalize_summary, pipe_segments
 
@@ -54,9 +54,30 @@ def test_processed_profile_names():
     from training.config import dataset_repo, model_repo, processed_profile_name
 
     assert processed_profile_name("whole") == "whole"
-    assert processed_profile_name("whole", clean=True) == "whole-clean"
-    assert processed_profile_name("whole", clean=True, drop_roundups=True) == "whole-clean-drop"
-    assert processed_profile_name("lead", clean=True) == "lead-clean"
-    assert dataset_repo("user", "whole", clean=True) == "user/amlk-training-data-clean"
-    assert dataset_repo("user", "whole", clean=True, drop_roundups=True) == "user/amlk-training-data-clean-drop"
-    assert model_repo("user", "lead", clean=True, drop_roundups=True) == "user/amlk-dictalm3-1.7b-sft-lead-clean-drop"
+    assert processed_profile_name("lead") == "lead"
+    assert dataset_repo("user", "whole") == "user/amlk-training-data"
+    assert dataset_repo("user", "lead") == "user/amlk-training-data-lead"
+    assert model_repo("user", "whole") == "user/amlk-dictalm2-instruct-sft"
+    assert model_repo("user", "lead") == "user/amlk-dictalm2-instruct-sft-lead"
+
+
+def test_wandb_naming_includes_date_model_epochs():
+    from training.config import DEFAULT_EPOCHS, wandb_project, wandb_run_name
+
+    assert wandb_project("dictalm2-instruct") == "amlk-dictalm2-instruct"
+    name = wandb_run_name(
+        "qlora", "whole", model_slug="dictalm2-instruct",
+        epochs=DEFAULT_EPOCHS, tag="smoke", run_date="2026-07-11",
+    )
+    assert name == "2026-07-11_dictalm2-instruct_qlora_whole_1ep_smoke"
+    assert DEFAULT_EPOCHS == 1
+
+
+def test_build_prompt_is_hardened():
+    from data.prompts import build_prompt
+
+    result = build_prompt("המאמר")
+    assert "Rules" in result
+    assert "do not add" in result.lower()
+    assert "המאמר" in result
+    assert "Summary" in result

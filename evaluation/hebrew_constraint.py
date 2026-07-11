@@ -1,13 +1,12 @@
 """
-Optional Hebrew-script decode constraint for the clean pipeline profile. Fine-tuned outputs
-occasionally leak foreign scripts mid-word (Cyrillic, Arabic, etc.) mid-word — a vocab/decoding
-artifact. build_bad_words_ids scans the tokenizer vocabulary once and returns the ids of every
+Hebrew-script decode constraint for generation. Fine-tuned outputs occasionally leak
+foreign scripts mid-word (Cyrillic, Arabic, Latin, etc.) — a vocab/decoding artifact.
+build_bad_words_ids scans the tokenizer vocabulary once and returns the ids of every
 token whose decoded surface form contains a Latin/Cyrillic/Greek/Arabic letter, so
-generate(bad_words_ids=...) can forbid emitting them. Hebrew letters, digits, punctuation, and
-whitespace stay allowed.
+generate(bad_words_ids=...) can forbid emitting them. Hebrew letters, digits, punctuation,
+and whitespace stay allowed.
 
-Wired into evaluation/infer.py and training/train_hf_job.py's generation only under the clean
-profile (it is experimental — an aggressive constraint can hurt fluency, so it is easy to A/B).
+Wired into evaluation/infer.py and training/train_hf_job.py generation (always on).
 Execution environment: wherever generation runs (remote GPU: HF Jobs / Colab).
 """
 import re

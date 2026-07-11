@@ -4,8 +4,8 @@
 # MAGIC
 # MAGIC Discovers topic clusters over the whole AMLK dataset (`outputs/data/raw/combined.jsonl`,
 # MAGIC ~10,000 Hebrew news articles) so evaluation results can later be broken down by topic —
-# MAGIC e.g. "does the model hallucinate more on economy articles than sports?" See
-# MAGIC `docs/superpowers/specs/2026-07-04-topic-clustering-design.md` for the full design.
+# MAGIC e.g. "does the model hallucinate more on economy articles than sports?" See AGENTS.md
+# MAGIC and evaluation/topic_clustering.py for the design.
 # MAGIC
 # MAGIC Embeds each article's summary with a Hebrew-native, clustering-tuned embedding model
 # MAGIC (`dicta-il/neodictabert-bilingual-embed`), clusters with BERTopic (UMAP + HDBSCAN +

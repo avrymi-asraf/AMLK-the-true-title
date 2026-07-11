@@ -1,15 +1,13 @@
 """
-Reference-summary cleaning for the opt-in "clean" pipeline profile (data/preprocess.py
---clean). HeSum references are frequently "headline | headline | headline" media digests
-with pipes and bullets; error analysis traced much of the fine-tuned model's hallucination
-and over-long, split outputs to it learning that format. This module rewrites those digests
-into natural prose (normalize_summary) and flags the worst multi-headline roundups for
-removal (is_roundup_digest) so both the training targets and the eval references become
-ordinary single-article summaries.
+Reference-summary cleaning used by every preprocess run (data/preprocess.py).
+HeSum references are frequently "headline | headline | headline" media digests with
+pipes and bullets; error analysis traced much of the fine-tuned model's hallucination
+and over-long, split outputs to it learning that format. This module rewrites those
+digests into natural prose (normalize_summary) and flags the worst multi-headline
+roundups for removal (is_roundup_digest).
 
-Kept import-light (standard library only, no `datasets`/`transformers`) like
-evaluation/style_labels.py, so it can be imported anywhere in the pipeline.
-Execution environment: local machine, CPU only.
+Kept import-light (standard library only, no `datasets`/`transformers`) so it can be
+imported anywhere in the pipeline. Execution environment: local machine, CPU only.
 """
 import re
 
@@ -27,8 +25,8 @@ def pipe_segments(summary: str) -> int:
 
 def is_roundup_digest(summary: str, min_segments: int = 3) -> bool:
     """True for the worst multi-headline "media roundup" digests — several unrelated
-    headlines stitched with pipes. These are not single-article summaries, so the clean
-    profile drops them from training/eval rather than trying to rewrite them into one."""
+    headlines stitched with pipes. These are not single-article summaries, so
+    preprocess drops them rather than rewriting them into one."""
     return pipe_segments(summary) >= min_segments
 
 
@@ -52,6 +50,6 @@ def normalize_summary(summary: str) -> str:
     text = _SPACE_BEFORE_PUNCT_RE.sub(r"\1", text)
     text = _MULTI_PERIOD_RE.sub(".", text)
     text = text.strip()
-    if text and text[-1] not in ".!?":
+    if text and text[-1] not in ".!?…":
         text += "."
     return text

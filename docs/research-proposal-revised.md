@@ -4,6 +4,11 @@ AMLK - Fine-tuning for Hebrew news summarization
 
 Amit Benbenishti, Avraham Asraf
 
+> **Current plan of record** (kept in sync with the codebase). Primary model:
+> `dicta-il/dictalm2.0-instruct`. Training is clean-only (normalized references + hardened
+> prompt), **one epoch per run** by default. See also `AGENTS.md` and
+> `.agents/skills/training/SKILL.md`.
+
 This revision reworks the proposal in response to reviewer feedback. The main change is the
 positional-shortcut probe: instead of training a separate model per input variant (which answers
 "how learnable is the reference from each slice of the article" - a question about the data), the
@@ -16,7 +21,7 @@ the data before running, and adopt the HeSum recommendations for ROUGE in Hebrew
 
 Abstract - We propose AMLK, a study of instruction-tuned abstractive summarization for Hebrew news
 articles, a morphologically rich, medium-resource setting under-represented in current models. We
-fine-tune dicta-il/DictaLM-3.0-1.7B-Base on professional Hebrew article-summary pairs, compare three fine-tuning
+fine-tune dicta-il/dictalm2.0-instruct on professional Hebrew article-summary pairs, compare three fine-tuning
 regimes (QLoRA, LoRA, full FT), benchmark against a stronger model baseline and a simple Lead-N
 baseline under the same metrics, and probe whether the trained model aggregates global context or
 latches onto the lead. The shortcut probe is an inference-time ablation on a single whole-article
@@ -36,14 +41,17 @@ and IAHLT summarization_he provide professional news article-summary pairs; HeSu
 limits of ROUGE under Hebrew morphology and recommends morphological normalization before scoring.
 LoRA and QLoRA make 2-7B LLM fine-tuning feasible on a single GPU.
 
-Models - We use dicta-il/DictaLM-3.0-1.7B-Base as the primary model. Under identical data and hyperparameters we
-compare QLoRA (~8 GB VRAM), LoRA bf16 (~16 GB), and full FT on HuggingFace Jobs. We report two
+Models - We use dicta-il/dictalm2.0-instruct (Mistral-7B instruct) as the primary model. Under
+identical data and hyperparameters we compare QLoRA (~8–16 GB VRAM on 7B), LoRA bf16, and full FT
+on HuggingFace Jobs (default training method for this model is QLoRA on a10g-small). We report two
 reference points: (1) a simple extractive Lead-N baseline (first N sentences as the summary), the
 standard lead-bias lower bound for news; and (2) an advanced-model baseline - a stronger model
 (e.g. Gemini via API, or a larger open LLM) on the same Hebrew test set with the same instruction
 template - so metric scores can be read against both a trivial positional baseline and a strong
-upper bound. All fine-tuned variants use the trl SFT trainer; the default prompt is "Summarize the
-following Hebrew text: ... Summary: ...".
+upper bound. All fine-tuned variants use the trl SFT trainer with completion-only loss; training
+runs are one epoch by default. The pipeline always uses cleaned references (pipe/bullet digests
+normalized to prose; multi-headline roundups dropped) and a hardened Hebrew summarization prompt
+that forbids lists, pipes, and elaboration.
 
 Dataset - We focus on Hebrew journalism data: HeSum (~10,000 professional news article-summary
 pairs) and IAHLT summarization_he, normalized to {text, summary, source} and split 80/10/10
@@ -56,18 +64,19 @@ subsets used by the probe below. Reference summaries in news corpora are often h
 lead-aligned); we optionally vary the instruction to control output length/style (e.g. one-line
 headline vs multi-sentence summary) and measure the effect with the same metric battery.
 
-Evaluation - All systems are scored with ROUGE-1/2/L, BERTScore (xlm-roberta-large), and an
-LLM-as-judge for faithfulness and fluency (1-5). For ROUGE we follow the HeSum recommendations for
-Hebrew (morphological normalization / lemmatization before matching) so that inflected forms are not
-counted as misses, and we report both the raw and normalized variants. To avoid self-preference
-bias, the LLM judge is from a different model family than the advanced baseline: if Gemini is the
-advanced baseline, the judge is a non-Gemini model (e.g. GPT-4-class or Claude), and vice versa.
+Evaluation - All systems are scored with ROUGE-1/2/L, BERTScore (default `onlplab/alephbert-base`,
+the HeSum backbone; overridable), and an LLM-as-judge for faithfulness and fluency (1-5). For ROUGE
+we follow the HeSum recommendations for Hebrew (morphological normalization / final-form folding
+before matching) so that inflected forms are not counted as misses, and we report both the raw and
+normalized variants. To avoid self-preference bias, the LLM judge should ideally be from a
+different model family than the advanced baseline (the codebase supports a HF-hosted judge via
+`--judge-provider hf`; Gemini remains available for smoke runs).
 Error analysis: sample ~50-100 test predictions and label failure types reported in the
 summarization literature (hallucination, omission, entity/number errors, lead copying, fluency),
 reporting rates by model - following the finding that published systems often fail on faithfulness
 despite high ROUGE.
 
-Main experiment - Three fine-tuning regimes vs zero-shot DictaLM-3.0-1.7B-Base, vs the Lead-N baseline, and vs
+Main experiment - Three fine-tuning regimes vs zero-shot dictalm2.0-instruct, vs the Lead-N baseline, and vs
 the advanced-model baseline, all under the metric battery above.
 
 Positional-shortcut probe (inference-time ablation) - We train a single model on whole articles and

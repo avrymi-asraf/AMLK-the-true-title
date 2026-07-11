@@ -5,9 +5,11 @@ Implements `docs/ANLP Project abstract.md`, `docs/research-proposal.md`, and the
 
 ## A. Training pipeline — DONE
 - [x] A.1 Download datasets (HeSum 10,000 records; IAHLT inaccessible with current credentials)
-- [x] A.2 Base model: dicta-il/DictaLM-3.0-1.7B-Base
+- [x] A.2 Base model: dicta-il/dictalm2.0-instruct
 - [x] A.3 Fine-tune via HF `trl` SFT — one `training/train.py` for qlora | lora | full,
-      completion-only loss, wandb logging, local or HF Jobs (`--submit-hf`)
+      completion-only loss, **clean-only** data path, **1 epoch** default, informative wandb
+      names (`amlk-{model}`, date/method/variant/epochs), mid-run Hub checkpoint commits
+      (`hub_strategy=every_save` + `/data/output` resume), HF Jobs (`--submit-hf`)
 
 ## B. Evaluation pipeline — DONE (Stage B, due 07.06)
 - [x] B.1 ROUGE-1/2/L (Hebrew-aware tokenizer)
@@ -29,8 +31,9 @@ Implements `docs/ANLP Project abstract.md`, `docs/research-proposal.md`, and the
 - [x] C.3 Goals and milestones
 
 ## D. Initial results — IN PROGRESS
-- [ ] D.1 Full QLoRA run on HF Jobs + evaluation battery (finetuned vs zero-shot vs Gemini)
-- [ ] D.2 Improve training (regime comparison: lora / full FT)
+- [ ] D.1 Full **1-epoch clean QLoRA** run on `dicta-il/dictalm2.0-instruct` (HF Jobs) +
+      evaluation battery (finetuned vs zero-shot vs Gemini)
+- [ ] D.2 Improve training (regime comparison: lora / full FT; still 1 epoch per run)
 
 ## E. Present results — 14.06
 - [ ] E.1 Paper draft

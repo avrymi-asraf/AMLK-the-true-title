@@ -10,8 +10,7 @@ logic works for either via --label-field. Joins on exact text match — every pr
 training/train_hf_job.py), so it's a stable join key back to the whole-corpus label assignments
 without touching data/preprocess.py or the Arrow splits. Reuses evaluate.py's
 compute_rouge/compute_bertscore per group; a matching *.errors.json (from error_analysis.py) is
-folded in for per-group failure-type rates if present. See
-docs/superpowers/specs/2026-07-04-topic-clustering-design.md for the full design.
+folded in for per-group failure-type rates if present.
 
 Run: python -m evaluation.stratify_by_topic --predictions outputs/results/predictions-finetuned.jsonl \
     --labels outputs/data/raw/topics.jsonl --label-field topic_label \

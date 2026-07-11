@@ -1,14 +1,13 @@
 """
-Pipeline step 3 of 3: fine-tune dicta-il/DictaLM-3.0-1.7B-Base on Hebrew summarization.
+Pipeline step 3 of 3: fine-tune dicta-il/dictalm2.0-instruct on Hebrew summarization.
 One entry point for all three regimes the paper compares — --method qlora | lora | full
 — differing only by the small METHOD_PRESETS deltas in config.py. Trains with the trl
 SFT trainer using completion_only_loss=True (loss on the summary only), logs every step
 to Weights & Biases, and saves / optionally pushes the adapter (or full model) to the Hub.
 Inference lives separately in evaluation/predict.py, so this script only trains.
 
-Run (local):     python -m training.train --method qlora --variant whole --output outputs/checkpoints/qlora-whole
 Run (HF Jobs):   python -m training.train --submit-hf --hf-user avreymi [--method qlora] [--smoke-test]
-Execution environment: local CUDA GPU for development, or HuggingFace Jobs GPU via --submit-hf.
+Execution environment: HuggingFace Jobs GPU via --submit-hf (preferred); local CUDA only if available.
 """
 import argparse
 import json
@@ -21,16 +20,19 @@ from pathlib import Path
 # — submission only needs huggingface_hub.
 
 from training.config import (
+    DEFAULT_EPOCHS,
     MAX_LENGTH,
     METHOD_PRESETS,
     MODEL_ID,
+    MODEL_SLUG,
     PROCESSED_DIR,
-    WANDB_PROJECT,
     LoRAConfig,
     TrainingConfig,
     dataset_repo,
     model_repo,
     processed_profile_name,
+    wandb_project,
+    wandb_run_name,
 )
 
 
@@ -90,69 +92,66 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
                   smoke_test: bool, mini_test: bool = False, inference_only: bool = False,
                   pred_suffix: str = "", epochs: int = 0, base_model: str = "",
                   output_repo: str = "", skip_data_upload: bool = False,
-                  clean: bool = False, drop_roundups: bool = False, timeout: str = ""):
+                  timeout: str = ""):
     """Upload the processed splits to the Hub and submit train_hf_job.py to HF Jobs.
 
     inference_only=True skips dataset re-upload and training; loads the already-pushed
-    adapter and regenerates predictions only (fast: a10g-small, 1h timeout). pred_suffix
+    adapter and regenerates predictions only (fast: a10g-small, 2h timeout). pred_suffix
     (e.g. "-v2") keeps a re-decode from clobbering the v1 predictions. epochs overrides the
-    default epoch count (0 = use the job's default). base_model swaps the base checkpoint
-    (defaults to config.MODEL_ID); output_repo must then be set too, so a different base
-    model never pushes its adapter over another one's repo. skip_data_upload reuses the
-    splits already on the Hub (the processed data is base-model independent — it stores
-    text, which SFTTrainer tokenizes at train time). clean=True selects the clean pipeline
-    profile (-clean data/adapter repos + clean inference toggles); drop_roundups=True
-    (requires clean) targets the -clean-drop artifacts.
+    default (1). base_model swaps the base checkpoint (defaults to config.MODEL_ID);
+    output_repo must then be set too. skip_data_upload reuses the splits already on the Hub.
     """
     import warnings
     warnings.filterwarnings("ignore", category=UserWarning)
     from huggingface_hub import HfApi
 
-    if drop_roundups and not clean:
-        print("ERROR: drop_roundups requires clean=True", file=sys.stderr)
-        sys.exit(1)
-
     api = HfApi(token=hf_token)
-    data_repo = dataset_repo(hf_user, variant, clean, drop_roundups)
-    out_repo = output_repo or model_repo(hf_user, variant, clean, drop_roundups)
+    data_repo = dataset_repo(hf_user, variant)
+    out_repo = output_repo or model_repo(hf_user, variant)
+    n_epochs = epochs or DEFAULT_EPOCHS
+    base = base_model or MODEL_ID
 
     if not inference_only and not skip_data_upload:
-        data_dir = Path(PROCESSED_DIR) / processed_profile_name(variant, clean, drop_roundups)
+        data_dir = Path(PROCESSED_DIR) / processed_profile_name(variant)
         if not data_dir.exists():
-            flags = ""
-            if clean:
-                flags += " --clean"
-            if drop_roundups:
-                flags += " --drop-roundups"
-            print(f"ERROR: {data_dir} not found. Run: python -m data.preprocess --variant {variant}{flags}", file=sys.stderr)
+            print(f"ERROR: {data_dir} not found. Run: python -m data.preprocess --variant {variant}",
+                  file=sys.stderr)
             sys.exit(1)
         print(f"Uploading {data_dir} to {data_repo}...")
         api.create_repo(repo_id=data_repo, repo_type="dataset", private=True, exist_ok=True)
         api.upload_folder(folder_path=str(data_dir), repo_id=data_repo, repo_type="dataset")
 
+    # Ensure the model repo exists before the job starts so mid-run hub_strategy=every_save works.
+    if not inference_only:
+        api.create_repo(repo_id=out_repo, repo_type="model", private=True, exist_ok=True)
+
     script_path = Path(__file__).parent / "train_hf_job.py"
     if inference_only:
-        # 2h: the anti-degeneration decode config (no_repeat_ngram + repetition_penalty) plus the
-        # v1 adapter not yet stopping early runs ~256 tokens/example at ~16-20 ex/min, so 2×1,000
-        # generations need well over the old 1h budget (observed: finetuned alone ~60 min).
         flavor, label = "a10g-small", "infer"
         timeout = timeout or "2h"
     elif smoke_test:
         flavor, label = "a10g-small", "smoke"
         timeout = timeout or "30m"
     elif mini_test:
-        # 80 train / 5 epochs / ~25 optimizer steps — validates full pipeline with real loss curves
         flavor, label = "a10g-small", "mini"
         timeout = timeout or "1h"
     else:
-        flavor, label = "a10g-large", ""
+        # 7B QLoRA is GPU-bound; a10g-small has the same GPU as a10g-large for less money.
+        flavor, label = "a10g-small", ""
         timeout = timeout or "6h"
     wandb_key = wandb_api_key()
+    project = wandb_project(MODEL_SLUG)
+    run_name = wandb_run_name(
+        method, variant, model_slug=MODEL_SLUG, epochs=n_epochs, tag=label or "",
+    )
 
     tag = f"{label} " if label else ""
     print(f"Submitting {tag}{method} job (flavor={flavor}, timeout={timeout})...")
-    print(f"  Base model: {base_model or MODEL_ID}")
+    print(f"  Base model: {base}")
     print(f"  Output repo: {out_repo}")
+    print(f"  Epochs: {n_epochs}")
+    print(f"  wandb: {project} / {run_name}")
+    print(f"  Stability: hub_strategy=every_save (checkpoint commits mid-run) + /data/output resume")
     job = api.run_uv_job(
         script=str(script_path),
         flavor=flavor,
@@ -161,16 +160,16 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
         env={
             "METHOD": method,
             "VARIANT": variant,
-            "BASE_MODEL": base_model or MODEL_ID,
+            "BASE_MODEL": base,
             "DATASET_REPO": data_repo,
             "OUTPUT_REPO": out_repo,
-            "WANDB_PROJECT": WANDB_PROJECT,
+            "WANDB_PROJECT": project,
+            "WANDB_RUN_NAME": run_name,
             "SMOKE_TEST": "1" if smoke_test else "0",
             "MINI_TEST": "1" if mini_test else "0",
             "INFERENCE_ONLY": "1" if inference_only else "0",
-            "CLEAN": "1" if clean else "0",
             "PRED_SUFFIX": pred_suffix,
-            "EPOCHS": str(epochs) if epochs else "",
+            "EPOCHS": str(n_epochs),
         },
         token=hf_token,
     )
@@ -182,7 +181,8 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
 
 
 def train_local(method: str, variant: str, output_dir: Path, max_steps: int,
-                max_length: int, batch_size: int, push_to_hub: bool, hf_user: str, hf_token: str):
+                max_length: int, batch_size: int, push_to_hub: bool, hf_user: str, hf_token: str,
+                epochs: int = DEFAULT_EPOCHS):
     """Run the SFT loop locally and save the adapter / model to output_dir."""
     import datasets as hf_datasets
     import wandb
@@ -191,7 +191,10 @@ def train_local(method: str, variant: str, output_dir: Path, max_steps: int,
     preset = METHOD_PRESETS[method]
     base = TrainingConfig()
     per_device_batch = batch_size or preset["per_device_train_batch_size"]
-    data_dir = Path(PROCESSED_DIR) / variant
+    data_dir = Path(PROCESSED_DIR) / processed_profile_name(variant)
+    n_epochs = epochs or DEFAULT_EPOCHS
+    project = wandb_project(MODEL_SLUG)
+    run_name = wandb_run_name(method, variant, model_slug=MODEL_SLUG, epochs=n_epochs)
 
     print(f"Loading data from {data_dir}...")
     train_ds = hf_datasets.load_from_disk(str(data_dir / "train"))
@@ -200,14 +203,13 @@ def train_local(method: str, variant: str, output_dir: Path, max_steps: int,
     print(f"Loading model ({method})...")
     model, tokenizer = build_model_and_tokenizer(method, hf_token)
 
-    run_name = f"{method}-{variant}"
     run = wandb.init(
-        project=WANDB_PROJECT,
+        project=project,
         name=run_name,
-        group=variant,
-        tags=[method, variant, "dictalm3-1.7b"],
+        group=f"{MODEL_SLUG}-{variant}",
+        tags=[method, variant, MODEL_SLUG, f"{n_epochs}ep"],
         config={"model_id": MODEL_ID, "method": method, "variant": variant,
-                "max_length": max_length, **preset},
+                "max_length": max_length, "epochs": n_epochs, **preset},
     )
     run.define_metric("train/*", step_metric="step")
     run.define_metric("eval/*", step_metric="step")
@@ -215,7 +217,7 @@ def train_local(method: str, variant: str, output_dir: Path, max_steps: int,
 
     sft_config = SFTConfig(
         output_dir=str(output_dir),
-        num_train_epochs=base.num_train_epochs,
+        num_train_epochs=n_epochs,
         max_steps=max_steps,
         per_device_train_batch_size=per_device_batch,
         gradient_accumulation_steps=preset["gradient_accumulation_steps"],
@@ -225,6 +227,7 @@ def train_local(method: str, variant: str, output_dir: Path, max_steps: int,
         logging_steps=base.logging_steps,
         save_strategy="steps",
         save_steps=base.save_steps,
+        save_total_limit=2,
         eval_strategy="steps",
         eval_steps=base.eval_steps,
         bf16=base.bf16,
@@ -235,6 +238,7 @@ def train_local(method: str, variant: str, output_dir: Path, max_steps: int,
         run_name=run_name,
         push_to_hub=push_to_hub,
         hub_model_id=model_repo(hf_user, variant) if push_to_hub else None,
+        hub_strategy="every_save" if push_to_hub else "end",
         hub_private_repo=True,
     )
 
@@ -247,7 +251,9 @@ def train_local(method: str, variant: str, output_dir: Path, max_steps: int,
         peft_config=lora_config() if preset["use_lora"] else None,
     )
 
-    print(f"Starting {method} training (variant={variant})...")
+    print(f"Starting {method} training (variant={variant}, epochs={n_epochs})...")
+    if push_to_hub:
+        print(f"  Mid-run Hub push: every save_steps={base.save_steps} → {model_repo(hf_user, variant)}")
     trainer.train()
     trainer.save_model(str(output_dir))
     tokenizer.save_pretrained(str(output_dir))
@@ -255,7 +261,8 @@ def train_local(method: str, variant: str, output_dir: Path, max_steps: int,
         trainer.push_to_hub()
 
     (output_dir / "training_args.json").write_text(json.dumps(
-        {"model_id": MODEL_ID, "method": method, "variant": variant, "preset": preset},
+        {"model_id": MODEL_ID, "method": method, "variant": variant, "epochs": n_epochs,
+         "preset": preset},
         indent=2,
     ))
     (output_dir / "wandb_run_info.json").write_text(json.dumps(
@@ -268,7 +275,7 @@ def train_local(method: str, variant: str, output_dir: Path, max_steps: int,
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Fine-tune DictaLM-3.0-1.7B-Base for Hebrew summarization")
+    parser = argparse.ArgumentParser(description="Fine-tune dictalm2.0-instruct for Hebrew summarization")
     parser.add_argument("--method", choices=list(METHOD_PRESETS), default="qlora")
     parser.add_argument("--variant", choices=("whole", "lead", "body"), default="whole")
     parser.add_argument("--output", default=None, help="Local checkpoint dir (default: outputs/checkpoints/<method>-<variant>)")
@@ -276,24 +283,18 @@ def main():
     parser.add_argument("--max-length", type=int, default=MAX_LENGTH)
     parser.add_argument("--batch-size", type=int, default=0, help="Override per-device batch size (for memory-limited local GPUs)")
     parser.add_argument("--push-to-hub", action="store_true", help="Push the trained adapter to the Hub")
-    parser.add_argument("--submit-hf", action="store_true", help="Submit a remote QLoRA job to HF Jobs instead of training locally")
+    parser.add_argument("--submit-hf", action="store_true", help="Submit a remote training job to HF Jobs instead of training locally")
     parser.add_argument("--hf-user", default="", help="HuggingFace username (required with --submit-hf or --push-to-hub)")
     parser.add_argument("--smoke-test", action="store_true", help="With --submit-hf: quick 10-step job on a10g-small")
-    parser.add_argument("--mini-test", action="store_true", help="With --submit-hf: 100-example / 5-epoch job on a10g-small — validates full pipeline with real wandb curves")
-    parser.add_argument("--inference-only", action="store_true", help="With --submit-hf: skip training, regenerate predictions from the already-pushed adapter (fast: a10g-small, 1h)")
-    parser.add_argument("--pred-suffix", default="", help="With --submit-hf: suffix for pushed prediction files (e.g. -v2) so a re-decode doesn't clobber v1")
-    parser.add_argument("--epochs", type=int, default=0, help="With --submit-hf: number of training epochs (0 = job default of 3)")
+    parser.add_argument("--mini-test", action="store_true", help="With --submit-hf: small-data 1-epoch job on a10g-small")
+    parser.add_argument("--inference-only", action="store_true", help="With --submit-hf: skip training, regenerate predictions from the already-pushed adapter")
+    parser.add_argument("--pred-suffix", default="", help="With --submit-hf: suffix for pushed prediction files (e.g. -v2)")
+    parser.add_argument("--epochs", type=int, default=DEFAULT_EPOCHS,
+                        help=f"Training epochs (default: {DEFAULT_EPOCHS})")
     parser.add_argument("--base-model", default="", help=f"Base checkpoint to fine-tune (default: {MODEL_ID}). Requires --output-repo.")
     parser.add_argument("--output-repo", default="", help="Hub repo for the adapter (default: derived from --hf-user/--variant)")
     parser.add_argument("--skip-data-upload", action="store_true", help="With --submit-hf: reuse the splits already on the Hub instead of re-uploading")
-    parser.add_argument("--clean", action="store_true",
-                        help="Clean pipeline profile: normalize references + hardened prompt "
-                             "+ clean inference toggles. Use --drop-roundups to also remove "
-                             "3+ pipe roundups.")
-    parser.add_argument("--drop-roundups", action="store_true",
-                        help="With --clean/--submit-hf: target the -clean-drop data/adapter repos "
-                             "(drops 3+ pipe references; default --clean keeps all 10k).")
-    parser.add_argument("--timeout", default="", help="With --submit-hf: override the job timeout (e.g. 8h). Default: 6h full / 2h infer / 1h mini / 30m smoke.")
+    parser.add_argument("--timeout", default="", help="With --submit-hf: override the job timeout (e.g. 8h).")
     args = parser.parse_args()
 
     hf_token = os.environ.get("HF_TOKEN", "")
@@ -301,24 +302,18 @@ def main():
         print("ERROR: HF_TOKEN not set. Run: source .env", file=sys.stderr)
         sys.exit(1)
 
-    if args.drop_roundups and not args.clean:
-        print("ERROR: --drop-roundups requires --clean", file=sys.stderr)
-        sys.exit(1)
-
     if args.submit_hf:
         if not args.hf_user:
             print("ERROR: --hf-user required with --submit-hf", file=sys.stderr)
             sys.exit(1)
-        # Without this, a swapped base model would push its adapter over the default repo's.
         if args.base_model and not args.output_repo:
             print("ERROR: --base-model requires --output-repo (refusing to overwrite "
-                  f"{model_repo(args.hf_user, args.variant, args.clean, args.drop_roundups)})", file=sys.stderr)
+                  f"{model_repo(args.hf_user, args.variant)})", file=sys.stderr)
             sys.exit(1)
         submit_hf_job(args.method, args.variant, hf_token, args.hf_user,
                       args.smoke_test, args.mini_test, args.inference_only,
                       args.pred_suffix, args.epochs, args.base_model,
-                      args.output_repo, args.skip_data_upload,
-                      args.clean, args.drop_roundups, args.timeout)
+                      args.output_repo, args.skip_data_upload, args.timeout)
         return
 
     if args.push_to_hub and not args.hf_user:
@@ -328,7 +323,8 @@ def main():
     output_dir = Path(args.output or f"outputs/checkpoints/{args.method}-{args.variant}")
     output_dir.mkdir(parents=True, exist_ok=True)
     train_local(args.method, args.variant, output_dir, args.max_steps,
-                args.max_length, args.batch_size, args.push_to_hub, args.hf_user, hf_token)
+                args.max_length, args.batch_size, args.push_to_hub, args.hf_user, hf_token,
+                args.epochs)
 
 
 if __name__ == "__main__":

@@ -1,9 +1,9 @@
 """Tests for evaluation.stratify_by_topic: pure join/grouping logic, no model/API calls.
 
 Behavioral, not implementation-dictating — exercises the join key contract (prediction
-`reference` == label row `summary`) and the skip-small/never-skip grouping rules from
-docs/superpowers/specs/2026-07-04-topic-clustering-design.md. The same generic functions serve
-both topic_label (topic_clustering.py) and style_label (style_labels.py) groupings.
+`reference` == label row `summary`) and the skip-small/never-skip grouping rules. The same
+generic functions serve both topic_label (topic_clustering.py) and style_label
+(style_labels.py) groupings.
 """
 from evaluation.stratify_by_topic import group_by_label, join_predictions_with_labels
 from evaluation.topic_clustering import NOISE_LABEL

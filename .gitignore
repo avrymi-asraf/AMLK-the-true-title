@@ -26,4 +26,4 @@ outputs/
 .DS_Store
 
 # Local wandb run logs
-wandb/
+wandb/  

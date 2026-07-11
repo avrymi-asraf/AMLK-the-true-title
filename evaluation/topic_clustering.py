@@ -12,8 +12,8 @@ module holds the real, testable clustering logic; the
 Databricks notebook (notebooks/cluster_topics_databricks.py) is a thin driver that clones the
 repo, supplies the data + GPU, and calls cluster_dataset()/write_topics() from here — the same
 "importable twin" pattern as evaluation/infer.py for train_hf_job.py. Its output (topics.jsonl)
-is consumed locally, with no GPU needed, by evaluation/stratify_by_topic.py. See
-docs/superpowers/specs/2026-07-04-topic-clustering-design.md for the full design.
+is consumed locally, with no GPU needed, by evaluation/stratify_by_topic.py. See AGENTS.md
+and notebooks/cluster_topics_databricks.py for how this side-analysis fits the pipeline.
 
 Execution environment: the embedding step benefits from a GPU (faster) but doesn't require one
 — dicta-il/neodictabert-bilingual-embed is a 0.4B-parameter encoder-only model, the same class

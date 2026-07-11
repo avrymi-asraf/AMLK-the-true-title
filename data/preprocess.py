@@ -1,15 +1,13 @@
 """
 Pipeline step 2 of 3: instruction formatting, probe variants, and dataset splitting.
 Reads outputs/data/raw/combined.jsonl and writes Arrow splits to
-outputs/data/processed/<profile>/{train,val,test}. Each example becomes a
-(prompt, completion) pair so SFTTrainer can train with completion_only_loss=True
-(loss on the summary only). The --variant flag (whole|lead|body) builds the inputs
-for the truncation/positional-shortcut probe; the opt-in --clean/--drop-roundups flags
-(data/clean.py) select the alternative pipeline profile that normalizes pipe/bullet
-references into prose. The prompt template and make_variant here are the single source
-of truth, reused at inference time by evaluation/predict.py.
+outputs/data/processed/<variant>/{train,val,test}. Always normalizes pipe/bullet
+references into prose (data/clean.py), drops multi-headline roundups, and builds
+(prompt, completion) pairs with the hardened summarization prompt so SFTTrainer can
+train with completion_only_loss=True. The --variant flag (whole|lead|body) builds the
+inputs for the truncation/positional-shortcut probe.
 
-Run: python -m data.preprocess --variant whole [--clean [--drop-roundups]]
+Run: python -m data.preprocess --variant whole
 Execution environment: local development machine.
 """
 import argparse
@@ -28,6 +26,7 @@ INPUT_PATH = Path("outputs/data/raw/combined.jsonl")
 OUTPUT_ROOT = Path("outputs/data/processed")
 VARIANTS = ("whole", "lead", "body")
 ARTICLE_TOKEN_BUDGET = MAX_LENGTH - 256
+
 
 def truncate_to_tokens(text: str, tokenizer, max_tokens: int) -> str:
     """Cut text to its first max_tokens tokens (keeps the lead — where news summaries live)."""
@@ -48,23 +47,13 @@ def split_dataset(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Format and split Hebrew summarization data")
+    parser = argparse.ArgumentParser(
+        description="Format and split Hebrew summarization data (clean references, hardened prompt)")
     parser.add_argument("--variant", choices=VARIANTS, default="whole",
                         help="Article input for the truncation probe (whole|lead|body)")
-    parser.add_argument("--clean", action="store_true",
-                        help="Clean profile: normalize pipe/bullet references to prose and use "
-                             "the hardened prompt. Writes to <variant>-clean.")
-    parser.add_argument("--drop-roundups", action="store_true",
-                        help="With --clean: also drop 3+ pipe 'media roundup' references "
-                             "(~2.4k records). Writes to <variant>-clean-drop instead.")
     args = parser.parse_args()
 
-    if args.drop_roundups and not args.clean:
-        print("ERROR: --drop-roundups requires --clean", file=sys.stderr)
-        sys.exit(1)
-
-    output_dir = OUTPUT_ROOT / processed_profile_name(
-        args.variant, clean=args.clean, drop_roundups=args.drop_roundups)
+    output_dir = OUTPUT_ROOT / processed_profile_name(args.variant)
     if output_dir.exists():
         print(f"Output already exists at {output_dir}. Delete it to re-preprocess.")
         sys.exit(0)
@@ -78,16 +67,13 @@ def main():
         records = [json.loads(line) for line in f]
     print(f"Loaded {len(records)} records")
 
-    if args.clean:
-        # Rewrite pipe/bullet digests into natural prose. Both the training target
-        # (completion) and the eval reference (summary) come from r["summary"] below.
-        if args.drop_roundups:
-            before = len(records)
-            records = [r for r in records if not is_roundup_digest(r["summary"])]
-            print(f"[clean] Dropped {before - len(records)} roundup digests (3+ pipes)")
-        for r in records:
-            r["summary"] = normalize_summary(r["summary"])
-        print(f"[clean] Normalized {len(records)} references")
+    # Drop multi-headline media roundups, then rewrite remaining digests into prose.
+    before = len(records)
+    records = [r for r in records if not is_roundup_digest(r["summary"])]
+    print(f"Dropped {before - len(records)} roundup digests (3+ pipes)")
+    for r in records:
+        r["summary"] = normalize_summary(r["summary"])
+    print(f"Normalized {len(records)} references")
 
     from transformers import AutoTokenizer
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, token=os.environ.get("HF_TOKEN") or None)
@@ -98,7 +84,7 @@ def main():
         "text": texts,
         "summary": [r["summary"] for r in records],
         "source": [r["source"] for r in records],
-        "prompt": [build_prompt(t, clean=args.clean) for t in texts],
+        "prompt": [build_prompt(t) for t in texts],
         "completion": [r["summary"] for r in records],
     })
 

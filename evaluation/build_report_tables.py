@@ -15,8 +15,8 @@ from pathlib import Path
 
 SYSTEMS = ["finetuned", "base", "gemini"]
 LABELS = {
-    "finetuned": "DictaLM-3.0-1.7B LoRA (ours)",
-    "base": "DictaLM-3.0-1.7B zero-shot",
+    "finetuned": "DictaLM-2.0-Instruct LoRA (ours)",
+    "base": "DictaLM-2.0-Instruct zero-shot",
     "gemini": "Gemini 2.5 Flash (baseline)",
 }
 FAILURE_TYPES = ["hallucination", "omission", "entity_or_number_error", "lead_copying", "fluency_problem"]
@@ -73,7 +73,7 @@ def build_tables(reports: dict, errors: dict, leakage: dict | None) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description="Assemble the D1 comparison tables from the pushed reports")
-    parser.add_argument("--repo", default="avreymi/amlk-dictalm3-1.7b-sft")
+    parser.add_argument("--repo", default="avreymi/amlk-dictalm2-instruct-sft")
     parser.add_argument("--variant", default="whole")
     parser.add_argument("--output", default="outputs/results/d1-tables.md")
     args = parser.parse_args()

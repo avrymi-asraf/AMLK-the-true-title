@@ -1,19 +1,34 @@
 """
-Evaluation pipeline, GPU inference helpers: load the fine-tuned base model + LoRA adapter and
-generate test-set summaries. This is the importable twin of the generation block inside
-training/train_hf_job.py (which is a self-contained cloud script and cannot import repo code).
-It exists so the evaluation-observation notebook (notebooks/evaluation_observation.ipynb) can
-watch the *real* model produce summaries live, using the same code path the HF job uses.
+Evaluation pipeline, GPU inference helpers: load a base model (optionally + LoRA adapter) and
+generate test-set summaries. This is the importable twin of the generation blocks inside
+training/train_hf_job.py and evaluation/predict_base_hf_job.py (self-contained cloud scripts
+that cannot import repo code). Used by the evaluation-observation notebook and by local
+helpers that prepare multi-model zero-shot baselines.
 
 Execution environment: remote GPU only (Colab T4 / HF Jobs) — NEVER call locally; this machine's
 8 GB GPU freezes on a model load of this size. Keep generate_summaries() in sync with
-train_hf_job.py:generate_predictions().
+train_hf_job.py:generate_predictions() and predict_base_hf_job.py.
 """
 import torch
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
+from evaluation.base_predict import build_input_text_safe, resolve_load_plan
 from training.config import MODEL_ID
+
+
+def _quant_or_bf16_kwargs(quantize: bool) -> dict:
+    load_kwargs: dict = dict(device_map="auto")
+    if quantize:
+        load_kwargs["quantization_config"] = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+        )
+    else:
+        load_kwargs["torch_dtype"] = torch.bfloat16
+    return load_kwargs
 
 
 def load_finetuned_model(adapter_repo: str, model_id: str = MODEL_ID, quantize: bool = False):
@@ -27,17 +42,7 @@ def load_finetuned_model(adapter_repo: str, model_id: str = MODEL_ID, quantize: 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    load_kwargs = dict(device_map="auto")
-    if quantize:
-        load_kwargs["quantization_config"] = BitsAndBytesConfig(
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.bfloat16,
-            bnb_4bit_quant_type="nf4",
-            bnb_4bit_use_double_quant=True,
-        )
-    else:
-        load_kwargs["torch_dtype"] = torch.bfloat16
-
+    load_kwargs = _quant_or_bf16_kwargs(quantize)
     base = AutoModelForCausalLM.from_pretrained(model_id, **load_kwargs)
     model = PeftModel.from_pretrained(base, adapter_repo).eval()
     model.config.use_cache = True  # KV cache on for faster generation
@@ -45,52 +50,99 @@ def load_finetuned_model(adapter_repo: str, model_id: str = MODEL_ID, quantize: 
     return model, tokenizer, device
 
 
-def build_input_text(tokenizer, prompt: str, label: str, clean: bool = False) -> str:
+def load_base_model(model_id: str, quantize: bool | None = None):
+    """Load a zero-shot base checkpoint with no adapter (multi-model baseline path).
+
+    Handles causal LMs (incl. Nemotron with trust_remote_code) and Gemma-4 multimodal
+    unified models (AutoProcessor + AutoModelForMultimodalLM). Returns a dict:
+      {model, tokenizer, device, kind, processor?}
+    Never call this on the local 8 GB machine — remote GPU only.
+    """
+    plan = resolve_load_plan(model_id)
+    if quantize is None:
+        quantize = bool(plan["quantize_default"])
+    load_kwargs = _quant_or_bf16_kwargs(quantize)
+    if plan["trust_remote_code"]:
+        load_kwargs["trust_remote_code"] = True
+
+    if plan["kind"] == "multimodal":
+        from transformers import AutoModelForMultimodalLM, AutoProcessor
+
+        processor = AutoProcessor.from_pretrained(model_id)
+        model = AutoModelForMultimodalLM.from_pretrained(model_id, **load_kwargs).eval()
+        model.config.use_cache = True
+        device = next(model.parameters()).device
+        # Processor exposes a tokenizer for pad/eos ids and chat templating.
+        tokenizer = getattr(processor, "tokenizer", None) or processor
+        if getattr(tokenizer, "pad_token", None) is None and getattr(tokenizer, "eos_token", None):
+            tokenizer.pad_token = tokenizer.eos_token
+        return {
+            "model": model,
+            "tokenizer": tokenizer,
+            "processor": processor,
+            "device": device,
+            "kind": "multimodal",
+        }
+
+    # Nemotron ships tokenizer.json only; AutoTokenizer can bind a slow LlamaTokenizer that
+    # encodes Hebrew to empty ids. Prefer fast; fall back to PreTrainedTokenizerFast.
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id, trust_remote_code=plan["trust_remote_code"], use_fast=True
+    )
+    if not tokenizer.encode("שלום", add_special_tokens=False):
+        from transformers import PreTrainedTokenizerFast
+
+        tokenizer = PreTrainedTokenizerFast.from_pretrained(model_id)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    model = AutoModelForCausalLM.from_pretrained(model_id, **load_kwargs).eval()
+    model.config.use_cache = True
+    device = next(model.parameters()).device
+    return {
+        "model": model,
+        "tokenizer": tokenizer,
+        "processor": None,
+        "device": device,
+        "kind": "causal",
+    }
+
+
+def build_input_text(tokenizer, prompt: str, label: str) -> str:
     """Format the prompt for generation, per system. Mirrors train_hf_job.py:build_input_text —
     keep the two in sync by hand (that script can't import repo code).
 
     The LoRA adapter is trained on the raw completion-style prompt, so "finetuned" keeps
     using it verbatim. The zero-shot "base" system never sees that format in training — on a
-    chat-capable model, feeding it raw risks the reasoning prior free-associating into an
-    open-ended <think> block that never closes. The real chat template with
-    enable_thinking=False closes the think block immediately, giving the baseline a fairer
-    chance; the clean profile additionally appends a `/no_think` soft switch for extra
-    reinforcement on chat-capable models. Pure base checkpoints (e.g.
-    dicta-il/DictaLM-3.0-1.7B-Base) ship no chat template at all, so there is no assistant mode
-    to enter and the raw prompt is the only option — clean's `/no_think` is then a no-op.
+    chat-capable model, feed the real chat template with enable_thinking=False and a
+    `/no_think` soft switch. Older Mistral / DictaLM-2 templates reject enable_thinking= —
+    build_input_text_safe falls back. Pure base checkpoints with no chat template use the
+    raw prompt.
     """
-    if label != "base" or not tokenizer.chat_template:
+    if label != "base":
         return prompt
-    content = f"{prompt}\n/no_think" if clean else prompt
-    return tokenizer.apply_chat_template(
-        [{"role": "user", "content": content}],
-        tokenize=False, add_generation_prompt=True, enable_thinking=False,
-    )
+    return build_input_text_safe(tokenizer, prompt)
 
 
 def generate_summaries(
     model, tokenizer, dataset, variant: str, device,
     batch_size: int = 8, max_new_tokens: int = 256, label: str = "finetuned",
-    clean: bool = False,
 ) -> list[dict]:
     """Generate summaries for a (processed) test split, in batches, greedily.
 
     Reads the dataset's precomputed `prompt`/`text`/`summary` columns (the variant is already
     baked into them by data/preprocess.py — do NOT re-apply make_variant). Left-padding keeps
     every sequence in a batch right-aligned so `out[:, input_len:]` extracts only the generated
-    tokens. Returns the standard prediction rows that evaluate.py / error_analysis.py consume.
-    `clean=True` enables the clean-profile decode toggles (base /no_think + Hebrew-script
-    constraint). Mirrors train_hf_job.py:generate_predictions().
+    tokens. Always applies the Hebrew-script decode constraint. Returns the standard prediction
+    rows that evaluate.py / error_analysis.py consume. Mirrors train_hf_job.py:generate_predictions().
     """
+    from evaluation.hebrew_constraint import build_bad_words_ids
+
     tokenizer.padding_side = "left"
-    bad_words_ids = None
-    if clean:
-        from evaluation.hebrew_constraint import build_bad_words_ids
-        bad_words_ids = build_bad_words_ids(tokenizer)
+    bad_words_ids = build_bad_words_ids(tokenizer)
     rows = []
     for i in range(0, len(dataset), batch_size):
         batch = dataset[i:i + batch_size]
-        prompts: list[str] = [build_input_text(tokenizer, p, label, clean=clean) for p in batch["prompt"]]
+        prompts: list[str] = [build_input_text(tokenizer, p, label) for p in batch["prompt"]]
         inputs = tokenizer(
             prompts, return_tensors="pt", truncation=True,
             max_length=2048 - 128, padding=True,
