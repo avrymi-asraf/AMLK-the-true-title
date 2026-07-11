@@ -86,7 +86,11 @@
 │   │   ├── raw/combined.jsonl            # Merged normalized dataset — 10,000 records (gitignored)
 │   │   └── processed/<variant>/          # Arrow splits train/ val/ test/ per probe variant (gitignored)
 │   ├── checkpoints/                      # LoRA adapter / full model checkpoints (gitignored)
-│   └── results/                          # predictions.jsonl + evaluation/error-analysis reports (gitignored)
+│   ├── results/                          # predictions.jsonl + evaluation/error-analysis reports (gitignored)
+│   └── manual-dwonloaded/                # Manually downloaded predictions directory (gitignored)
+│       ├── predictions-base.jsonl        # Base model test predictions (gitignored)
+│       ├── predictions-finetuned.jsonl   # Fine-tuned model test predictions (gitignored)
+│       └── compare.html                  # Simple side-by-side comparison HTML page
 ├── .venv/                                # Python virtual environment (gitignored)
 ├── .env                                  # HF_TOKEN, GEMINI_API_KEY — never commit
 ├── .gitignore
