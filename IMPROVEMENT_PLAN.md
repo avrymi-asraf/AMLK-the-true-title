@@ -1,0 +1,150 @@
+# AMLK Training: Diagnosis and Improvement Plan
+
+## Context
+
+You're unsatisfied with training results (hallucination + low ROUGE). Two research passes found **six separate problems**, only one of which is a hyperparameter issue. They stack in this order of impact:
+
+| # | Problem | One-line fix |
+|---|---|---|
+| P0 | Training targets are largely unsupported by their articles | Filter training data by article-support coverage |
+| P1 | Fine-tuning an *instruct* model without its instruction format | Wrap prompts in the model's chat template |
+| P2 | Decode config (`no_repeat_ngram_size`, `repetition_penalty`) already proven to crush scores once | Re-test with plain greedy decode |
+| P3 | "Low ROUGE" is a miscalibrated expectation for this dataset | Re-anchor success metric to faithfulness, not ROUGE |
+| P4 | 7B model swap invalidated all hardware/preset assumptions | Re-validate regime (QLoRA, paged optimizer, timeout) on 7B |
+| P5 | English instruction to a Hebrew-instruct-tuned model | Cheap A/B, adopt only if visibly better |
+
+Do them **in this order** — P1/P2/P3/P4 are prerequisites for a clean read on P0's data experiment, and several are free or near-free to check before spending on a real training run.
+
+---
+
+## P0 — Training targets are largely unsupported by their articles
+
+**Diagnosis.** SFT with `completion_only_loss=True` maximizes `log P(reference | article)`. Gradient descent has no notion of whether the reference is *derivable* from the article — it just pushes up the probability of whatever text follows. Measured on the test set with generous Hebrew stemming (niqqud/final-form normalization + clitic-prefix strip + 4-char stem, biased to overcount matches):
+
+- **Median reference has only ~67% of its content words present in its source article.**
+- One reference name-drops "זורנל", "המגזין", and the *Israel Hayom* deputy editor — none appear in the article.
+- One "summary" is a scraped related-articles widget: `אולי יעניין אותך גם:` ("you might also be interested in").
+- The repo's existing always-on roundup drop (`is_roundup_digest`, 3+ pipe segments) only partially helps: **among references that survive it, 12.7% are still <50% grounded.**
+
+This is corroborated independently by the HeSum paper itself (ACL Findings 2024): summaries are journalist-written **"extended subheadings"** (teasers, not summaries), 42% novel unigrams, 73% novel bigrams — among the highest abstractiveness of any summarization dataset, by design.
+
+For thousands of examples, the only way to reduce loss is to raise the model's general prior toward emitting plausible-but-unsourced Hebrew media-column content after *any* article — a mechanical instruction to hallucinate. This explains two results that otherwise look like bugs: judge faithfulness *fell below the untuned base* (2.98 → 2.64) after fine-tuning, and ROUGE got *worse* with more epochs (11.4 @ 1 epoch → 5.1 @ 3 epochs — more passes, more of that gradient).
+
+**The real risk of fixing this is not data starvation — it's extraction.** A coverage filter selects *for* extractive references. If ROUGE rises because the model became a lead-copier, that undermines the project's own lead-bias thesis (TODO F). Treat `lead_copying` rate as a hard gate, not a footnote.
+
+**Fix — Phase 0: prove/calibrate (local, CPU, ~1h, $0). Gate.**
+- New module `data/grounding.py` (stdlib only, no `datasets`/`transformers` — same convention as `data/clean.py`): `normalize()`, `stem()` (clitic-strip + 4-char truncate), `content_stems()`, `coverage(article, summary)`, `coverage_bucket()`, `is_grounded()`.
+- CLI `--report` on the **full 10k** `combined.jsonl`: coverage deciles, retention at each candidate threshold, how much it removes *beyond* the existing roundup drop.
+- Add two model-free oracles, stratified by coverage bucket, on the existing prediction files:
+  - **Gemini on ~300 examples** (`evaluation/predict.py`) — a faithful oracle. Its ROUGE-by-bucket curve is the *learnable floor*.
+  - **Lead-3 extractive baseline** (first 3 sentences) — 100% grounded by construction; this is TODO B'.3, owed anyway. Its curve tells you if a threshold is just selecting *extractable* references.
+  - Read both curves together: Gemini's answers "can any faithful system score here?"; Lead-3's answers "am I about to turn this into a lead-copying task?"
+- **Coverage must be computed against the *truncated* article** (post `truncate_to_tokens`, `MAX_LENGTH-256`=1792 tokens) — the text the model actually trains on — at both Phase 0 and preprocess, or the calibrated threshold won't transfer.
+- **Gate:** ROUGE should rise monotonically with coverage bucket for every system. If flat, the hypothesis is wrong — stop before spending on GPU.
+
+**Fix — Phase 1: wire the filter as a train-time knob, not a preprocess-time drop.**
+- `data/preprocess.py` — always emit `coverage` + `coverage_bucket` columns on all splits (train/val/test). No filtering here.
+- `training/train_hf_job.py` — new `MIN_COVERAGE` env var filters `train_ds` and `val_ds` (never `test_ds`). Must run **before** the smoke/mini `select(range(50))` slices, or a smoke job can go near-empty and pass vacuously.
+- `training/config.py` — `model_repo(hf_user, variant, min_coverage=0.0)` appends `-g70` when filtering; `dataset_repo` stays unsuffixed so **one** dataset repo serves both A/B arms (`--skip-data-upload` already exists).
+- **Never filter test.** Report it twice: overall (headline, honest) and stratified by coverage bucket (where the real story is). Threshold: pick from the Phase 0 oracle curves, not a priori; prior estimate 0.6–0.7 (~46% retention, ~4.6k rows — still ~290 optimizer steps at effective batch 16, not starved).
+
+---
+
+## P1 — Fine-tuning an instruct model without its instruction format
+
+**Diagnosis.** `dicta-il/dictalm2.0-instruct` is a 7B Mistral-based model, instruction-tuned via the Zephyr recipe. Its model card is explicit: prompts must be wrapped `[INST] ... [/INST]`. The pipeline currently trains and infers the **fine-tuned** system on the raw completion-style prompt (`"Summarize the following Hebrew text...\n\nSummary:\n"`) with no chat wrapping — only the **zero-shot base** system gets `apply_chat_template()` (`train_hf_job.py:build_input_text`, `label == "base"` branch only).
+
+Consequences: the entire reason to pick the instruct variant — its instruction-following — is bypassed; the fine-tune starts from raw text-continuation mode and must relearn instruction behavior from ~8k examples; the A/B is skewed (base answers in its native format, finetuned in a foreign one). SFT literature is consistent here: when a chat template exists, training should reuse it, or performance measurably degrades.
+
+This defect is new: the previous base (DictaLM-3-Base) had no chat template, so raw prompts were *correct* for it. The swap to an instruct model silently made the raw-prompt path wrong.
+
+**Fix.** Build the training prompt via `tokenizer.apply_chat_template([{"role": "user", "content": prompt}], tokenize=False, add_generation_prompt=True)` in `data/preprocess.py` (or at train time), giving `<s>[INST] {instruction+article} [/INST]`; completion stays the reference (TRL already appends EOS). Make `build_input_text` use the *same* wrapped format for the finetuned system at inference so train and inference match. Watch the **double-BOS trap**: the template emits `<s>`, and the tokenizer may add BOS again at encode time — strip one. Keep the raw-prompt fallback when `tokenizer.chat_template` is falsy, to preserve the DictaLM-3-Base probe path.
+
+Highest leverage of all six fixes, and free.
+
+---
+
+## P2 — The decode config already proved it crushes scores, once
+
+**Diagnosis.** The project's own recorded results are direct causal evidence: **v1 → v2 used the identical adapter and changed only decoding — ROUGE-1 fell 11.4 → 4.7.** Yet the current shared decode config (`train_hf_job.py` / `evaluation/infer.py`) still carries the suspects:
+- `no_repeat_ngram_size=3` — blocks any repeated 3-gram, but Hebrew news summaries legitimately repeat multi-token entity names (ministries, outlet names like "ידיעות אחרונות"); blocking forces the model off a faithful continuation mid-entity. This operates on token identity, not meaning — a known limitation in the literature.
+- `repetition_penalty=1.2` — a strong additional push away from high-probability (faithful) tokens.
+- Symptom: v2/v3 median prediction ≈ 548 chars vs ~150-char references — over-generation that directly destroys ROUGE precision.
+
+**Fix.** Cheap and self-verifying (~$1, no retraining): the old DictaLM-3 adapter (`avreymi/amlk-dictalm3-1.7b-sft-clean`) is still on the Hub, and `--inference-only --pred-suffix` exists precisely for this. Submit one inference-only job with plain greedy decode (explicit EOS, `max_new_tokens=256`, **no** `no_repeat_ngram_size`, **no** `repetition_penalty`), score both files locally (`evaluation.evaluate --limit 200 --skip-llm` is enough for length/ROUGE). If plain decode recovers length/ROUGE (expected, given v1=11.4 was under the old decode), remove both knobs from the shared config; re-add the mildest only if visible looping returns.
+
+---
+
+## P3 — "Low ROUGE" is a miscalibrated expectation for this dataset
+
+**Diagnosis.** From the HeSum paper's own results table: **fine-tuned mLongT5 = 17.5 ROUGE-1; GPT-4 = 13.6; GPT-3.5 = 13.7.** Your v1's 11.4 was already within GPT-4's range. More importantly, the paper reports **ROUGE correlates *negatively* with human judgment on HeSum** (Pearson r ≈ −0.16, p < 0.00005) — a direct consequence of Hebrew's morphology and flexible word order plus the dataset's teaser-style abstractiveness. Optimizing or selecting checkpoints on ROUGE here is actively counterproductive.
+
+**Fix.** No code change, but a firm policy change: primary success metric everywhere (this plan, report tables, checkpoint selection) is **judge faithfulness + error-analysis rates**, scored prediction-vs-*article*. Report ROUGE with the HeSum context line (GPT-4=13.6; negative human correlation) so it's read correctly in the paper. Never select thresholds, checkpoints, or "which arm won" purely on ROUGE.
+
+---
+
+## P4 — The 7B swap invalidated the repo's hardware/regime assumptions
+
+**Diagnosis.** All existing docs, presets, and cost/time estimates were written for a ~1.7–2B model ("prefer `--method lora` over qlora for a model this size"). `dictalm2.0-instruct` is **7B**:
+- LoRA (bf16 base, no quantization) is now marginal on a 24GB A10G — ~14GB weights alone plus activations at seq 2048/batch 4 risks OOM. **QLoRA becomes the correct default**, and the missing `optim=paged_adamw_8bit` (QLoRA quantizes the base to 4-bit but still runs a full fp32 Adam optimizer state — the classic QLoRA misconfiguration) matters more than before.
+- Training time is roughly 3–4× the old 1.7B estimates; the 6h timeout that a 1.7B run already brushed against is a real risk for more than 1 epoch. (`/data/output` + `resume_from_checkpoint` mitigate this, but the resume path has never been tested against a real infra restart.)
+- **Nothing has been validated end-to-end on this base** — the "pipeline validated" smoke test was on the old 1.7B model.
+- Separately, still-live wiring bug: `train_hf_job.py` hardcodes `batch=2, accum=8, lr=2e-4` and ignores `METHOD_PRESETS` entirely, so `--submit-hf --method full` silently trains at `lr=2e-4` instead of the preset's `5e-5`.
+
+**Fix.**
+- Default `--method qlora`; add `optim="paged_adamw_8bit"` to the qlora path.
+- Re-check the `lora` preset's `batch=4` for 7B — likely reduce, or gate with an explicit OOM warning.
+- Run `--smoke-test` (~$0.05) **on the 7B** before anything else in this plan touches real training. Read step-time in the logs and extrapolate full-run duration against the 6h timeout; raise `--timeout` if the projection exceeds ~4.5h.
+- Fix the preset-wiring bug while in this code: serialize the resolved config from `train.py` to env as JSON (`TRAIN_CONFIG`, `LORA_CONFIG`) and have `train_hf_job.py` consume it instead of hardcoding — makes it structurally impossible for the two entry points to diverge again.
+- Add `seed=42` (currently never set anywhere but the data split) — non-negotiable once you're running an A/B, or the arms differ by RNG alone.
+- **Do not pre-commit the learning rate.** A `2e-4 → 1e-4` change has real downside (undertraining ~4.6k filtered examples at 1 epoch) and weak supporting evidence (the "1 epoch beat 3" finding is about epoch count, already fixed by `DEFAULT_EPOCHS=1`). Instead, use the existing `--mini-test` (~$0.10, ~25 real optimizer steps) as a **config-sanity gate**: run it at both 2e-4 and 1e-4, require the loss curve to look sane, and pick the LR from that — before spending on two full runs whose combined hyperparameter changes (P1 format fix + P4 optimizer/LR/seed) have never been validated together.
+
+---
+
+## P5 — English instruction to a Hebrew-instruction-tuned model (optional, cheap)
+
+**Diagnosis.** The prompt instruction is in English ("Summarize the following Hebrew text..."), but DictaLM 2.0-instruct was tuned with an *extended Hebrew instruct dataset*. A Hebrew-language instruction is plausibly closer to its tuning distribution. Low confidence — flagging it because it's nearly free to check.
+
+**Fix.** Generate ~50 zero-shot summaries with a Hebrew-phrased instruction vs. the current English one (Gemini path, or a tiny inference-only job) and eyeball both in the existing predictions viewer. Adopt Hebrew only if visibly better; otherwise keep English — it's also what the Gemini baseline uses, which keeps systems comparable.
+
+---
+
+## Execution order
+
+1. **P1** — chat-template the training/inference prompt for the finetuned system. Free, no GPU.
+2. **P2** — decode re-test on the existing Hub adapter. ~$1, self-verifying, no retraining.
+3. **P3** — re-anchor documentation/eval reporting to faithfulness-first. No cost.
+4. **P4** — regime fixes (QLoRA default, paged optimizer, seed, preset-wiring fix) + smoke test on the 7B (~$0.05) + mini-test LR gate (~$0.10).
+5. **P5** — optional Hebrew-instruction probe. Near-free.
+6. **P0** — Phase 0 grounding report + oracle calibration (local, $0, gate) → Phase 1 filter wiring → the real A/B:
+   - **Arm U** (control, `MIN_COVERAGE=0.0`) vs **Arm F** (treatment, `MIN_COVERAGE≈0.6–0.7`), identical seed and hyperparameters (all P1–P4 fixes applied to *both* arms), ~$4–6 total.
+   - No free control arm exists — `avreymi/amlk-dictalm2-instruct-sft` isn't on the Hub yet, and all prior recorded numbers are from a different base model, so every comparison must be within this run.
+
+## Success gates (fix now, before seeing numbers)
+1. **Faithfulness** (judge, prediction-vs-article): Arm F > Arm U, and Arm F > its own zero-shot base. Primary endpoint.
+2. **Hallucination rate** (error_analysis): Arm F < Arm U.
+3. **`lead_copying` must not rise** in Arm F. Hard gate — a rise means hallucination was traded for extraction, undermining the lead-bias thesis. Report training-set abstractiveness (novel n-grams) of filtered vs. unfiltered alongside it (TODO B'.4).
+4. **ROUGE-1 on high-coverage test buckets**: Arm F > Arm U, reported as a secondary/stratified number only, never as the headline.
+
+## Files touched (when executing)
+- `data/grounding.py` *(new)* — coverage metric, `--report`/`--label` CLI
+- `data/preprocess.py`, `data/prompts.py` — coverage columns; chat-template-wrapped prompt (+BOS handling)
+- `training/config.py` — `model_repo(..., min_coverage)`; qlora default + `paged_adamw_8bit`; seed; preset fix plumbing
+- `training/train.py` — serialize `TRAIN_CONFIG`/`LORA_CONFIG`/`MIN_COVERAGE` to env
+- `training/train_hf_job.py`, `evaluation/infer.py` — consume serialized config; matched chat-template inference; simplified decode; coverage filter ordered before smoke/mini slices; full filtered val instead of first-200
+- `evaluation/stratify_by_topic.py` — add `coverage_bucket` to `--label-field`
+- `evaluation/build_report_tables.py` — HeSum-context caveat line, faithfulness-first ordering
+- `tests/test_grounding.py` *(new)*, `tests/test_preprocess.py` (coverage column + chat-template prompt)
+
+Every touched file needs its header updated per `AGENTS.md` (role / code flow / execution environment). No new doc files in the repo.
+
+## Sources
+- [DictaLM 2.0 Instruct model card](https://huggingface.co/dicta-il/dictalm2.0-instruct) — 7B, `[INST]` format requirement
+- [HeSum: a Novel Dataset for Abstractive Text Summarization in Hebrew (arXiv 2406.03897)](https://arxiv.org/abs/2406.03897) — results table, abstractiveness stats, ROUGE/human negative correlation
+- [HeSum full text](https://arxiv.org/html/2406.03897v2)
+- [Adapting LLMs to Hebrew: DictaLM 2.0 (arXiv 2407.07080)](https://arxiv.org/html/2407.07080v1)
+- [TRL chat-template handling, issue #3140](https://github.com/huggingface/trl/issues/3140)
+- [SFT dataset formatting guide (Red Hat Developer)](https://developers.redhat.com/articles/2025/08/18/introduction-supervised-fine-tuning-dataset-formats)
+- [Repetition penalties in LM generation](https://mbrenndoerfer.com/writing/repetition-penalties-language-model-generation)
+- [Improving Faithfulness in Abstractive Summarization (arXiv 2104.09061)](https://arxiv.org/pdf/2104.09061)
+- [Entity Coverage Control for faithful summarization (arXiv 2207.02263)](https://arxiv.org/pdf/2207.02263)
