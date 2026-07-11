@@ -6,9 +6,10 @@ DictaLM path — load a named Hub checkpoint as-is, run the shared Hebrew summar
 prompts from the processed test split, and write predictions-base.jsonl for scoring.
 
 Code flow: resolve_load_plan → load_base_model (in infer.py / HF job) → generate →
-write_predictions_jsonl → outputs/<model-slug>/predictions-base.jsonl. The HF Jobs
-entry point is evaluation/predict_base_hf_job.py (self-contained; cannot import this
-module on the cloud side — keep pure helpers here for local tests + notebook reuse).
+write_predictions_jsonl → outputs/<model-slug>/predictions-base.jsonl. Chat formatting
+is data.prompts.format_chat_prompt (re-exported here). The HF Jobs entry point is
+evaluation/predict_base_hf_job.py (self-contained; cannot import this module on the
+cloud — keep an inlined twin of format_chat_prompt there).
 
 Execution environment: pure helpers run locally (CPU); model load/generate is remote GPU
 only (never on the 8 GB local machine).
@@ -19,8 +20,26 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
+from data.prompts import format_chat_prompt, prepare_tokenizer_for_templated_prompts
 
 REQUIRED_ROW_FIELDS = ("text", "reference", "prediction", "model", "variant")
+
+# Re-export so callers/tests can import chat helpers from one evaluation module.
+__all__ = [
+    "REQUIRED_ROW_FIELDS",
+    "build_input_text_safe",
+    "format_chat_prompt",
+    "load_predictions_jsonl",
+    "local_predictions_dir",
+    "local_predictions_path",
+    "model_slug",
+    "output_repo_for",
+    "prediction_row",
+    "prepare_tokenizer_for_templated_prompts",
+    "resolve_load_plan",
+    "validate_predictions",
+    "write_predictions_jsonl",
+]
 
 
 def model_slug(model_id: str) -> str:
@@ -138,18 +157,9 @@ def validate_predictions(
 
 
 def build_input_text_safe(tokenizer, prompt: str) -> str:
-    """Zero-shot base prompt formatting with chat-template when available.
+    """Format a prompt for generation via the shared chat-template helper.
 
-    Mirrors evaluation.infer.build_input_text(..., label='base') but tolerates templates
-    that do not accept enable_thinking= (e.g. older Mistral / DictaLM-2 templates).
-    Always appends `/no_think` as soft reinforcement on chat-capable models.
+    Alias of data.prompts.format_chat_prompt — kept under this name for existing tests
+    and call sites. Applies to both finetuned and base arms when a chat template exists.
     """
-    if not getattr(tokenizer, "chat_template", None):
-        return prompt
-    content = f"{prompt}\n/no_think"
-    messages = [{"role": "user", "content": content}]
-    kwargs = dict(tokenize=False, add_generation_prompt=True)
-    try:
-        return tokenizer.apply_chat_template(messages, enable_thinking=False, **kwargs)
-    except TypeError:
-        return tokenizer.apply_chat_template(messages, **kwargs)
+    return format_chat_prompt(tokenizer, prompt)

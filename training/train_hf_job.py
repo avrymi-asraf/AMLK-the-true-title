@@ -18,6 +18,11 @@ dicta-il/dictalm2.0-instruct, run on HuggingFace Jobs. Submitted inline by
 training/train.py --submit-hf; never run directly. All settings arrive as
 environment variables (the repo is NOT uploaded with the script).
 
+Hyperparameters come from TRAIN_CONFIG / LORA_CONFIG JSON (serialized by train.py
+from METHOD_PRESETS) so --method lora|full cannot silently use qlora batch/lr.
+Train and serve both apply the model chat template (C0); generation tokenizes with
+add_special_tokens=False to avoid double-BOS (C1).
+
 Stability (so a long run is not lost on crash/timeout):
   1. Checkpoints write to /data/output — the per-job bucket volume that survives
      infra restarts of the same job; trainer.train(resume_from_checkpoint=True)
@@ -71,11 +76,50 @@ WANDB_RUN_NAME = os.environ.get("WANDB_RUN_NAME") or "_".join(
 )
 os.environ["WANDB_PROJECT"] = WANDB_PROJECT
 
+# Resolved presets from train.py (METHOD_PRESETS). Fallbacks match the qlora preset so a
+# hand-fired job without TRAIN_CONFIG still trains sanely.
+_DEFAULT_TRAIN = {
+    "quantize": True,
+    "use_lora": True,
+    "per_device_train_batch_size": 2,
+    "gradient_accumulation_steps": 8,
+    "learning_rate": 2e-4,
+    "warmup_ratio": 0.05,
+    "lr_scheduler_type": "cosine",
+    "bf16": True,
+    "max_length": 2048,
+}
+_DEFAULT_LORA = {
+    "r": 32,
+    "lora_alpha": 64,
+    "lora_dropout": 0.05,
+    "target_modules": [
+        "q_proj", "k_proj", "v_proj", "o_proj",
+        "gate_proj", "up_proj", "down_proj",
+    ],
+    "bias": "none",
+    "task_type": "CAUSAL_LM",
+}
+try:
+    TRAIN_CFG = {**_DEFAULT_TRAIN, **json.loads(os.environ.get("TRAIN_CONFIG") or "{}")}
+except json.JSONDecodeError:
+    TRAIN_CFG = dict(_DEFAULT_TRAIN)
+try:
+    LORA_CFG = {**_DEFAULT_LORA, **json.loads(os.environ.get("LORA_CONFIG") or "{}")}
+except json.JSONDecodeError:
+    LORA_CFG = dict(_DEFAULT_LORA)
+
+quantize = bool(TRAIN_CFG["quantize"])
+use_lora = bool(TRAIN_CFG["use_lora"])
+
 mode = "inference-only" if INFERENCE_ONLY else f"train+infer  Method={METHOD}"
 print(f"Mode: {mode}  Variant: {VARIANT}  Smoke: {SMOKE_TEST}  Mini: {MINI_TEST}")
 print(f"Base model: {MODEL_ID}")
 print(f"Dataset: {DATASET_REPO}  ->  Output: {OUTPUT_REPO}")
 print(f"Epochs: {EPOCHS}")
+print(f"Train config: quantize={quantize} use_lora={use_lora} "
+      f"batch={TRAIN_CFG['per_device_train_batch_size']} "
+      f"accum={TRAIN_CFG['gradient_accumulation_steps']} lr={TRAIN_CFG['learning_rate']}")
 print(f"wandb: {WANDB_PROJECT} / {WANDB_RUN_NAME}")
 
 local_data = Path("./data")
@@ -100,12 +144,31 @@ else:
     # Eval on a fixed 200-example slice — full 1000-example eval several times would blow the budget.
     val_ds = val_ds.select(range(min(200, len(val_ds))))
 
-quantize = METHOD == "qlora"
-use_lora = METHOD != "full"
-
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
+# Twin of data.prompts.prepare_tokenizer_for_templated_prompts (this script can't import repo).
+if getattr(tokenizer, "chat_template", None) and hasattr(tokenizer, "add_bos_token"):
+    tokenizer.add_bos_token = False
+
+
+def format_chat_prompt(prompt: str) -> str:
+    """Twin of data.prompts.format_chat_prompt — keep in sync by hand.
+
+    Applies the model chat template for train *and* both inference arms (C0).
+    No Qwen-era think switches (C2): Mistral templates treat those as user text.
+    """
+    if not getattr(tokenizer, "chat_template", None):
+        return prompt
+    messages = [{"role": "user", "content": prompt}]
+    kwargs = dict(tokenize=False, add_generation_prompt=True)
+    try:
+        return tokenizer.apply_chat_template(
+            messages, enable_thinking=False, **kwargs,
+        )
+    except TypeError:
+        return tokenizer.apply_chat_template(messages, **kwargs)
+
 
 load_kwargs = dict(device_map="auto")
 if quantize:
@@ -126,13 +189,19 @@ if INFERENCE_ONLY:
     device = next(trained_model.parameters()).device
     use_lora = True  # adapter is always a LoRA adapter
 else:
-    # Mirrors training/config.py:LoRAConfig — r=32 + MLP projections (not just attention).
     peft_config = LoraConfig(
-        r=32, lora_alpha=64, lora_dropout=0.05,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
-                        "gate_proj", "up_proj", "down_proj"],
-        bias="none", task_type="CAUSAL_LM",
+        r=int(LORA_CFG["r"]),
+        lora_alpha=int(LORA_CFG["lora_alpha"]),
+        lora_dropout=float(LORA_CFG["lora_dropout"]),
+        target_modules=list(LORA_CFG["target_modules"]),
+        bias=LORA_CFG["bias"],
+        task_type=LORA_CFG["task_type"],
     ) if use_lora else None
+
+    # C0: wrap train/val prompts so SFT sees [INST]…[/INST], matching inference.
+    print("Wrapping train/val prompts in chat template (if present)...")
+    train_ds = train_ds.map(lambda ex: {**ex, "prompt": format_chat_prompt(ex["prompt"])})
+    val_ds = val_ds.map(lambda ex: {**ex, "prompt": format_chat_prompt(ex["prompt"])})
 
     # Mini: log every step; smoke: 10 steps; full 1-epoch: save every 100 steps so Hub
     # gets several mid-run commits (hub_strategy=every_save).
@@ -159,12 +228,12 @@ else:
         hub_private_repo=True,
         num_train_epochs=n_epochs,
         max_steps=max_steps_cfg,
-        per_device_train_batch_size=2,
+        per_device_train_batch_size=int(TRAIN_CFG["per_device_train_batch_size"]),
         per_device_eval_batch_size=1,   # eval defaults to 8 → OOM at seq-len 2048
-        gradient_accumulation_steps=8,
-        learning_rate=2e-4,
-        warmup_ratio=0.05,
-        lr_scheduler_type="cosine",
+        gradient_accumulation_steps=int(TRAIN_CFG["gradient_accumulation_steps"]),
+        learning_rate=float(TRAIN_CFG["learning_rate"]),
+        warmup_ratio=float(TRAIN_CFG["warmup_ratio"]),
+        lr_scheduler_type=TRAIN_CFG["lr_scheduler_type"],
         logging_steps=log_steps,
         save_strategy="steps",
         save_steps=save_steps_cfg,
@@ -174,11 +243,11 @@ else:
         load_best_model_at_end=True,
         metric_for_best_model="eval_loss",
         greater_is_better=False,
-        bf16=True,
+        bf16=bool(TRAIN_CFG["bf16"]),
         gradient_checkpointing=True,
         # TRL auto-appends EOS to each completion; completion_only_loss keeps it in the mask.
         completion_only_loss=True,
-        max_length=2048,
+        max_length=int(TRAIN_CFG["max_length"]),
         report_to="wandb",
         run_name=WANDB_RUN_NAME,
     )
@@ -217,26 +286,9 @@ trained_model.config.use_cache = True
 
 
 def build_input_text(prompt: str, label: str) -> str:
-    """Format the prompt for generation, per system.
-
-    The LoRA adapter is trained on the raw completion-style prompt (build_prompt), so
-    "finetuned" must keep using it verbatim. The zero-shot "base" system never sees that
-    format in training — on a chat-capable model, wrap it in the real chat template so the
-    model is in assistant-response mode. Append `/no_think` as soft reinforcement when a
-    chat template is present. Older Mistral / DictaLM-2 templates reject enable_thinking=
-    — fall back without that kwarg. Pure base checkpoints with no chat template use the raw prompt.
-    """
-    if label != "base" or not tokenizer.chat_template:
-        return prompt
-    content = f"{prompt}\n/no_think"
-    messages = [{"role": "user", "content": content}]
-    kwargs = dict(tokenize=False, add_generation_prompt=True)
-    try:
-        return tokenizer.apply_chat_template(
-            messages, enable_thinking=False, **kwargs,
-        )
-    except TypeError:
-        return tokenizer.apply_chat_template(messages, **kwargs)
+    """Format the prompt for generation — same chat wrap for finetuned and base (C0/C2)."""
+    del label
+    return format_chat_prompt(prompt)
 
 
 def _build_bad_words_ids():
@@ -276,9 +328,10 @@ def generate_predictions(label: str) -> list[dict]:
     for i in range(0, len(test_ds), batch_size):
         batch = test_ds[i:i + batch_size]
         prompts: list[str] = [build_input_text(p, label) for p in batch["prompt"]]
+        # add_special_tokens=False: chat template already includes BOS (C1).
         inputs = tokenizer(
             prompts, return_tensors="pt", truncation=True,
-            max_length=2048 - 128, padding=True,
+            max_length=2048 - 128, padding=True, add_special_tokens=False,
         ).to(device)
         with torch.no_grad():
             outs = trained_model.generate(

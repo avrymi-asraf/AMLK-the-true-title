@@ -41,10 +41,13 @@ def build_model_and_tokenizer(method: str, hf_token: str):
     import torch
     from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
+    from data.prompts import prepare_tokenizer_for_templated_prompts
+
     preset = METHOD_PRESETS[method]
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, token=hf_token or None)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    prepare_tokenizer_for_templated_prompts(tokenizer)
 
     load_kwargs = dict(token=hf_token or None, device_map="auto")
     if preset["quantize"]:
@@ -60,6 +63,35 @@ def build_model_and_tokenizer(method: str, hf_token: str):
     model = AutoModelForCausalLM.from_pretrained(MODEL_ID, **load_kwargs)
     model.config.use_cache = False
     return model, tokenizer
+
+
+def _train_config_payload(method: str) -> dict:
+    """Serialize METHOD_PRESETS + shared TrainingConfig for the remote UV job."""
+    preset = METHOD_PRESETS[method]
+    base = TrainingConfig()
+    return {
+        "quantize": preset["quantize"],
+        "use_lora": preset["use_lora"],
+        "per_device_train_batch_size": preset["per_device_train_batch_size"],
+        "gradient_accumulation_steps": preset["gradient_accumulation_steps"],
+        "learning_rate": preset["learning_rate"],
+        "warmup_ratio": base.warmup_ratio,
+        "lr_scheduler_type": base.lr_scheduler_type,
+        "bf16": base.bf16,
+        "max_length": MAX_LENGTH,
+    }
+
+
+def _lora_config_payload() -> dict:
+    cfg = LoRAConfig()
+    return {
+        "r": cfg.r,
+        "lora_alpha": cfg.lora_alpha,
+        "lora_dropout": cfg.lora_dropout,
+        "target_modules": list(cfg.target_modules),
+        "bias": cfg.bias,
+        "task_type": cfg.task_type,
+    }
 
 
 def lora_config():
@@ -136,20 +168,24 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
         flavor, label = "a10g-small", "mini"
         timeout = timeout or "1h"
     else:
-        # 7B QLoRA is GPU-bound; a10g-small has the same GPU as a10g-large for less money.
+        # 7B QLoRA ~5.8h worst-case at smoke step-time; 8h leaves headroom (C5).
         flavor, label = "a10g-small", ""
-        timeout = timeout or "6h"
+        timeout = timeout or "8h"
     wandb_key = wandb_api_key()
     project = wandb_project(MODEL_SLUG)
     run_name = wandb_run_name(
         method, variant, model_slug=MODEL_SLUG, epochs=n_epochs, tag=label or "",
     )
+    train_cfg = _train_config_payload(method)
+    lora_cfg = _lora_config_payload() if train_cfg["use_lora"] else {}
 
     tag = f"{label} " if label else ""
     print(f"Submitting {tag}{method} job (flavor={flavor}, timeout={timeout})...")
     print(f"  Base model: {base}")
     print(f"  Output repo: {out_repo}")
     print(f"  Epochs: {n_epochs}")
+    print(f"  Train config: batch={train_cfg['per_device_train_batch_size']} "
+          f"accum={train_cfg['gradient_accumulation_steps']} lr={train_cfg['learning_rate']}")
     print(f"  wandb: {project} / {run_name}")
     print(f"  Stability: hub_strategy=every_save (checkpoint commits mid-run) + /data/output resume")
     job = api.run_uv_job(
@@ -170,6 +206,9 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
             "INFERENCE_ONLY": "1" if inference_only else "0",
             "PRED_SUFFIX": pred_suffix,
             "EPOCHS": str(n_epochs),
+            # Resolved presets from config.py — train_hf_job must not hardcode these (C4).
+            "TRAIN_CONFIG": json.dumps(train_cfg),
+            "LORA_CONFIG": json.dumps(lora_cfg),
         },
         token=hf_token,
     )
@@ -196,12 +235,23 @@ def train_local(method: str, variant: str, output_dir: Path, max_steps: int,
     project = wandb_project(MODEL_SLUG)
     run_name = wandb_run_name(method, variant, model_slug=MODEL_SLUG, epochs=n_epochs)
 
+    from data.prompts import format_chat_prompt
+
     print(f"Loading data from {data_dir}...")
     train_ds = hf_datasets.load_from_disk(str(data_dir / "train"))
     val_ds = hf_datasets.load_from_disk(str(data_dir / "val"))
 
     print(f"Loading model ({method})...")
     model, tokenizer = build_model_and_tokenizer(method, hf_token)
+
+    # C0: train on the instruct chat format, not raw completion-style text.
+    def _wrap(example):
+        example["prompt"] = format_chat_prompt(tokenizer, example["prompt"])
+        return example
+
+    print("Wrapping prompts in chat template (if the base has one)...")
+    train_ds = train_ds.map(_wrap)
+    val_ds = val_ds.map(_wrap)
 
     run = wandb.init(
         project=project,

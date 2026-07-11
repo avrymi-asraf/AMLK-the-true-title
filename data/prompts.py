@@ -1,10 +1,12 @@
 """
-Shared Hebrew summarization prompt and probe-variant helpers (build_prompt, make_variant).
-Used by data/preprocess.py at training-data build time and by evaluation/predict.py at
-inference. Kept free of datasets/transformers imports so API-only evaluation scripts
-can import it on minimal Python builds.
+Shared Hebrew summarization prompt, probe-variant helpers, and chat-template wrapping.
+Used by data/preprocess.py at training-data build time and by evaluation/train paths at
+inference. `build_prompt` stays free of model-specific control tokens; `format_chat_prompt`
+is the single source of truth for wrapping instructions in a tokenizer's chat template
+(instruct models like dictalm2.0-instruct require [INST]…[/INST]). Kept free of
+datasets/transformers imports so API-only scripts can import build_prompt on minimal builds.
 
-Execution environment: imported locally by preprocess and predict.
+Execution environment: imported locally by preprocess, train, and evaluation helpers.
 """
 import re
 
@@ -25,6 +27,38 @@ PROMPT_TEMPLATE = (
 def build_prompt(text: str) -> str:
     """Render the Hebrew summarization instruction prompt for an article."""
     return PROMPT_TEMPLATE.format(text=text)
+
+
+def format_chat_prompt(tokenizer, prompt: str) -> str:
+    """Wrap a user instruction in the model's chat template when one exists.
+
+    Instruct checkpoints (e.g. dictalm2.0-instruct) must see their native format
+    (`[INST] … [/INST]`) at both train and inference. Pure base checkpoints with no
+    chat template get the raw prompt. Does not inject model-family extras like
+    `/no_think` — those corrupt templates that have no notion of them (Mistral).
+    """
+    if not getattr(tokenizer, "chat_template", None):
+        return prompt
+    messages = [{"role": "user", "content": prompt}]
+    kwargs = dict(tokenize=False, add_generation_prompt=True)
+    try:
+        return tokenizer.apply_chat_template(
+            messages, enable_thinking=False, **kwargs,
+        )
+    except TypeError:
+        return tokenizer.apply_chat_template(messages, **kwargs)
+
+
+def prepare_tokenizer_for_templated_prompts(tokenizer):
+    """Avoid double-BOS: chat templates already emit BOS; disable a second one on encode.
+
+    dictalm2's template starts with `{{bos_token}}`; with add_bos_token=True the next
+    tokenizer(...) call would produce ['<s>', '<s>', '[', 'INST', …]. Call this after
+    load whenever generation/SFT will encode already-templated strings.
+    """
+    if getattr(tokenizer, "chat_template", None) and hasattr(tokenizer, "add_bos_token"):
+        tokenizer.add_bos_token = False
+    return tokenizer
 
 
 def _split_lead_body(text: str) -> tuple[str, str]:

@@ -96,7 +96,7 @@ def test_build_input_text_safe_uses_chat_template_when_present():
     tok = _FakeTok(template="yes")
     out = build_input_text_safe(tok, "Summarize:\nhello")
     assert out.startswith("<user>Summarize:\nhello")
-    assert "/no_think" in out
+    assert "/no_think" not in out  # C2: never inject Qwen-era control tokens
     assert out.endswith("<assistant>")
 
 
@@ -114,7 +114,67 @@ def test_build_input_text_safe_tolerates_no_enable_thinking():
                 raise TypeError("unexpected enable_thinking")
             return f"FMT:{messages[0]['content']}"
 
-    assert build_input_text_safe(NoThinkingTok(), "p") == "FMT:p\n/no_think"
+    assert build_input_text_safe(NoThinkingTok(), "p") == "FMT:p"
+
+
+def test_format_chat_prompt_is_shared_source():
+    """Canonical helper lives in data.prompts; base_predict re-exports it."""
+    from data.prompts import format_chat_prompt
+
+    tok = _FakeTok(template="yes")
+    assert format_chat_prompt(tok, "hi") == build_input_text_safe(tok, "hi")
+
+
+def test_prepare_tokenizer_disables_double_bos():
+    from data.prompts import prepare_tokenizer_for_templated_prompts
+
+    class Tok:
+        chat_template = "x"
+        add_bos_token = True
+
+    t = prepare_tokenizer_for_templated_prompts(Tok())
+    assert t.add_bos_token is False
+
+
+def test_infer_build_input_text_wraps_finetuned_too():
+    """C0: finetuned arm must use the chat template, not raw prompt."""
+    from evaluation.infer import build_input_text
+
+    tok = _FakeTok(template="yes")
+    out = build_input_text(tok, "Summarize:\nhello", label="finetuned")
+    assert out.startswith("<user>")
+    assert "/no_think" not in out
+
+
+def test_train_hf_job_uses_train_config_and_chat_wrap():
+    """Structural guard: remote job must not hardcode qlora lr/batch; must chat-wrap train."""
+    src = Path("training/train_hf_job.py").read_text(encoding="utf-8")
+    assert "TRAIN_CONFIG" in src
+    assert "TRAIN_CFG[" in src or 'TRAIN_CFG.get' in src
+    assert "per_device_train_batch_size=2" not in src  # was hardcoded; now from TRAIN_CFG
+    assert "learning_rate=2e-4" not in src
+    assert "format_chat_prompt" in src
+    assert 'f"{prompt}\\n/no_think"' not in src and 'prompt}\\n/no_think' not in src
+    assert "add_special_tokens=False" in src
+    assert "add_bos_token = False" in src
+
+
+def test_train_py_serializes_train_config_and_8h_timeout():
+    src = Path("training/train.py").read_text(encoding="utf-8")
+    assert "TRAIN_CONFIG" in src
+    assert "LORA_CONFIG" in src
+    assert '_train_config_payload' in src
+    assert 'timeout or "8h"' in src
+    assert "format_chat_prompt" in src
+
+
+def test_load_finetuned_model_defaults_to_quantize():
+    """C3: 7B on T4 needs 4-bit by default."""
+    import inspect
+    from evaluation.infer import load_finetuned_model
+
+    params = inspect.signature(load_finetuned_model).parameters
+    assert params["quantize"].default is True
 
 
 def test_hf_job_script_is_base_only_no_training():

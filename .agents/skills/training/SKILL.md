@@ -16,15 +16,20 @@ dual profile. Default **1 epoch** per run.
 ## How a run is wired
 
 1. Load the processed Arrow splits from `outputs/data/processed/<variant>/{train,val}`
-   (built by `data/preprocess.py` — always clean).
+   (built by `data/preprocess.py` — always clean; stores **raw** instruction prompts).
 2. Load the base model (`dicta-il/dictalm2.0-instruct` by default): 4-bit NF4 (`qlora`) or
    bf16 (`lora`, `full`).
-3. `SFTTrainer` with `peft_config` + `processing_class=tokenizer`, `completion_only_loss=True`.
-4. wandb: project `amlk-{MODEL_SLUG}`, run name `{date}_{slug}_{method}_{variant}_{N}ep[_tag]`.
-5. **Stability:**
+3. **Chat-wrap** train/val prompts with `format_chat_prompt` so instruct models see
+   `[INST]…[/INST]` at train time (same wrap at inference for finetuned + base). Disable
+   double-BOS (`add_bos_token=False` / generate with `add_special_tokens=False`).
+4. `SFTTrainer` with `peft_config` + `processing_class=tokenizer`, `completion_only_loss=True`.
+   Hyperparameters come from `METHOD_PRESETS` via `TRAIN_CONFIG`/`LORA_CONFIG` env JSON.
+5. wandb: project `amlk-{MODEL_SLUG}`, run name `{date}_{slug}_{method}_{variant}_{N}ep[_tag]`.
+6. **Stability:**
    - Checkpoints → `/data/output` (per-job bucket; survives infra restart; auto-resume).
    - `hub_strategy="every_save"` → each checkpoint is a Hub commit mid-run.
    - Predictions uploaded immediately after each generation loop.
+   - Full-run timeout default **8h** (7B QLoRA worst-case ~5.8h at smoke step-time).
 
 ## Run it (always `python -m` from repo root)
 
@@ -53,7 +58,9 @@ python -m training.train --submit-hf --hf-user avreymi --inference-only
 
 `run_uv_job` uploads **only the script file**. Pass every setting as env
 (`METHOD`, `VARIANT`, `DATASET_REPO`, `OUTPUT_REPO`, `WANDB_PROJECT`, `WANDB_RUN_NAME`,
-`EPOCHS`, `SMOKE_TEST`). Secrets must be real token strings via the Python API (not `"$HF_TOKEN"`).
+`EPOCHS`, `SMOKE_TEST`, `TRAIN_CONFIG`, `LORA_CONFIG`). Secrets must be real token strings
+via the Python API (not `"$HF_TOKEN"`). Never hardcode batch/lr in `train_hf_job.py` —
+always resolve from `METHOD_PRESETS` through `TRAIN_CONFIG`.
 
 ## Monitoring
 
@@ -67,6 +74,9 @@ wandb: project `amlk-dictalm2-instruct` (see `training.config.wandb_project`).
 
 ## Lessons (keep these true)
 
+- Instruct models must train and serve under their chat template (C0) — raw completion prompts
+  silently break dictalm2.0-instruct.
+- Never inject `/no_think` into Mistral prompts; never double-BOS after `apply_chat_template`.
 - `per_device_eval_batch_size=1` — eval default 8 OOMs at seq-len 2048 on A10G 24 GB.
 - HeSum articles are long — preprocess truncates to `MAX_LENGTH-256` tokens so the summary survives.
 - Hub adapter is LoRA only (not merged).

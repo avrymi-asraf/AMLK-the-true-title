@@ -55,6 +55,7 @@ def resolve_load_plan(model_id: str) -> dict:
 
 
 def build_input_text_safe(tokenizer, prompt: str) -> str:
+    """Twin of data.prompts.format_chat_prompt — no think-switch injection (Mistral-safe)."""
     if not getattr(tokenizer, "chat_template", None):
         return prompt
     messages = [{"role": "user", "content": prompt}]
@@ -106,6 +107,9 @@ def _load_causal_tokenizer(base_model: str, plan: dict, hf_token: str | None):
           f"roundtrip_ok={probe in roundtrip or all(c in roundtrip for c in probe if not c.isspace())}")
     if getattr(tokenizer, "pad_token", None) is None and getattr(tokenizer, "eos_token", None):
         tokenizer.pad_token = tokenizer.eos_token
+    # Twin of data.prompts.prepare_tokenizer_for_templated_prompts (C1).
+    if getattr(tokenizer, "chat_template", None) and hasattr(tokenizer, "add_bos_token"):
+        tokenizer.add_bos_token = False
     return tokenizer
 
 
@@ -259,12 +263,14 @@ def _generate_causal(
     for i in range(0, len(test_ds), batch_size):
         batch = test_ds[i : i + batch_size]
         prompts = [build_input_text_safe(tokenizer, p) for p in batch["prompt"]]
+        # add_special_tokens=False: chat template already includes BOS (C1 double-BOS fix).
         inputs = tokenizer(
             prompts,
             return_tensors="pt",
             truncation=True,
             max_length=max_input,
             padding=True,
+            add_special_tokens=False,
         ).to(device)
         if i == 0:
             print(f"  first-batch input_ids shape={tuple(inputs['input_ids'].shape)} "

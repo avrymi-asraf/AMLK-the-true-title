@@ -5,6 +5,11 @@ training/train_hf_job.py and evaluation/predict_base_hf_job.py (self-contained c
 that cannot import repo code). Used by the evaluation-observation notebook and by local
 helpers that prepare multi-model zero-shot baselines.
 
+Chat formatting uses data.prompts.format_chat_prompt for *both* finetuned and base arms
+(instruct models require [INST]…[/INST] at train and serve). Tokenize with
+add_special_tokens=False after templating to avoid double-BOS. Defaults to 4-bit load so a
+7B base fits a Colab T4.
+
 Execution environment: remote GPU only (Colab T4 / HF Jobs) — NEVER call locally; this machine's
 8 GB GPU freezes on a model load of this size. Keep generate_summaries() in sync with
 train_hf_job.py:generate_predictions() and predict_base_hf_job.py.
@@ -13,7 +18,8 @@ import torch
 from peft import PeftModel
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
-from evaluation.base_predict import build_input_text_safe, resolve_load_plan
+from data.prompts import format_chat_prompt, prepare_tokenizer_for_templated_prompts
+from evaluation.base_predict import resolve_load_plan
 from training.config import MODEL_ID
 
 
@@ -31,8 +37,11 @@ def _quant_or_bf16_kwargs(quantize: bool) -> dict:
     return load_kwargs
 
 
-def load_finetuned_model(adapter_repo: str, model_id: str = MODEL_ID, quantize: bool = False):
+def load_finetuned_model(adapter_repo: str, model_id: str = MODEL_ID, quantize: bool = True):
     """Load the base model with its LoRA adapter attached, ready for generation.
+
+    Defaults to 4-bit: dictalm2.0-instruct is 7B; bf16 alone is ~14.7 GB and OOMs a 16 GB
+    Colab T4 (plus adapter + KV). Pass quantize=False only on larger GPUs.
 
     Returns (model, tokenizer, device). The adapter can be toggled off with
     `model.disable_adapter()` to read the zero-shot base — the same trick the HF job uses to
@@ -41,6 +50,7 @@ def load_finetuned_model(adapter_repo: str, model_id: str = MODEL_ID, quantize: 
     tokenizer = AutoTokenizer.from_pretrained(model_id)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    prepare_tokenizer_for_templated_prompts(tokenizer)
 
     load_kwargs = _quant_or_bf16_kwargs(quantize)
     base = AutoModelForCausalLM.from_pretrained(model_id, **load_kwargs)
@@ -76,6 +86,7 @@ def load_base_model(model_id: str, quantize: bool | None = None):
         tokenizer = getattr(processor, "tokenizer", None) or processor
         if getattr(tokenizer, "pad_token", None) is None and getattr(tokenizer, "eos_token", None):
             tokenizer.pad_token = tokenizer.eos_token
+        prepare_tokenizer_for_templated_prompts(tokenizer)
         return {
             "model": model,
             "tokenizer": tokenizer,
@@ -95,6 +106,7 @@ def load_base_model(model_id: str, quantize: bool | None = None):
         tokenizer = PreTrainedTokenizerFast.from_pretrained(model_id)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+    prepare_tokenizer_for_templated_prompts(tokenizer)
     model = AutoModelForCausalLM.from_pretrained(model_id, **load_kwargs).eval()
     model.config.use_cache = True
     device = next(model.parameters()).device
@@ -107,20 +119,14 @@ def load_base_model(model_id: str, quantize: bool | None = None):
     }
 
 
-def build_input_text(tokenizer, prompt: str, label: str) -> str:
-    """Format the prompt for generation, per system. Mirrors train_hf_job.py:build_input_text —
-    keep the two in sync by hand (that script can't import repo code).
+def build_input_text(tokenizer, prompt: str, label: str = "finetuned") -> str:
+    """Format the prompt for generation. Same chat wrap for finetuned and base.
 
-    The LoRA adapter is trained on the raw completion-style prompt, so "finetuned" keeps
-    using it verbatim. The zero-shot "base" system never sees that format in training — on a
-    chat-capable model, feed the real chat template with enable_thinking=False and a
-    `/no_think` soft switch. Older Mistral / DictaLM-2 templates reject enable_thinking= —
-    build_input_text_safe falls back. Pure base checkpoints with no chat template use the
-    raw prompt.
+    Twin of train_hf_job.py:format_chat_prompt (that script can't import repo code).
+    label is kept for call-site compatibility; both arms use the model chat template.
     """
-    if label != "base":
-        return prompt
-    return build_input_text_safe(tokenizer, prompt)
+    del label  # both systems use the same format after the C0 fix
+    return format_chat_prompt(tokenizer, prompt)
 
 
 def generate_summaries(
@@ -143,9 +149,10 @@ def generate_summaries(
     for i in range(0, len(dataset), batch_size):
         batch = dataset[i:i + batch_size]
         prompts: list[str] = [build_input_text(tokenizer, p, label) for p in batch["prompt"]]
+        # add_special_tokens=False: chat template already includes BOS (C1 double-BOS fix).
         inputs = tokenizer(
             prompts, return_tensors="pt", truncation=True,
-            max_length=2048 - 128, padding=True,
+            max_length=2048 - 128, padding=True, add_special_tokens=False,
         ).to(device)
         with torch.no_grad():
             outs = model.generate(

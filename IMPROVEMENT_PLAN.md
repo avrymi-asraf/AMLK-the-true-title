@@ -1,5 +1,119 @@
 # AMLK Training: Diagnosis and Improvement Plan
 
+---
+
+# CODE AUDIT (2026-07-11) — verified against the code, the tokenizer, and the HF job logs
+
+Scope: **code defects only**. Dataset and training regime are being left as-is for now, so
+P0 (grounding filter) and the training-hyperparameter items below are **not** actioned.
+Everything in this section was empirically verified, not inferred.
+
+**Coverage boundary.** Deep-read + empirically exercised: `training/{config,train,train_hf_job}.py`,
+`data/{prompts,preprocess,clean}.py`, `evaluation/{evaluate,infer,base_predict,predict_base_hf_job,
+hebrew_constraint,error_analysis}.py`, the last 4 HF job logs, and the smoke's pushed predictions.
+Grepped only, not reviewed line-by-line: `data/download.py`, `evaluation/{build_report_tables,
+predict,eval_hf_job,topic_clustering,style_labels,stratify_by_topic,viewer}`. The side-analysis
+modules are off the critical path for the next run.
+
+## Bugs, ranked by impact on the next real run
+
+**C0 — The finetuned model is trained and served without the instruct model's chat template.**
+Verified: `"[INST]" in train["prompt"][0]` → `False`. `dictalm2.0-instruct` ships a chat template
+(`{{bos_token}}[INST] {content} [/INST]`) and its card requires it, but `data/preprocess.py` bakes
+the raw completion-style prompt into the `prompt` column, and `build_input_text` returns that
+prompt verbatim for `label != "base"`. So the *only* arm that is format-correct is the zero-shot
+base one; the finetuned arm — the one whose hallucination prompted this whole review — is fed a
+format the model was never instruction-tuned on. This is the same defect class as C1 (wrong prompt
+format reaching the model), just on the finetuned arm instead of the base arm. Fixing it requires
+touching preprocess + inference, which is why it sits under "leave training as-is" — but it is a
+**bug**, not a design preference, and it is free to fix.
+
+**C1 — Double BOS in the zero-shot base prompt.** `apply_chat_template(tokenize=False)` renders a
+string that already begins with `<s>`; the following `tokenizer(prompts, ...)` call then prepends
+a *second* `<s>` (dictalm2 sets `add_bos_token=True`). Verified token ids:
+`['<s>', '<s>', '[', 'INST', ']', 'Sum']`. Hits the **base** arm only — the finetuned arm uses the
+raw prompt and gets a clean single BOS. Prospective, not retrospective: DictaLM-3-Base had no chat
+template, so this path never fired before.
+*Observed impact is modest*: the smoke's `predictions-base.jsonl` is coherent, on-topic Hebrew
+(over-long, but not garbled). Treat this as a correctness defect to fix, not as an explanation of
+bad numbers. Fix: `add_special_tokens=False` when tokenizing already-templated text.
+**Four call sites** — `training/train_hf_job.py`, `evaluation/base_predict.py`,
+`evaluation/infer.py`, `evaluation/predict_base_hf_job.py`.
+
+**C2 — `/no_think` is injected as literal text into a Mistral prompt, and the four copies have
+drifted.** `dictalm2.0-instruct` is Mistral-based with no thinking mode, and its `[INST]` template
+has no notion of `/no_think`. The wrapped string ends `'...think [/INST]\n'` — those literal
+characters are now part of the user turn. Leftover from the Qwen3/DictaLM-3 era, as is
+`strip_think()` (dead code for this base).
+Worse, the four hand-maintained copies of this function have **already diverged**:
+`train_hf_job.py` and `base_predict.py` append `/no_think`; `predict_base_hf_job.py` does not. So
+the in-training base arm and the multi-model base baseline are fed **different prompts** and are
+not strictly comparable. The "keep the twins in sync by hand" convention has failed in practice —
+worth collapsing to one shared source rather than re-syncing four copies.
+
+**C3 — The observation notebook will OOM on a T4.** `evaluation/infer.py:load_finetuned_model`
+defaults to `quantize=False`, and `notebooks/evaluation_observation.ipynb:279` calls it as
+`load_finetuned_model(MODEL_REPO)`. That loads 7B in bf16 (~14.7 GB) on a 16 GB Colab T4, plus
+adapter and KV cache at batch 8 / seq 2048. T4 (Turing) also has no native bf16. The default was
+correct for the old 1.7B base; the 7B swap silently broke it.
+
+**C4 — `train_hf_job.py` hardcodes hyperparameters and ignores `METHOD_PRESETS`.**
+`per_device_train_batch_size=2`, `gradient_accumulation_steps=8`, `learning_rate=2e-4` are
+literals. They *happen* to equal the `qlora` preset, so the default path is correct — this is
+**latent, not active**. But `--submit-hf --method full` silently trains at lr=2e-4 instead of the
+preset's 5e-5, and neither `lora` nor `full` is viable for a 7B on a 24 GB A10G anyway (full FT
+needs ~100 GB of master-weight + optimizer state). The CLI advertises three regimes; one works.
+
+**C5 — The 6h default timeout is razor-thin for the full run.** Measured from the smoke
+(job `6a524384effc02a91cbd98c6`): ~38 s/optimizer-step. 6073 train examples / (2×8) = 380 steps
+→ ~4.0 h training, + ~8 min of evals, + generation of 760×2 = 1520 summaries at batch 8
+(~190 batches × ~30 s) ≈ 1.6 h. **Total ≈ 5.8 h against a 6h timeout.** Every observed prediction
+ran to the full 256-token cap without emitting EOS, so generation is at its worst case, not a
+typical one. Use `--timeout 8h` (a10g-small is $1/h). Timeout enforcement is unreliable in either
+direction — job `6a4fbd8c` ran 12h20m under a 6h declaration and still completed.
+
+## Verified working — do not "fix" these
+
+- **ROUGE on Hebrew is correct.** `_UnicodeTokenizer` overrides rouge_score's ASCII-only default
+  tokenizer. Checked: identical Hebrew → 1.0, disjoint Hebrew → 0.0.
+- **The judge scores prediction-vs-ARTICLE**, not vs-reference (`evaluate.py:JUDGE_PROMPT`,
+  `error_analysis.py:LABEL_PROMPT`). P3's premise is already satisfied in code.
+- **The judge's `text[:6000]` clip affects 0/760 test articles** (median 3,916 chars). Non-issue.
+- **`/data` is per-job scoped** — `hf jobs inspect` shows `path: 20260711T132209-9b0590`. No
+  cross-job checkpoint contamination is possible.
+- **The checkpoint-resume path HAS fired on a real infra restart — on the 1.7B run.** Job
+  `6a4fbd8c` logs show one container start plus `Found existing checkpoint(s) in /data/output —
+  resuming training`, and the job completed. CLAUDE.md and P4 below claim the mechanism has *never*
+  been exercised; that is wrong. Caveat in the other direction: it has fired only on the 1.7B
+  config, never on 7B/QLoRA, so "works on this base" is still unproven.
+- **Tests: 67 pass**, 3 fail only on optional `plotly` not being installed.
+
+## Corrections to the plan below (P0–P5)
+
+- **P4's "add `seed=42` (currently never set anywhere)" is wrong.** HF `TrainingArguments`
+  already defaults `seed=42`; runs are deterministic today.
+- **P4's "QLoRA becomes the correct default" is already done** — `train.py:279` defaults to qlora.
+- **P4's "the resume path has never been tested" is wrong** — see above.
+- **Missing `paged_adamw_8bit` is a memory margin, not a failure.** The smoke fit comfortably at
+  batch 2 / seq 2048. Do not expect an OOM without it.
+- **P0's retention figures are unreliable.** Recomputed on the full 10k: median coverage **0.739**
+  (plan says 0.67); threshold 0.6 retains **80.5%**, 0.7 retains **59.6%** (plan predicts ~46%).
+  The direction of P0 holds; the magnitudes do not. Moot while data is left as-is.
+
+## Judgment calls, not bugs (flagged, not actioned — data/training left as-is)
+
+- The Hebrew decode constraint bans every Latin-script token, but **4.7% of references contain
+  Latin** ("CNN", "ynet"). The model is trained toward targets it is structurally forbidden to
+  emit at decode time. A real inconsistency between the training target and the decode config,
+  but small and deliberate-looking — calling it a judgment call, not a bug.
+- `load_best_model_at_end=True` with `metric_for_best_model="eval_loss"` selects the checkpoint
+  that best reproduces the references — including the ungrounded ones (see P0).
+- Every prediction observed in the smoke ran to the full 256-token cap without emitting EOS
+  (base 378–474 chars, finetuned 618–662, vs. a 157-char median reference). Consistent with P2's
+  decode-config hypothesis, but 10 training steps is not enough to conclude anything.
+
+---
+
 ## Context
 
 You're unsatisfied with training results (hallucination + low ROUGE). Two research passes found **six separate problems**, only one of which is a hyperparameter issue. They stack in this order of impact:
@@ -148,3 +262,6 @@ Every touched file needs its header updated per `AGENTS.md` (role / code flow / 
 - [Repetition penalties in LM generation](https://mbrenndoerfer.com/writing/repetition-penalties-language-model-generation)
 - [Improving Faithfulness in Abstractive Summarization (arXiv 2104.09061)](https://arxiv.org/pdf/2104.09061)
 - [Entity Coverage Control for faithful summarization (arXiv 2207.02263)](https://arxiv.org/pdf/2207.02263)
+
+
+update-the-prompt

@@ -100,20 +100,20 @@
 ```
 
 * `data/download.py`: Downloads Hebrew summarization datasets (biunlp/HeSum; IAHLT/summarization_he inaccessible with current credentials), normalises to `{text, summary, source}`, writes `outputs/data/raw/combined.jsonl`.
-* `data/prompts.py`: Single hardened `PROMPT_TEMPLATE` (anti-elaboration / no lists / no pipes), `build_prompt(text)`, and `make_variant` (whole|lead|body). The single source of truth for prompt construction, reused by `data/preprocess.py` and `evaluation/predict.py`.
+* `data/prompts.py`: Single hardened `PROMPT_TEMPLATE`, `build_prompt(text)`, `make_variant` (whole|lead|body), plus `format_chat_prompt` / `prepare_tokenizer_for_templated_prompts` — the single source of truth for wrapping instructions in the model's chat template (train + both inference arms). No Qwen-era think-switch injection. Reused by preprocess, train, and evaluation.
 * `data/clean.py`: Always-on reference cleaning. `normalize_summary` rewrites HeSum's `"headline | headline"` pipe/bullet digests into natural prose; `is_roundup_digest`/`pipe_segments` flag 3+-segment media roundups for removal. Pure regex, no GPU/API.
-* `data/preprocess.py`: Reads `combined.jsonl`, drops roundup digests, normalizes remaining references, builds `(prompt, completion)` pairs with the hardened prompt, applies `--variant whole|lead|body`, truncates each article to `MAX_LENGTH-256` tokens so the summary always survives, splits 80/10/10, saves Arrow splits to `outputs/data/processed/<variant>/`.
+* `data/preprocess.py`: Reads `combined.jsonl`, drops roundup digests, normalizes remaining references, builds raw `(prompt, completion)` pairs with the hardened prompt (chat wrap happens at train/infer time so multi-model baselines keep their own templates), applies `--variant whole|lead|body`, truncates each article to `MAX_LENGTH-256` tokens so the summary always survives, splits 80/10/10, saves Arrow splits to `outputs/data/processed/<variant>/`.
 * `training/config.py`: Shared constants: `MODEL_ID="dicta-il/dictalm2.0-instruct"`, `MODEL_SLUG="dictalm2-instruct"`, `DEFAULT_EPOCHS=1`, `METHOD_PRESETS`, `LoRAConfig`, `TrainingConfig`, `wandb_project`/`wandb_run_name` (date + model + method + variant + epochs), and `dataset_repo`/`model_repo`/`processed_profile_name` Hub-id helpers (adapter repos are `amlk-{MODEL_SLUG}-sft[-variant]`).
-* `training/train.py`: One trainer for all three regimes (`--method qlora|lora|full`). Trains with `completion_only_loss=True`, 1 epoch by default, logs to a model-specific wandb project with informative run names, saves the adapter; `--push-to-hub` or `--submit-hf` push to the Hub. Mid-run stability: creates the model repo before the job starts so `hub_strategy=every_save` can commit checkpoints while training. Inference is NOT here.
-* `training/train_hf_job.py`: Self-contained PEP 723 UV script submitted inline by `train.py --submit-hf`. Reads METHOD/VARIANT/BASE_MODEL/DATASET_REPO/OUTPUT_REPO/WANDB_PROJECT/WANDB_RUN_NAME/EPOCHS from env, trains on the cloud GPU (1 epoch default), then generates fine-tuned + zero-shot base test predictions and pushes them to the Hub. Stability: (1) checkpoints on `/data/output` (per-job bucket, survives infra restart + `resume_from_checkpoint`), (2) `hub_strategy=every_save` pushes each checkpoint as a Hub commit mid-run, (3) prediction files upload immediately after each generation loop. Always applies Hebrew-script `bad_words_ids` + base `/no_think`. Never run directly.
+* `training/train.py`: One trainer for all three regimes (`--method qlora|lora|full`). Trains with `completion_only_loss=True`, 1 epoch by default, logs to a model-specific wandb project with informative run names, saves the adapter; `--push-to-hub` or `--submit-hf` push to the Hub. Serializes resolved `TRAIN_CONFIG`/`LORA_CONFIG` JSON into the remote job env (so METHOD_PRESETS cannot be ignored). Full-run default timeout 8h. Chat-wraps prompts before SFT. Mid-run stability: creates the model repo before the job starts so `hub_strategy=every_save` can commit checkpoints while training. Inference is NOT here.
+* `training/train_hf_job.py`: Self-contained PEP 723 UV script submitted inline by `train.py --submit-hf`. Reads METHOD/VARIANT/BASE_MODEL/DATASET_REPO/OUTPUT_REPO/WANDB_*/EPOCHS/`TRAIN_CONFIG`/`LORA_CONFIG` from env, trains on the cloud GPU (1 epoch default), then generates fine-tuned + zero-shot base test predictions. Chat-wraps train/val/infer for both arms; `add_special_tokens=False` on generate (no double-BOS); Hebrew-script `bad_words_ids`. Stability: `/data/output` resume, `hub_strategy=every_save`, immediate prediction uploads. Never run directly.
 * `evaluation/predict.py`: Generates the Gemini advanced-baseline summaries via API (no GPU, no model load), same hardened prompt as training. Resumes from a partial file. The fine-tuned and zero-shot predictions come from the cloud training job, not here.
 * `evaluation/gemini_client.py`: Shared Gemini API helpers (`GEMINI_MODEL`, `call_with_retry`). Also defines `strip_think()` — the shared tool that drops closed `<think>…</think>` reasoning blocks (emitted by chat-capable Qwen3-family models) so metrics score the summary, not the reasoning (used by evaluate.py and error_analysis.py).
 * `evaluation/evaluate.py`: Scores a predictions file with raw + Hebrew-normalized ROUGE-1/2/L (`normalize_hebrew` strips niqqud + folds final-form letters), BERTScore (default `onlplab/alephbert-base`, the HeSum backbone; `--bertscore-model` to override), and the Gemini faithfulness/fluency judge (`--skip-llm` to skip; `--limit N` to cap for a smoke run). Applies `strip_think` before scoring. One JSON report per system.
 * `evaluation/error_analysis.py`: Samples ~50 predictions (post `strip_think`) and has Gemini label failure types (hallucination, omission, entity/number error, lead copying, fluency), writing per-type rates.
 * `evaluation/eval_hf_job.py`: Runs the whole D1 battery on HuggingFace Jobs so the ~4000 Gemini calls + BERTScore happen on the cloud's fast connection (the user has weak internet). One file, two modes: `--submit-hf` uploads itself to a cheap CPU job; with no args (how HF Jobs invokes it) it fetches the public repo + Hub predictions/dataset and drives the existing `evaluation/` CLIs by subprocess, pushing each report to the model repo under `reports/` as it finishes (timeout-safe).
 * `evaluation/build_report_tables.py`: Downloads the pushed `reports/*.json` and assembles the D1 markdown — a quality table (ROUGE/BERTScore/judge), a failure-rate table, and behavioural notes (base `<think>`/language leakage, fine-tuned repetition, judge self-preference caveat).
-* `evaluation/infer.py`: GPU inference helpers — `load_finetuned_model` (base + LoRA adapter, `disable_adapter()` gives the zero-shot base), `load_base_model` (multi-model zero-shot, incl. Nemotron fast-tokenizer + Gemma multimodal), and `generate_summaries` (batched greedy decode over a processed split; always applies `/no_think` for base + Hebrew-script decode constraint). The importable twin of `train_hf_job.py`'s inline generation block; keep the two in sync. **Remote GPU only — never call locally.**
-* `evaluation/base_predict.py`: Pure helpers for multi-model zero-shot baselines (`resolve_load_plan`, `write_predictions_jsonl` / `validate_predictions`, `model_slug` / local paths). No GPU.
+* `evaluation/infer.py`: GPU inference helpers — `load_finetuned_model` (base + LoRA adapter, **defaults to 4-bit** so 7B fits a Colab T4; `disable_adapter()` gives zero-shot base), `load_base_model` (multi-model zero-shot), and `generate_summaries` (chat-wrap both arms via `format_chat_prompt`, `add_special_tokens=False`, Hebrew-script decode constraint). Twin of `train_hf_job.py` generation. **Remote GPU only — never call locally.**
+* `evaluation/base_predict.py`: Pure helpers for multi-model zero-shot baselines (`resolve_load_plan`, `write_predictions_jsonl` / `validate_predictions`, `model_slug` / local paths). Re-exports `format_chat_prompt` / `build_input_text_safe` from `data.prompts`. No GPU.
 * `evaluation/predict_base_hf_job.py`: Self-contained UV job for base-only predictions on HF Jobs (no training, no adapter). `--submit-hf --model … --limit 100` or `--all-models`; `--download` pulls `predictions-base.jsonl` into `outputs/<slug>/`. Nemotron uses native `NemotronH` + `PreTrainedTokenizerFast` (Hebrew probe); Gemma-4 uses `AutoModelForMultimodalLM`.
 * `evaluation/hebrew_constraint.py`: Decode constraint always used at generation. `build_bad_words_ids(tokenizer)` scans the vocab once and returns the ids of every token whose decoded form contains a Latin/Cyrillic/Greek/Arabic letter. Inlined as a twin in `train_hf_job.py` (that script can't import repo code).
 * `evaluation/topic_clustering.py`: Topic-clustering side-analysis (not part of the main pipeline). Embeds truncated article `text` by default (`embed_field='text'`) — summaries alone collapsed ~99% of docs into one media-meta mega-topic — with the Hebrew-native, clustering-tuned `dicta-il/neodictabert-bilingual-embed`, clusters with BERTopic (UMAP + HDBSCAN + Hebrew-only c-TF-IDF vectorizer, `HEBREW_STOPWORDS` + `MEDIA_STOPWORDS` + `BOILERPLATE_STOPWORDS`), names each real cluster with one Gemini call, then optionally `refine_large_clusters()` — a second finer HDBSCAN pass on any cluster holding ≥30% of docs (re-uses embeddings; splits e.g. the politics mega-topic into ביטחון/כלכלה/חברה sub-domains without re-fragmenting sports/legal), then `merge_duplicate_labels()` collapses any clusters Gemini still named identically (on by default via `cluster_dataset(merge_duplicates=True)`) so the report has one row per distinct real-world topic. `fit_topics` tunables: `min_cluster_size`/`min_samples` (default 60/15 — coarser granularity means fewer near-duplicate sub-clusters of the same domain), `outlier_threshold` (only reassign noise above cosine sim — default 0.35; 0 floods the largest cluster), optional `nr_topics` merge (off by default; `auto` over-merged), `language='multilingual'` (required — English mode strips Hebrew). `plot_topic_sizes()` renders a bar chart of `topic_summary()` for the notebook. Output `topics.jsonl` still keyed by `summary` for stratification join. See `notebooks/cluster_topics_databricks.py`.
@@ -178,7 +178,7 @@ python -m evaluation.build_report_tables --output outputs/results/d1-tables.md
 **HuggingFace Jobs — submit and monitor:**
 ```bash
 # --submit-hf uploads outputs/data/processed/<variant>/ to the Hub (avreymi/amlk-training-data[-<variant>])
-# then submits train_hf_job.py inline (a10g-small, 6h, 1-epoch training by default). It prints a Job ID.
+# then submits train_hf_job.py inline (a10g-small, 8h, 1-epoch training by default). It prints a Job ID.
 python -m training.train --submit-hf --hf-user avreymi               # full 1-epoch run
 python -m training.train --submit-hf --hf-user avreymi --smoke-test  # 10 steps, a10g-small, ~$0.05 — verify first
 python -m training.train --submit-hf --hf-user avreymi --inference-only  # regen predictions from pushed adapter (a10g-small, 2h)
@@ -210,23 +210,35 @@ source .venv/bin/activate && python -m pytest tests/ -v
 
 ## Status - remember to update it
 
+**2026-07-11 — CODE AUDIT C0–C5 fixed (dictalm2 instruct format + wiring).**
+- **C0:** Train + finetuned/base inference both apply the model chat template via
+  `data.prompts.format_chat_prompt` (raw `prompt` column still stored for multi-model baselines).
+- **C1:** Double-BOS fixed — `add_special_tokens=False` on generate + `add_bos_token=False` when a
+  chat template is present.
+- **C2:** Removed Qwen-era `/no_think` injection; one shared formatter (+ inlined twins in the two
+  self-contained HF job scripts).
+- **C3:** `load_finetuned_model(..., quantize=True)` default so 7B fits a Colab T4.
+- **C4:** `train.py` serializes `TRAIN_CONFIG`/`LORA_CONFIG` from `METHOD_PRESETS`; `train_hf_job.py`
+  consumes them (no more hardcoded batch=2/lr=2e-4 that ignored `--method full`).
+- **C5:** Full-run default job timeout 6h → 8h (smoke step-time projected ~5.8h worst case).
+  Dataset/P0 grounding and decode-config (P2) left as-is per audit scope.
+
 **2026-07-11 — Clean-only pipeline + 1-epoch runs + mid-run Hub stability (dictalm2 branch).**
 Training is clean-only with no dual raw/clean profile: preprocess always drops roundup digests,
 normalizes pipe/bullet references, and uses the hardened prompt; generation always applies
-Hebrew-script `bad_words_ids` + base `/no_think`. Removed `--clean` / `--drop-roundups` flags
-across train/eval/predict. Default epochs = 1. wandb project is `amlk-{MODEL_SLUG}` (e.g.
-`amlk-dictalm2-instruct`); run names are `{date}_{slug}_{method}_{variant}_{N}ep[_tag]`.
-Stability is explicit: (1) checkpoints on `/data/output` with auto-resume after infra restart,
-(2) `hub_strategy=every_save` pushes each checkpoint as a Hub commit mid-run (model repo created
-before job start), (3) prediction files push immediately after each generation loop. Base model
-on this branch: `dicta-il/dictalm2.0-instruct` (Mistral-7B, QLoRA default).
+Hebrew-script `bad_words_ids`. Removed `--clean` / `--drop-roundups` flags across train/eval/predict.
+Default epochs = 1. wandb project is `amlk-{MODEL_SLUG}` (e.g. `amlk-dictalm2-instruct`); run names
+are `{date}_{slug}_{method}_{variant}_{N}ep[_tag]`. Stability: `/data/output` resume,
+`hub_strategy=every_save`, immediate prediction uploads. Base: `dicta-il/dictalm2.0-instruct`
+(Mistral-7B, QLoRA default).
 
 **Post clean-only smoke COMPLETED 2026-07-11** — job `6a524384effc02a91cbd98c6` (~11 min,
 a10g-small, qlora, 10 steps). Clean data re-preprocessed (dropped 2408 roundups → 7592) and
 re-uploaded to `avreymi/amlk-training-data`. wandb project `amlk-dictalm2-instruct`, run
 `2026-07-11_dictalm2-instruct_qlora_whole_1ep_smoke`. LoRA 83.9M / 1.14%, loss 1.04→0.52
 (avg 0.779), eval ~1.18–1.30 finite, Hebrew constraint on, adapter + preds at
-`avreymi/amlk-dictalm2-instruct-smoke`. Full 1-epoch run not yet done.
+`avreymi/amlk-dictalm2-instruct-smoke`. That smoke predates the C0–C5 chat-template fix — re-smoke
+before a full 1-epoch run.
 
 **Pre-training stage as of 2026-07-11.** Pipeline mechanics validated (clean path); full 1-epoch
 run pending. Stack: trl 1.6.0, transformers 5.11, peft 0.19, wandb 0.27–0.28.
