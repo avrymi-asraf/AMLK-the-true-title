@@ -9,20 +9,11 @@ Execution environment: imported locally by preprocess, train, and evaluation hel
 """
 import re
 
-# Prompt-arena round-3 winner (see docs/prompt-arena-notebook.md): short Hebrew instruction +
-# numeric word cap + an explicit imperative stop cue ("write one sentence only and stop right
-# after it"). Beat every other candidate across all 3 rounds on every axis (compliance 0.82,
-# judge faithfulness 3.40, fluency 4.27 — n=20, not yet re-checked at n=100). Round 1 found
-# worked-example (one-shot/two-shot) prompts actually hurt faithfulness here — they hallucinated
-# an unrelated entity apparently primed by the example's own content — so no exemplar is used.
-# Also chosen over the long hardened English "Rules:" prompt for stability: that prompt
-# provoked a garbled Hangul near-token (an apparent hallucinated echo of Mistral's own [/INST]
-# tag) in 38% of round-1 outputs vs 1-2% for Hebrew prompts, a failure mode traced to
-# evaluation/hebrew_constraint.py's decode constraint not covering CJK/Hangul (since fixed).
-# Caveat: still short of the loop's 0.9/4.0 target — no zero-shot prompt tested reached it.
-# Round 1 traced much of the base overshoot to the model ignoring length instructions outright,
-# not to digest-style copying, so the anti-digest/no-lists rule was dropped as
-# untested-necessary; re-add it if fine-tuned output regresses toward HeSum's pipe-digest style.
+# Prompt-arena round-3 winner (full experiment log: docs/prompt-arena-notebook.md). A numeric
+# word cap alone bound length only weakly across 3 rounds; adding an explicit stop cue ("write
+# one sentence only and stop right after it") beat every other candidate tested, including
+# worked examples (which hallucinated content). Still short of the loop's 0.9 compliance / 4.0
+# faithfulness target — re-run the loop if a stronger prompt is needed.
 PROMPT_TEMPLATE = (
     "סכם את כתבת החדשות הבאה בעברית במשפט קצר אחד, לא יותר מ-15 מילים. "
     "כתוב משפט אחד בלבד ועצור מיד בסופו.\n\n"
