@@ -60,10 +60,13 @@ INFERENCE_ONLY = os.environ.get("INFERENCE_ONLY", "0") == "1"
 PRED_SUFFIX = os.environ.get("PRED_SUFFIX", "")
 # One epoch per run by default (override via EPOCHS env / train.py --epochs).
 EPOCHS = int(os.environ.get("EPOCHS") or 1)
-# Base checkpoint — duplicated from training/config.py on purpose (this script is
-# submitted inline and cannot import the repo). Keep the two in sync.
+# Base checkpoint + slug — duplicated from training/config.py on purpose (this script
+# is submitted inline and cannot import the repo). train.py passes both as env; keep
+# the fallbacks in sync with config.MODEL_ID / config.MODEL_SLUG.
+# Do NOT derive the slug with .replace(".", "-") alone: dictalm2.0-instruct would
+# become dictalm2-0-instruct and drift from wandb/Hub naming.
 MODEL_ID = os.environ.get("BASE_MODEL") or "dicta-il/dictalm2.0-instruct"
-MODEL_SLUG = MODEL_ID.split("/")[-1].lower().replace(".", "-")
+MODEL_SLUG = os.environ.get("MODEL_SLUG") or "dictalm2-instruct"
 WANDB_PROJECT = os.environ.get("WANDB_PROJECT") or f"amlk-{MODEL_SLUG}"
 if SMOKE_TEST:
     _tag = "smoke"
@@ -87,7 +90,7 @@ _DEFAULT_TRAIN = {
     "warmup_ratio": 0.05,
     "lr_scheduler_type": "cosine",
     "bf16": True,
-    "max_length": 2048,
+    "max_length": 4096,
 }
 _DEFAULT_LORA = {
     "r": 32,
@@ -120,6 +123,10 @@ print(f"Epochs: {EPOCHS}")
 print(f"Train config: quantize={quantize} use_lora={use_lora} "
       f"batch={TRAIN_CFG['per_device_train_batch_size']} "
       f"accum={TRAIN_CFG['gradient_accumulation_steps']} lr={TRAIN_CFG['learning_rate']}")
+# Decode budget for dual-arm generation. Default 128 (was 256) — cost lever; see
+# training/config.py DEFAULT_MAX_NEW_TOKENS. train.py passes MAX_NEW_TOKENS via env.
+MAX_NEW_TOKENS = int(os.environ.get("MAX_NEW_TOKENS") or 128)
+print(f"max_new_tokens={MAX_NEW_TOKENS} (post-train dual-arm decode budget)")
 print(f"wandb: {WANDB_PROJECT} / {WANDB_RUN_NAME}")
 
 local_data = Path("./data")
@@ -155,8 +162,9 @@ if getattr(tokenizer, "chat_template", None) and hasattr(tokenizer, "add_bos_tok
 def format_chat_prompt(prompt: str) -> str:
     """Twin of data.prompts.format_chat_prompt — keep in sync by hand.
 
-    Applies the model chat template for train *and* both inference arms (C0).
-    No Qwen-era think switches (C2): Mistral templates treat those as user text.
+    Applies the model chat template for train and both inference arms. Does not
+    inject family-specific control tokens; enable_thinking=False is attempted for
+    templates that support it, ignored (TypeError) for Mistral/dictalm2.
     """
     if not getattr(tokenizer, "chat_template", None):
         return prompt
@@ -198,7 +206,7 @@ else:
         task_type=LORA_CFG["task_type"],
     ) if use_lora else None
 
-    # C0: wrap train/val prompts so SFT sees [INST]…[/INST], matching inference.
+    # Wrap train/val so SFT sees [INST]…[/INST], matching inference.
     print("Wrapping train/val prompts in chat template (if present)...")
     train_ds = train_ds.map(lambda ex: {**ex, "prompt": format_chat_prompt(ex["prompt"])})
     val_ds = val_ds.map(lambda ex: {**ex, "prompt": format_chat_prompt(ex["prompt"])})
@@ -229,7 +237,7 @@ else:
         num_train_epochs=n_epochs,
         max_steps=max_steps_cfg,
         per_device_train_batch_size=int(TRAIN_CFG["per_device_train_batch_size"]),
-        per_device_eval_batch_size=1,   # eval defaults to 8 → OOM at seq-len 2048
+        per_device_eval_batch_size=1,   # eval defaults to 8 → OOM at long seq lengths
         gradient_accumulation_steps=int(TRAIN_CFG["gradient_accumulation_steps"]),
         learning_rate=float(TRAIN_CFG["learning_rate"]),
         warmup_ratio=float(TRAIN_CFG["warmup_ratio"]),
@@ -285,19 +293,14 @@ else:
 trained_model.config.use_cache = True
 
 
-def build_input_text(prompt: str, label: str) -> str:
-    """Format the prompt for generation — same chat wrap for finetuned and base (C0/C2)."""
-    del label
-    return format_chat_prompt(prompt)
-
-
 def _build_bad_words_ids():
-    """Forbid tokens containing foreign scripts (Latin/Cyrillic/Greek/Arabic) so summaries
-    stay in Hebrew. Inlined twin of evaluation/hebrew_constraint.py (this script can't
-    import repo code)."""
+    """Forbid tokens containing foreign scripts (Latin/Cyrillic/Greek/Arabic/CJK/Hangul).
+
+    Inlined twin of evaluation/hebrew_constraint.py (this script can't import repo code).
+    """
     import re
     forbidden = re.compile(
-        "[A-Za-zÀ-ɏЀ-ӿͰ-Ͽ؀-ۿ]")
+        "[A-Za-zÀ-ɏЀ-ӿͰ-Ͽ؀-ۿ぀-ヿ㐀-鿿가-힯ᄀ-ᇿㄱ-ㆿ]")
     special_ids = set(tokenizer.all_special_ids)
     bad = []
     for token_id in range(tokenizer.vocab_size):
@@ -318,25 +321,29 @@ def generate_predictions(label: str) -> list[dict]:
 
     Left-padding ensures all sequences in a batch are right-aligned so that
     the slice `out[:, input_len:]` consistently extracts only generated tokens.
+    Finetuned and base use the same chat-wrapped prompts.
 
-    Importable twin (used by the observation notebook): evaluation/infer.py:generate_summaries.
-    This script can't import repo code (submitted inline), so keep the two in sync by hand.
+    Importable twin: evaluation/infer.py:generate_summaries — keep in sync by hand.
     """
     tokenizer.padding_side = "left"
     rows = []
     batch_size = 8
     for i in range(0, len(test_ds), batch_size):
         batch = test_ds[i:i + batch_size]
-        prompts: list[str] = [build_input_text(p, label) for p in batch["prompt"]]
-        # add_special_tokens=False: chat template already includes BOS (C1).
+        prompts: list[str] = [format_chat_prompt(p) for p in batch["prompt"]]
+        # Chat template already includes BOS — do not prepend another.
+        # Leave headroom for max_new_tokens under the same seq budget as training.
+        gen_max_input = int(TRAIN_CFG["max_length"]) - MAX_NEW_TOKENS
         inputs = tokenizer(
             prompts, return_tensors="pt", truncation=True,
-            max_length=2048 - 128, padding=True, add_special_tokens=False,
+            max_length=gen_max_input, padding=True, add_special_tokens=False,
         ).to(device)
         with torch.no_grad():
             outs = trained_model.generate(
-                # 256 covers p99 of reference-summary lengths (p95=151, p99=187 tokens).
-                **inputs, max_new_tokens=256, min_new_tokens=16, do_sample=False,
+                # DEFAULT_MAX_NEW_TOKENS=128 (config); short news summaries rarely need more,
+                # and smoke preds always hit the old 256 cap without EOS (wasted GPU decode).
+                **inputs, max_new_tokens=MAX_NEW_TOKENS,
+                min_new_tokens=min(16, MAX_NEW_TOKENS), do_sample=False,
                 no_repeat_ngram_size=3, repetition_penalty=1.2,
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.pad_token_id,

@@ -52,6 +52,9 @@
 │   ├── base_predict.py                   # Zero-shot base helpers: load plan, JSONL I/O, validate_predictions, model_slug
 │   ├── predict_base_hf_job.py            # Base-only multi-model inference on HF Jobs (no train/adapter); --submit-hf / --download
 │   ├── hebrew_constraint.py              # Decode constraint: build_bad_words_ids() bans non-Hebrew-script tokens
+│   ├── prompt_arena.py                   # Prompt-optimization loop, local half: compliance+ROUGE scoring, judge, leaderboard, CLI
+│   ├── prompt_rounds.py                  # Prompt-optimization loop: the round registry (every candidate set ever tried + its hypothesis)
+│   ├── prompt_sweep_hf_job.py            # Prompt-optimization loop, remote half: sweep K prompts x N examples in ONE HF Job
 │   ├── topic_clustering.py               # Embed summaries + BERTopic cluster + Gemini-name topics + plot_clusters(); used by the Databricks notebook
 │   ├── style_labels.py                   # Rule-based structural style labels (single/multi-sentence, pipe digest, question) — local, no GPU/API
 │   ├── stratify_by_topic.py              # Break down a predictions file's ROUGE/BERTScore/failure rates by topic_label or style_label
@@ -78,7 +81,8 @@
 ├── docs/
 │   ├── ANLP Project abstract.md          # Original submitted proposal (historical — Qwen3-2B era)
 │   ├── research-proposal.md              # Original proposal prose (historical — Qwen3-2B era)
-│   └── research-proposal-revised.md      # Current plan of record (base model + probe design)
+│   ├── research-proposal-revised.md      # Current plan of record (base model + probe design)
+│   └── prompt-arena-notebook.md          # Lab notebook for the prompt loop: guidelines, round log, why each change
 ├── outputs/
 │   ├── data/
 │   │   ├── raw/combined.jsonl            # Merged normalized dataset — 10,000 records (gitignored)
@@ -103,7 +107,7 @@
 * `data/prompts.py`: Single hardened `PROMPT_TEMPLATE`, `build_prompt(text)`, `make_variant` (whole|lead|body), plus `format_chat_prompt` / `prepare_tokenizer_for_templated_prompts` — the single source of truth for wrapping instructions in the model's chat template (train + both inference arms). No Qwen-era think-switch injection. Reused by preprocess, train, and evaluation.
 * `data/clean.py`: Always-on reference cleaning. `normalize_summary` rewrites HeSum's `"headline | headline"` pipe/bullet digests into natural prose; `is_roundup_digest`/`pipe_segments` flag 3+-segment media roundups for removal. Pure regex, no GPU/API.
 * `data/preprocess.py`: Reads `combined.jsonl`, drops roundup digests, normalizes remaining references, builds raw `(prompt, completion)` pairs with the hardened prompt (chat wrap happens at train/infer time so multi-model baselines keep their own templates), applies `--variant whole|lead|body`, truncates each article to `MAX_LENGTH-256` tokens so the summary always survives, splits 80/10/10, saves Arrow splits to `outputs/data/processed/<variant>/`.
-* `training/config.py`: Shared constants: `MODEL_ID="dicta-il/dictalm2.0-instruct"`, `MODEL_SLUG="dictalm2-instruct"`, `DEFAULT_EPOCHS=1`, `METHOD_PRESETS`, `LoRAConfig`, `TrainingConfig`, `wandb_project`/`wandb_run_name` (date + model + method + variant + epochs), and `dataset_repo`/`model_repo`/`processed_profile_name` Hub-id helpers (adapter repos are `amlk-{MODEL_SLUG}-sft[-variant]`).
+* `training/config.py`: Shared constants: `MODEL_ID="dicta-il/dictalm2.0-instruct"`, `MODEL_SLUG="dictalm2-instruct"`, `MAX_LENGTH=4096` (source of truth for train/gen seq budget; preprocess uses `MAX_LENGTH-256=3840` article tokens), `DEFAULT_EPOCHS=1`, `METHOD_PRESETS`, `LoRAConfig`, `TrainingConfig`, `wandb_project`/`wandb_run_name` (date + model + method + variant + epochs), and `dataset_repo`/`model_repo`/`processed_profile_name` Hub-id helpers (adapter repos are `amlk-{MODEL_SLUG}-sft[-variant]`). Self-contained job scripts keep twin fallbacks of `max_length` (must stay in sync).
 * `training/train.py`: One trainer for all three regimes (`--method qlora|lora|full`). Trains with `completion_only_loss=True`, 1 epoch by default, logs to a model-specific wandb project with informative run names, saves the adapter; `--push-to-hub` or `--submit-hf` push to the Hub. Serializes resolved `TRAIN_CONFIG`/`LORA_CONFIG` JSON into the remote job env (so METHOD_PRESETS cannot be ignored). Full-run default timeout 8h. Chat-wraps prompts before SFT. Mid-run stability: creates the model repo before the job starts so `hub_strategy=every_save` can commit checkpoints while training. Inference is NOT here.
 * `training/train_hf_job.py`: Self-contained PEP 723 UV script submitted inline by `train.py --submit-hf`. Reads METHOD/VARIANT/BASE_MODEL/DATASET_REPO/OUTPUT_REPO/WANDB_*/EPOCHS/`TRAIN_CONFIG`/`LORA_CONFIG` from env, trains on the cloud GPU (1 epoch default), then generates fine-tuned + zero-shot base test predictions. Chat-wraps train/val/infer for both arms; `add_special_tokens=False` on generate (no double-BOS); Hebrew-script `bad_words_ids`. Stability: `/data/output` resume, `hub_strategy=every_save`, immediate prediction uploads. Never run directly.
 * `evaluation/predict.py`: Generates the Gemini advanced-baseline summaries via API (no GPU, no model load), same hardened prompt as training. Resumes from a partial file. The fine-tuned and zero-shot predictions come from the cloud training job, not here.
@@ -115,6 +119,9 @@
 * `evaluation/infer.py`: GPU inference helpers — `load_finetuned_model` (base + LoRA adapter, **defaults to 4-bit** so 7B fits a Colab T4; `disable_adapter()` gives zero-shot base), `load_base_model` (multi-model zero-shot), and `generate_summaries` (chat-wrap both arms via `format_chat_prompt`, `add_special_tokens=False`, Hebrew-script decode constraint). Twin of `train_hf_job.py` generation. **Remote GPU only — never call locally.**
 * `evaluation/base_predict.py`: Pure helpers for multi-model zero-shot baselines (`resolve_load_plan`, `write_predictions_jsonl` / `validate_predictions`, `model_slug` / local paths). Re-exports `format_chat_prompt` / `build_input_text_safe` from `data.prompts`. No GPU.
 * `evaluation/predict_base_hf_job.py`: Self-contained UV job for base-only predictions on HF Jobs (no training, no adapter). `--submit-hf --model … --limit 100` or `--all-models`; `--download` pulls `predictions-base.jsonl` into `outputs/<slug>/`. Nemotron uses native `NemotronH` + `PreTrainedTokenizerFast` (Hebrew probe); Gemma-4 uses `AutoModelForMultimodalLM`.
+* `evaluation/prompt_arena.py`: Local (CPU/API) half of the **prompt-optimization loop** — a side-loop that runs *before* fine-tuning to find the best zero-shot prompt. Holds a round's `PromptCandidate`s (each template needs one `{text}` placeholder; `validate_candidates` rejects a bad set *before* a GPU job is submitted), scores a swept predictions file, and renders the `leaderboard` the agent reads to write the next round. Ranking is deliberately **not** ROUGE-first: `rank()` sorts by Gemini judge (faithfulness+fluency) → `compliance` → ROUGE-L as a weak tiebreak, because ROUGE rewards drifting toward the references' headline/digest register — the very style the prompts exist to suppress. `compliance` is the fraction of four format rules a summary obeys (6–45 words, 1–2 sentences, ≥80% Hebrew script, no pipes/bullets), i.e. exactly what prompt wording controls. `judge_prompts` runs the judge on a fixed subset of the *finalists only* (judging every candidate on every example is the expensive part of the loop). Rounds persist to `outputs/results/prompt-arena/round-<n>/` as the experiment log.
+* `evaluation/prompt_rounds.py`: The prompt loop's **round registry** — `ROUNDS[n]` holds every candidate set ever tried plus the `HYPOTHESES[n]` it tests. Candidates live in version control (not in notebook state) so the diff between rounds *is* the record of what changed. A round is never edited after it runs. `--smoke` uses the 2-candidate `SMOKE` slice.
+* `evaluation/prompt_sweep_hf_job.py`: Remote half of the prompt-optimization loop. Self-contained UV job that loads the base model **once** and sweeps every candidate in the round over the **same** N test examples (paired comparison), tagging each row with `prompt_id` so one predictions file holds the whole round. Pushes after each candidate, so a timeout still leaves finished prompts scorable. `truncate_article()` cuts the *article* against each template's own token overhead — truncating the assembled prompt instead would chop its tail, i.e. the trailing "Summary:" instruction, and the model would never see the task. Inlines twins of `format_chat_prompt` + `build_bad_words_ids` (HF Jobs ships one file). `--submit-hf --prompts <round>/prompts.json` / `--download`.
 * `evaluation/hebrew_constraint.py`: Decode constraint always used at generation. `build_bad_words_ids(tokenizer)` scans the vocab once and returns the ids of every token whose decoded form contains a Latin/Cyrillic/Greek/Arabic letter. Inlined as a twin in `train_hf_job.py` (that script can't import repo code).
 * `evaluation/topic_clustering.py`: Topic-clustering side-analysis (not part of the main pipeline). Embeds truncated article `text` by default (`embed_field='text'`) — summaries alone collapsed ~99% of docs into one media-meta mega-topic — with the Hebrew-native, clustering-tuned `dicta-il/neodictabert-bilingual-embed`, clusters with BERTopic (UMAP + HDBSCAN + Hebrew-only c-TF-IDF vectorizer, `HEBREW_STOPWORDS` + `MEDIA_STOPWORDS` + `BOILERPLATE_STOPWORDS`), names each real cluster with one Gemini call, then optionally `refine_large_clusters()` — a second finer HDBSCAN pass on any cluster holding ≥30% of docs (re-uses embeddings; splits e.g. the politics mega-topic into ביטחון/כלכלה/חברה sub-domains without re-fragmenting sports/legal), then `merge_duplicate_labels()` collapses any clusters Gemini still named identically (on by default via `cluster_dataset(merge_duplicates=True)`) so the report has one row per distinct real-world topic. `fit_topics` tunables: `min_cluster_size`/`min_samples` (default 60/15 — coarser granularity means fewer near-duplicate sub-clusters of the same domain), `outlier_threshold` (only reassign noise above cosine sim — default 0.35; 0 floods the largest cluster), optional `nr_topics` merge (off by default; `auto` over-merged), `language='multilingual'` (required — English mode strips Hebrew). `plot_topic_sizes()` renders a bar chart of `topic_summary()` for the notebook. Output `topics.jsonl` still keyed by `summary` for stratification join. See `notebooks/cluster_topics_databricks.py`.
 * `evaluation/style_labels.py`: A second, independent per-summary dimension from topic clustering — not *what topic* an article is about but *what format* its summary takes (`single_sentence` / `multi_sentence` / `pipe_digest` / `question`). Pure regex (`classify_style`), no embeddings/GPU/API, so unlike topic clustering it never needs Databricks and has no `datasets` import (works even if that import is broken locally, see the lzma note below). Motivated by a real corpus pattern: ~26% of HeSum summaries are `"headline | headline | headline"` pipe-separated digests — a format quirk worth tracking once a model is trained on this data. Produces the same `{summary: label}` artifact shape as `topic_clustering.py` so it plugs into the same stratification tool; `plot_style_distribution()` renders a bar chart of `style_summary()` for the notebook.
@@ -123,6 +130,7 @@
 * `notebooks/evaluation_observation.ipynb`: The **evaluation-observation** stage. A self-bootstrapping Colab notebook that runs the *real* evaluation functions live and **displays** the per-example process (article → model summary → reference → judge faithfulness/fluency → error-analysis failure labels) for finetuned/base/gemini. Loads existing Hub predictions (finetuned/base at repo root, gemini under `reports/`) and generates fresh summaries on a T4. Judge/error/browse cells are API+CPU; only the generation cell needs a GPU.
 * `notebooks/cluster_topics_databricks.py`: Databricks source-format notebook (`# Databricks notebook source` / `# COMMAND ----------` cell markers) driving `evaluation/topic_clustering.py` and `evaluation/style_labels.py`. Manual, occasional run on a Databricks GPU cluster — the GPU is for speed, not required (the embedding model is 0.4B params, encoder-only, the same class of job as the local-CPU AlephBERT BERTScore step). Clones the repo (or reuses an uploaded Workspace copy) so it calls the same tested functions rather than duplicating logic; computes both `topic_label` (BERTopic) and `style_label` (regex) over the same records. Plots (all inline via `displayHTML`, small enough to skip the DBFS round-trip): a `plot_topic_sizes` cluster-size bar chart, an interactive 2D/3D cluster scatter (`plot_clusters(dimensions=2|3)`, `plot_dimensions` widget; written to DBFS + iframe-embedded since 10k-doc hovers exceed the ~20 MB cell-output cap), a `plot_style_distribution` bar chart, and a topic×style stacked bar chart alongside the crosstab table. Writes one `topics.jsonl`/`topics-summary.json` (carrying both label fields) to DBFS for manual download into `outputs/data/raw/` and `outputs/results/`. Widgets expose `min_cluster_size`/`min_samples`/`reduce_outliers`/`nr_topics`/`merge_duplicate_labels`/`topic_size_plot_top_n`/`plot_dimensions` so noise/near-duplicate-topic tuning (see `topic_clustering.py`) doesn't require editing the notebook. A scoped, one-off departure from AMLK's default local/HF-Jobs/Colab stack — no agent-driven Databricks deployment (no MCP connection today), the notebook is handed off for manual import/run.
 * `scripts/run_nb_cell.py`: Agent cell-runner — reads the notebook with `nbformat` and execs a chosen code cell / range against a persistent Colab session via `colab exec` (the Colab CLI has no native `.ipynb` runner). `--list` shows cell indices; the caller owns `colab new`/`stop`. This is how an agent observes the eval cell-by-cell.
+* `docs/prompt-arena-notebook.md`: The **lab notebook** for the prompt-optimization loop (a written research log, not a Jupyter notebook — the loop is a sequence of long remote jobs, and its record has to survive in git and feed the paper). Holds the guidelines (the 100-example paired-comparison contract, why ranking is judge → compliance → ROUGE-L and never ROUGE-first), the design decisions and their reasons, the per-round log of what was tried and what happened, and the code change log. Append one entry per round; never rewrite a past one.
 * `tests/`: ~67 fast behavioral tests + gated live tests (Gemini judge; BERTopic fit + Gemini topic naming + plot). Local `plotly` optional for 3 plot tests.
 
 ---
@@ -201,6 +209,25 @@ source .venv/bin/activate && streamlit run evaluation/viewer/app.py
 # side-by-side comparison across systems (finetuned/base/gemini). Local, CPU-only, read-only.
 ```
 
+**Prompt-optimization loop (find the best zero-shot prompt before fine-tuning):**
+```bash
+# Full guidelines + the round log live in docs/prompt-arena-notebook.md (read it first).
+set -a && source .env && set +a && source .venv/bin/activate    # .env has no `export`
+
+# 1. WRITE round N's candidates (they live in evaluation/prompt_rounds.py):
+python -m evaluation.prompt_arena --round 1 --write            # add --smoke for the 2-prompt slice
+# 2. RUN — one HF Job: model loads once, every prompt sees the same examples (paired comparison):
+python -m evaluation.prompt_sweep_hf_job --submit-hf --round 1 --limit 100 \
+    --prompts outputs/results/prompt-arena/round-1/prompts.json
+# smoke: --limit 4 --batch-size 2 --timeout 30m   (2 prompts x 4 examples, ~$0.05)
+# 3. COMPARE — download, score, rank. --judge adds Gemini on the finalists only;
+#    --show N prints every prompt's summary of example N side by side.
+python -m evaluation.prompt_sweep_hf_job --download --round 1
+python -m evaluation.prompt_arena --round 1 --score --judge --show 0
+# 4. IMPROVE — add ROUNDS[2] + its hypothesis to prompt_rounds.py, append a notebook entry, repeat.
+# Winner gets promoted into data/prompts.py::PROMPT_TEMPLATE (the prompt fine-tuning trains on).
+```
+
 **Running tests:**
 ```bash
 source .venv/bin/activate && python -m pytest tests/ -v
@@ -209,6 +236,72 @@ source .venv/bin/activate && python -m pytest tests/ -v
 ---
 
 ## Status - remember to update it
+
+**2026-07-11 — Prompt-optimization loop: all 3 rounds complete, guideline recorded, winner
+promoted.** Full loop details/tables in `docs/prompt-arena-notebook.md`. Round 1
+(job `6a528b54effc02a91cbd9ba1`, 5 prompts × 100 ex.): sentence-count phrasing ("one or two
+sentences") does not bind length in any wording/language — all 5 prompts landed at 52-65 words /
+3.4-4.2 sentences. Also found the long English "Rules:" prompt provoked a garbled Hangul token
+(`[/인스트]`, an apparent hallucinated echo of Mistral's `[/INST]` tag) in 38% of outputs vs 1-2%
+for Hebrew prompts — root cause: `evaluation/hebrew_constraint.py`'s decode constraint never
+banned CJK/Hangul, only Latin/Cyrillic/Greek/Arabic. **Fixed** in the one source file and its two
+inlined twins (`prompt_sweep_hf_job.py`, `train_hf_job.py`) — real fix, not scoped to the loop.
+Round 2 (job `6a529bcfe4a4e82c0b58e127`, 5 prompts × 100 ex.): numeric word budgets (15/25/30)
+bind only weakly — every capped prompt overshot its own number 2-3x and the three caps barely
+separated from each other (47-54 words). Best result: `p6_he_wordcap15`, compliance 0.69 /
+judge faithfulness 3.13. Round 3 (job `6a52aa83e4a4e82c0b58e388` submitted then canceled ~4 min in
+per user cost instruction; resubmitted smaller as job `6a52b8beeffc02a91cbda075`, 5 prompts × 20
+ex.): tested one-shot/two-shot worked examples vs. an explicit stop cue. Worked examples
+**underperformed** — both hallucinated an unrelated entity ("ועדת ביטון"), judge faithfulness
+dropped to 2.2-2.5. The winner was `p11_he_stopcue` (numeric cap + "write one sentence only and
+stop right after it", no exemplar): compliance **0.82**, faithfulness **3.40**, fluency **4.27** —
+best of all 15 candidates tested, though only checked at n=20. **Guideline:** for
+dictalm2.0-instruct zero-shot Hebrew summarization, abstract length instructions (sentence- or
+word-count) barely bind, but a concrete imperative stop cue does much better — and worked examples
+are a trap here, risking content contamination rather than constraining format. `p11_he_stopcue`
+is promoted into `data/prompts.py::PROMPT_TEMPLATE`. Still short of the loop's 0.9/4.0 target;
+fine-tuning (not further prompt engineering) is expected to close the remaining gap.
+
+**2026-07-11 — Cost lever: default `max_new_tokens` 256 → 128 (train+infer path).** C5 showed
+dual-arm generation ~1.6 h of a ~5.8 h full a10g-small run because every pred hit the 256-token
+cap without EOS. `training/config.py::DEFAULT_MAX_NEW_TOKENS=128` is now the decode budget;
+`train.py --submit-hf` ships `MAX_NEW_TOKENS` (CLI `--max-new-tokens`); `train_hf_job.py` +
+`infer.py` consume it. Full-run proxy: gen ~1.6 h → ~0.8 h (~$0.80 / ~14% per train+infer job).
+Verified real run: inference-only smoke job `6a52aeddeffc02a91cbd9e12` COMPLETED (~5 min,
+a10g-small, max_new_tokens=128 logged) → `predictions-{finetuned,base}-cost128.jsonl` (5+5) on
+`avreymi/amlk-dictalm2-instruct-smoke`. Char-length proxy vs prior 256-cap smoke preds: mean
+474 → 273 chars (ratio 0.575). A train smoke with the same lever (`6a52a461e4a4e82c0b58e27c`)
+finished 10/10 steps then hung on post-train hub push and was canceled — decode path re-verified
+via inference-only. Override with `--max-new-tokens 256` if a long-form probe needs more.
+
+**2026-07-11 — Prompt-optimization loop built + smoke PASSED.** New side-loop that tunes the
+zero-shot prompt *before* fine-tuning: `evaluation/prompt_arena.py` (scoring/ranking + CLI),
+`evaluation/prompt_rounds.py` (round registry), `evaluation/prompt_sweep_hf_job.py` (one HF Job,
+model loaded once, K prompts × N examples), `docs/prompt-arena-notebook.md` (the lab notebook —
+guidelines, round log, reasons), `tests/test_prompt_arena.py` (12 tests, pass).
+Contract: 100 examples per prompt; candidates must be short. Ranked by judge → compliance →
+ROUGE-L (ROUGE last on purpose — it rewards drifting toward the references' digest register).
+Smoke: job `6a5287c2effc02a91cbd9b8c` (a10g-small, 2 prompts × 4 examples, ~6 min) → 8 rows at
+`avreymi/amlk-prompt-arena/sweeps/round-1`; download → score → leaderboard verified end-to-end.
+**Finding to act on in round 1 proper:** both the current hardened prompt and a minimal Hebrew one
+badly overshoot the length target (62w/3.75 sents and 56w/4.0 sents vs. the 1–2 sentence target),
+hitting the 160-token cap and truncating mid-sentence; compliance 0.50 / 0.44, ROUGE-L ~0.05.
+Neither prompt's length instruction is binding — that is the hypothesis round 2 should attack.
+
+**2026-07-11 — MAX_LENGTH 2048 → 4096 (all sites + re-preprocess + smoke submitted).** Seq budget
+is 4096 everywhere that matters: `training/config.py` (`MAX_LENGTH`), `train_hf_job.py` default
+`TRAIN_CFG["max_length"]` (+ gen uses `TRAIN_CFG["max_length"]-128`), `evaluation/infer.py`
+(`MAX_LENGTH-128`), `evaluation/predict_base_hf_job.py` (`4096-128`). Preprocess
+`ARTICLE_TOKEN_BUDGET = MAX_LENGTH-256 = 3840`. Local `outputs/data/processed/whole/` rebuilt
+(6073/759/760) and re-uploaded to `avreymi/amlk-training-data`. 4096 smoke submitted:
+job `6a52848eeffc02a91cbd9b71` (a10g-small, qlora, 10 steps) →
+`avreymi/amlk-dictalm2-instruct-smoke`. Gate before full 1-epoch.
+
+**2026-07-11 — Smoke-path cleanup (dictalm2.0-instruct ready).** After C0–C5, removed dead
+branches: no `label`-branched prompt format, no `DATA_PROFILE` dual-path leftover in
+`eval_hf_job`, train/infer both call `format_chat_prompt` only. Fixed `MODEL_SLUG` drift
+(`dictalm2-0-instruct` → `dictalm2-instruct` via env from `train.py`). Defaults remain
+`MODEL_ID=dicta-il/dictalm2.0-instruct`, method `qlora`, 1 epoch, 8h full timeout, 4-bit load.
 
 **2026-07-11 — CODE AUDIT C0–C5 fixed (dictalm2 instruct format + wiring).**
 - **C0:** Train + finetuned/base inference both apply the model chat template via
@@ -248,7 +341,8 @@ run pending. Stack: trl 1.6.0, transformers 5.11, peft 0.19, wandb 0.27–0.28.
 - Note: QLoRA `push_to_hub` saves the LoRA adapter only (not merged).
 - Note: the Gemini LLM-judge and the Gemini advanced baseline are the same model family — flag
   self-preference bias in the paper.
-- Decode config: `max_new_tokens=256`, `min_new_tokens=16`, `no_repeat_ngram_size=3`,
+- Decode config: `max_new_tokens=128` (`DEFAULT_MAX_NEW_TOKENS`; was 256 — gen cost lever),
+  `min_new_tokens=min(16, max_new_tokens)`, `no_repeat_ngram_size=3`,
   `repetition_penalty=1.2`, greedy + Hebrew-script constraint.
 
 **2026-07-09 — Diagnosed and fixed a training-checkpoint-loss bug** (job `6a4f55731fba25b8ea3b310b`,
@@ -304,11 +398,10 @@ same day's infra-restart diagnosis above.
 **2026-07-04 — Predictions viewer added.** `evaluation/viewer/` (`data.py` + `app.py`, its own subfolder): a local Streamlit app (`streamlit run evaluation/viewer/app.py`) for browsing `outputs/results/*.jsonl` — RTL Hebrew rendering, keyword search, side-by-side comparison across systems. Read-only, CPU-only, no GPU/API. Verified end-to-end against the real `predictions-finetuned.jsonl`/`predictions-base.jsonl` files with `streamlit.testing.v1.AppTest` (file discovery, multi-file compare, keyword filtering, navigation — no exceptions).
 
 **Next steps:**
-1. **Re-preprocess + full 1-epoch clean QLoRA run** on `dicta-il/dictalm2.0-instruct`
-   (`python -m data.preprocess --variant whole` then
-   `python -m training.train --submit-hf --hf-user avreymi`). Prefer a10g-small; default method
-   is qlora. Smoke already validated load + LoRA coverage; Hub training data must be re-uploaded
-   after clean preprocess (old Hub splits may still be raw-prompt).
+1. **4096 smoke then full 1-epoch QLoRA** on `dicta-il/dictalm2.0-instruct` (local data already
+   re-preprocessed at `MAX_LENGTH=4096`). Smoke first with Hub re-upload:
+   `python -m training.train --submit-hf --hf-user avreymi --method qlora --smoke-test --output-repo avreymi/amlk-dictalm2-instruct-smoke`
+   then full: `python -m training.train --submit-hf --hf-user avreymi --method qlora`.
 2. **D.1 — full eval battery** on the trained adapter (`evaluation.eval_hf_job --submit-hf`),
    scoring finetuned / zero-shot base / Gemini advanced baseline with ROUGE + BERTScore + judge +
    error analysis, assembled via `evaluation.build_report_tables`.

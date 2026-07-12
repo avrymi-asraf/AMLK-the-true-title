@@ -39,14 +39,20 @@ dual profile. Default **1 epoch** per run.
 ```bash
 source .env && source .venv/bin/activate
 
-python -m data.preprocess --variant whole   # clean refs + hardened prompt (required once)
-python -m training.train --submit-hf --hf-user avreymi --smoke-test
-python -m training.train --submit-hf --hf-user avreymi              # full 1-epoch
+python -m data.preprocess --variant whole   # clean refs + hardened prompt (required once;
+                                            # re-run after changing MAX_LENGTH — Arrow already truncated)
+
+# After MAX_LENGTH / preprocess changes: re-upload Hub data (omit --skip-data-upload).
+python -m training.train --submit-hf --hf-user avreymi --method qlora --smoke-test \
+  --output-repo avreymi/amlk-dictalm2-instruct-smoke
+
+python -m training.train --submit-hf --hf-user avreymi --method qlora   # full 1-epoch
 python -m training.train --submit-hf --hf-user avreymi --inference-only
 ```
 
 > **Cost note:** `dictalm2.0-instruct` is Mistral-7B → prefer **qlora** on a10g-small (same 24 GB
-> GPU as a10g-large, $1.00/h vs $1.50/h). LoRA bf16 on 7B is tight on 24 GB at seq-len 2048.
+> GPU as a10g-large, $1.00/h vs $1.50/h). Seq budget is `MAX_LENGTH=4096` (config source of truth;
+> twin fallbacks in `train_hf_job.py` + gen sites). LoRA bf16 on 7B is tight on 24 GB at long seq.
 
 ## trl 1.6.0 / transformers 5.x API (verified — do not regress)
 
@@ -57,10 +63,12 @@ python -m training.train --submit-hf --hf-user avreymi --inference-only
 ## HF Jobs submission — the hard rule
 
 `run_uv_job` uploads **only the script file**. Pass every setting as env
-(`METHOD`, `VARIANT`, `DATASET_REPO`, `OUTPUT_REPO`, `WANDB_PROJECT`, `WANDB_RUN_NAME`,
-`EPOCHS`, `SMOKE_TEST`, `TRAIN_CONFIG`, `LORA_CONFIG`). Secrets must be real token strings
-via the Python API (not `"$HF_TOKEN"`). Never hardcode batch/lr in `train_hf_job.py` —
-always resolve from `METHOD_PRESETS` through `TRAIN_CONFIG`.
+(`METHOD`, `VARIANT`, `BASE_MODEL`, `MODEL_SLUG`, `DATASET_REPO`, `OUTPUT_REPO`,
+`WANDB_PROJECT`, `WANDB_RUN_NAME`, `EPOCHS`, `SMOKE_TEST`, `TRAIN_CONFIG`, `LORA_CONFIG`).
+Secrets must be real token strings via the Python API (not `"$HF_TOKEN"`). Never hardcode
+batch/lr in `train_hf_job.py` — always resolve from `METHOD_PRESETS` through `TRAIN_CONFIG`.
+`MODEL_SLUG` must be passed (not derived with naive `.`→`-` replace — that turns
+`dictalm2.0-instruct` into the wrong `dictalm2-0-instruct`).
 
 ## Monitoring
 
@@ -77,8 +85,10 @@ wandb: project `amlk-dictalm2-instruct` (see `training.config.wandb_project`).
 - Instruct models must train and serve under their chat template (C0) — raw completion prompts
   silently break dictalm2.0-instruct.
 - Never inject `/no_think` into Mistral prompts; never double-BOS after `apply_chat_template`.
-- `per_device_eval_batch_size=1` — eval default 8 OOMs at seq-len 2048 on A10G 24 GB.
-- HeSum articles are long — preprocess truncates to `MAX_LENGTH-256` tokens so the summary survives.
+- `per_device_eval_batch_size=1` — eval default 8 OOMs at long seq lengths on A10G 24 GB.
+- HeSum articles are long — preprocess truncates to `MAX_LENGTH-256` (3840 at MAX_LENGTH=4096)
+  so the summary survives. Changing `MAX_LENGTH` requires twins in `train_hf_job` defaults +
+  gen truncation (`infer.py` / `predict_base_hf_job.py`), then re-preprocess + Hub re-upload.
 - Hub adapter is LoRA only (not merged).
 - Cloud-job crash economics: mid-run Hub commits + immediate prediction pushes are non-negotiable.
 - For wandb axis alignment, see the global `wandb-for-trl` skill.

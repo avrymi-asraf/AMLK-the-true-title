@@ -1,10 +1,10 @@
 """
 Hebrew-script decode constraint for generation. Fine-tuned outputs occasionally leak
-foreign scripts mid-word (Cyrillic, Arabic, Latin, etc.) — a vocab/decoding artifact.
+foreign scripts mid-word (Cyrillic, Arabic, Latin, CJK, etc.) — a vocab/decoding artifact.
 build_bad_words_ids scans the tokenizer vocabulary once and returns the ids of every
-token whose decoded surface form contains a Latin/Cyrillic/Greek/Arabic letter, so
-generate(bad_words_ids=...) can forbid emitting them. Hebrew letters, digits, punctuation,
-and whitespace stay allowed.
+token whose decoded surface form contains a Latin/Cyrillic/Greek/Arabic/CJK/Hangul letter,
+so generate(bad_words_ids=...) can forbid emitting them. Hebrew letters, digits,
+punctuation, and whitespace stay allowed.
 
 Wired into evaluation/infer.py and training/train_hf_job.py generation (always on).
 Execution environment: wherever generation runs (remote GPU: HF Jobs / Colab).
@@ -12,6 +12,9 @@ Execution environment: wherever generation runs (remote GPU: HF Jobs / Colab).
 import re
 
 # Scripts we forbid inside generated summaries. Hebrew (0x0590-0x05FF) is intentionally absent.
+# CJK/Hangul added after the round-1 prompt-arena sweep found dictalm2.0-instruct emitting a
+# garbled Hangul near-token ("[/인스트]") when the prompt reads as a long, English, bulleted
+# instruction — an apparent hallucinated echo of Mistral's own [/INST] closing tag.
 _FORBIDDEN_SCRIPT_RE = re.compile(
     "["
     "A-Za-z"        # Latin A-Z a-z
@@ -19,6 +22,11 @@ _FORBIDDEN_SCRIPT_RE = re.compile(
     "Ѐ-ӿ"                       # Cyrillic
     "Ͱ-Ͽ"                       # Greek
     "؀-ۿ"                       # Arabic
+    "぀-ヿ"                      # Hiragana + Katakana
+    "㐀-鿿"                      # CJK Unified Ideographs (+ Extension A)
+    "가-힯"                      # Hangul Syllables
+    "ᄀ-ᇿ"                       # Hangul Jamo
+    "ㄱ-ㆿ"                      # Hangul Compatibility Jamo
     "]"
 )
 

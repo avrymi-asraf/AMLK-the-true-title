@@ -10,8 +10,8 @@ from data.preprocess import build_prompt, make_variant, split_dataset
 
 def test_build_prompt_carries_task_and_text():
     result = build_prompt("המאמר הגדול")
-    assert "Summarize" in result
-    assert "Summary" in result
+    assert "סכם" in result
+    assert "תקציר" in result
     assert "המאמר הגדול" in result
 
 

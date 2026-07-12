@@ -48,12 +48,11 @@ def run_cloud_job():
     model_repo = os.environ["MODEL_REPO"]
     dataset_repo = os.environ["DATASET_REPO"]
     variant = os.environ.get("VARIANT", "whole")
-    data_profile = os.environ.get("DATA_PROFILE", variant)
     limit = int(os.environ.get("LIMIT", "0"))
     n_errors = limit if limit else 50
     hf_token = os.environ["HF_TOKEN"]
     api = HfApi(token=hf_token)
-    print(f"Eval job: model={model_repo} dataset={dataset_repo} profile={data_profile} "
+    print(f"Eval job: model={model_repo} dataset={dataset_repo} variant={variant} "
           f"limit={limit or 'full'}")
 
     # 1. Unpack the public repo so we can reuse evaluation/ + data/ verbatim.
@@ -73,7 +72,7 @@ def run_cloud_job():
         hf_hub_download(model_repo, f"predictions-{name}.jsonl", repo_type="model",
                         local_dir=str(results), token=hf_token)
     snapshot_download(dataset_repo, repo_type="dataset", token=hf_token,
-                      local_dir=str(repo / "outputs" / "data" / "processed" / data_profile))
+                      local_dir=str(repo / "outputs" / "data" / "processed" / variant))
 
     env = {**os.environ, "PYTHONPATH": str(repo)}
 
@@ -106,7 +105,7 @@ def run_cloud_job():
         print(f"Reusing Gemini baseline from the Hub ({line_count(cached)} rows)")
     else:
         step(["evaluation.predict", "--variant", variant,
-              "--data", f"outputs/data/processed/{data_profile}/test",
+              "--data", f"outputs/data/processed/{variant}/test",
               "--output", "outputs/results/predictions-gemini.jsonl", *lim])
         push("predictions-gemini.jsonl")
 
@@ -144,9 +143,7 @@ def submit(hf_user: str, variant: str, smoke: bool, output_repo: str = "",
     warnings.filterwarnings("ignore", category=UserWarning)
     from huggingface_hub import HfApi
 
-    from training.config import dataset_repo, model_repo, processed_profile_name
-
-    profile = processed_profile_name(variant)
+    from training.config import dataset_repo, model_repo
 
     hf_token = os.environ.get("HF_TOKEN", "")
     gemini_key = os.environ.get("GEMINI_API_KEY", "")
@@ -174,7 +171,6 @@ def submit(hf_user: str, variant: str, smoke: bool, output_repo: str = "",
             "MODEL_REPO": out_repo,
             "DATASET_REPO": data_repo,
             "VARIANT": variant,
-            "DATA_PROFILE": profile,
             "LIMIT": limit_str,
         },
         token=hf_token,

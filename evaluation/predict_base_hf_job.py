@@ -153,7 +153,7 @@ def run_cloud_job() -> None:
         elif plan["kind"] == "multimodal" or "12b" in mid:
             max_input = 1536
         else:
-            max_input = 2048 - 128
+            max_input = 4096 - 128
 
     print("=== zero-shot base predictions (no training) ===")
     print(f"Base model: {base_model}")

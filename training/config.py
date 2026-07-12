@@ -13,11 +13,17 @@ from datetime import date
 
 MODEL_ID = "dicta-il/dictalm2.0-instruct"
 PROCESSED_DIR = "outputs/data/processed"   # actual data dir is <PROCESSED_DIR>/<variant>
-MAX_LENGTH = 2048
+MAX_LENGTH = 4096
 # Short slug used in Hub adapter repos and wandb names (not the full model id).
 MODEL_SLUG = "dictalm2-instruct"
 # One epoch per run is the default; override with --epochs only when deliberately multi-epoch.
 DEFAULT_EPOCHS = 1
+# Decode budget for post-train dual-arm generation (train_hf_job + infer twins).
+# 128 is enough for the short news-summary target (median ref ~157 chars) and cuts GPU
+# decode time vs the old 256 cap: smoke preds always hit 256 without EOS, so full-run
+# dual inference on ~760×2 examples was ~1.6h of a ~5.8h a10g-small job (C5).
+# Override with --max-new-tokens / MAX_NEW_TOKENS when a long-form probe needs more.
+DEFAULT_MAX_NEW_TOKENS = 128
 
 
 def wandb_project(model_slug: str = MODEL_SLUG) -> str:

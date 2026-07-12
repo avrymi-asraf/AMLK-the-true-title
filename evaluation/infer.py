@@ -20,7 +20,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 from data.prompts import format_chat_prompt, prepare_tokenizer_for_templated_prompts
 from evaluation.base_predict import resolve_load_plan
-from training.config import MODEL_ID
+from training.config import DEFAULT_MAX_NEW_TOKENS, MAX_LENGTH, MODEL_ID
 
 
 def _quant_or_bf16_kwargs(quantize: bool) -> dict:
@@ -119,19 +119,18 @@ def load_base_model(model_id: str, quantize: bool | None = None):
     }
 
 
-def build_input_text(tokenizer, prompt: str, label: str = "finetuned") -> str:
-    """Format the prompt for generation. Same chat wrap for finetuned and base.
+def build_input_text(tokenizer, prompt: str) -> str:
+    """Format a prompt for generation (chat template when the model has one).
 
-    Twin of train_hf_job.py:format_chat_prompt (that script can't import repo code).
-    label is kept for call-site compatibility; both arms use the model chat template.
+    Same path for finetuned and zero-shot base. Twin of train_hf_job.py:format_chat_prompt.
     """
-    del label  # both systems use the same format after the C0 fix
     return format_chat_prompt(tokenizer, prompt)
 
 
 def generate_summaries(
     model, tokenizer, dataset, variant: str, device,
-    batch_size: int = 8, max_new_tokens: int = 256, label: str = "finetuned",
+    batch_size: int = 8, max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
+    label: str = "finetuned",
 ) -> list[dict]:
     """Generate summaries for a (processed) test split, in batches, greedily.
 
@@ -140,6 +139,7 @@ def generate_summaries(
     every sequence in a batch right-aligned so `out[:, input_len:]` extracts only the generated
     tokens. Always applies the Hebrew-script decode constraint. Returns the standard prediction
     rows that evaluate.py / error_analysis.py consume. Mirrors train_hf_job.py:generate_predictions().
+    Default max_new_tokens matches training/config.DEFAULT_MAX_NEW_TOKENS (cost lever: 128).
     """
     from evaluation.hebrew_constraint import build_bad_words_ids
 
@@ -148,17 +148,19 @@ def generate_summaries(
     rows = []
     for i in range(0, len(dataset), batch_size):
         batch = dataset[i:i + batch_size]
-        prompts: list[str] = [build_input_text(tokenizer, p, label) for p in batch["prompt"]]
-        # add_special_tokens=False: chat template already includes BOS (C1 double-BOS fix).
+        prompts: list[str] = [build_input_text(tokenizer, p) for p in batch["prompt"]]
+        # Chat template already includes BOS — do not prepend another.
+        # Leave headroom for max_new_tokens under the same seq budget as training.
         inputs = tokenizer(
             prompts, return_tensors="pt", truncation=True,
-            max_length=2048 - 128, padding=True, add_special_tokens=False,
+            max_length=MAX_LENGTH - max_new_tokens, padding=True, add_special_tokens=False,
         ).to(device)
         with torch.no_grad():
             outs = model.generate(
                 # no_repeat_ngram_size + repetition_penalty kill greedy degeneration loops;
                 # min_new_tokens + explicit eos let the model stop instead of running to the cap.
-                **inputs, max_new_tokens=max_new_tokens, min_new_tokens=16, do_sample=False,
+                **inputs, max_new_tokens=max_new_tokens,
+                min_new_tokens=min(16, max_new_tokens), do_sample=False,
                 no_repeat_ngram_size=3, repetition_penalty=1.2,
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.pad_token_id,

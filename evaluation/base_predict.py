@@ -157,9 +157,5 @@ def validate_predictions(
 
 
 def build_input_text_safe(tokenizer, prompt: str) -> str:
-    """Format a prompt for generation via the shared chat-template helper.
-
-    Alias of data.prompts.format_chat_prompt — kept under this name for existing tests
-    and call sites. Applies to both finetuned and base arms when a chat template exists.
-    """
+    """Alias of data.prompts.format_chat_prompt (stable name for tests / multi-model path)."""
     return format_chat_prompt(tokenizer, prompt)

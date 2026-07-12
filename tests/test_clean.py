@@ -73,11 +73,10 @@ def test_wandb_naming_includes_date_model_epochs():
     assert DEFAULT_EPOCHS == 1
 
 
-def test_build_prompt_is_hardened():
+def test_build_prompt_states_a_word_cap():
     from data.prompts import build_prompt
 
     result = build_prompt("המאמר")
-    assert "Rules" in result
-    assert "do not add" in result.lower()
+    assert "מילים" in result  # states a numeric word cap (prompt-arena round-2 winner)
     assert "המאמר" in result
-    assert "Summary" in result
+    assert "תקציר" in result

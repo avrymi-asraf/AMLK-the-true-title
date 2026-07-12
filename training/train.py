@@ -21,6 +21,7 @@ from pathlib import Path
 
 from training.config import (
     DEFAULT_EPOCHS,
+    DEFAULT_MAX_NEW_TOKENS,
     MAX_LENGTH,
     METHOD_PRESETS,
     MODEL_ID,
@@ -124,7 +125,7 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
                   smoke_test: bool, mini_test: bool = False, inference_only: bool = False,
                   pred_suffix: str = "", epochs: int = 0, base_model: str = "",
                   output_repo: str = "", skip_data_upload: bool = False,
-                  timeout: str = ""):
+                  timeout: str = "", max_new_tokens: int = 0):
     """Upload the processed splits to the Hub and submit train_hf_job.py to HF Jobs.
 
     inference_only=True skips dataset re-upload and training; loads the already-pushed
@@ -132,6 +133,7 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
     (e.g. "-v2") keeps a re-decode from clobbering the v1 predictions. epochs overrides the
     default (1). base_model swaps the base checkpoint (defaults to config.MODEL_ID);
     output_repo must then be set too. skip_data_upload reuses the splits already on the Hub.
+    max_new_tokens overrides DEFAULT_MAX_NEW_TOKENS for dual-arm generation (cost lever).
     """
     import warnings
     warnings.filterwarnings("ignore", category=UserWarning)
@@ -178,6 +180,7 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
     )
     train_cfg = _train_config_payload(method)
     lora_cfg = _lora_config_payload() if train_cfg["use_lora"] else {}
+    n_new_tokens = max_new_tokens or DEFAULT_MAX_NEW_TOKENS
 
     tag = f"{label} " if label else ""
     print(f"Submitting {tag}{method} job (flavor={flavor}, timeout={timeout})...")
@@ -186,6 +189,7 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
     print(f"  Epochs: {n_epochs}")
     print(f"  Train config: batch={train_cfg['per_device_train_batch_size']} "
           f"accum={train_cfg['gradient_accumulation_steps']} lr={train_cfg['learning_rate']}")
+    print(f"  max_new_tokens={n_new_tokens} (post-train dual-arm decode budget)")
     print(f"  wandb: {project} / {run_name}")
     print(f"  Stability: hub_strategy=every_save (checkpoint commits mid-run) + /data/output resume")
     job = api.run_uv_job(
@@ -197,6 +201,7 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
             "METHOD": method,
             "VARIANT": variant,
             "BASE_MODEL": base,
+            "MODEL_SLUG": MODEL_SLUG,
             "DATASET_REPO": data_repo,
             "OUTPUT_REPO": out_repo,
             "WANDB_PROJECT": project,
@@ -206,7 +211,9 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
             "INFERENCE_ONLY": "1" if inference_only else "0",
             "PRED_SUFFIX": pred_suffix,
             "EPOCHS": str(n_epochs),
-            # Resolved presets from config.py — train_hf_job must not hardcode these (C4).
+            # Decode budget for dual-arm generation (cost lever; was hardcoded 256).
+            "MAX_NEW_TOKENS": str(n_new_tokens),
+            # Resolved presets from config.py — never hardcode batch/lr in train_hf_job.
             "TRAIN_CONFIG": json.dumps(train_cfg),
             "LORA_CONFIG": json.dumps(lora_cfg),
         },
@@ -244,7 +251,6 @@ def train_local(method: str, variant: str, output_dir: Path, max_steps: int,
     print(f"Loading model ({method})...")
     model, tokenizer = build_model_and_tokenizer(method, hf_token)
 
-    # C0: train on the instruct chat format, not raw completion-style text.
     def _wrap(example):
         example["prompt"] = format_chat_prompt(tokenizer, example["prompt"])
         return example
@@ -345,6 +351,11 @@ def main():
     parser.add_argument("--output-repo", default="", help="Hub repo for the adapter (default: derived from --hf-user/--variant)")
     parser.add_argument("--skip-data-upload", action="store_true", help="With --submit-hf: reuse the splits already on the Hub instead of re-uploading")
     parser.add_argument("--timeout", default="", help="With --submit-hf: override the job timeout (e.g. 8h).")
+    parser.add_argument(
+        "--max-new-tokens", type=int, default=DEFAULT_MAX_NEW_TOKENS,
+        help=f"Post-train dual-arm decode budget (default: {DEFAULT_MAX_NEW_TOKENS}; "
+             "lower = cheaper GPU time when the model hits the cap)",
+    )
     args = parser.parse_args()
 
     hf_token = os.environ.get("HF_TOKEN", "")
@@ -363,7 +374,8 @@ def main():
         submit_hf_job(args.method, args.variant, hf_token, args.hf_user,
                       args.smoke_test, args.mini_test, args.inference_only,
                       args.pred_suffix, args.epochs, args.base_model,
-                      args.output_repo, args.skip_data_upload, args.timeout)
+                      args.output_repo, args.skip_data_upload, args.timeout,
+                      args.max_new_tokens)
         return
 
     if args.push_to_hub and not args.hf_user:

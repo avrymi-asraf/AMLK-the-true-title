@@ -96,7 +96,7 @@ def test_build_input_text_safe_uses_chat_template_when_present():
     tok = _FakeTok(template="yes")
     out = build_input_text_safe(tok, "Summarize:\nhello")
     assert out.startswith("<user>Summarize:\nhello")
-    assert "/no_think" not in out  # C2: never inject Qwen-era control tokens
+    assert "/no_think" not in out
     assert out.endswith("<assistant>")
 
 
@@ -136,27 +136,39 @@ def test_prepare_tokenizer_disables_double_bos():
     assert t.add_bos_token is False
 
 
-def test_infer_build_input_text_wraps_finetuned_too():
-    """C0: finetuned arm must use the chat template, not raw prompt."""
+def test_infer_build_input_text_wraps_both_arms():
+    """Finetuned and base use the same chat template (no label-branched format)."""
     from evaluation.infer import build_input_text
+    import inspect
 
     tok = _FakeTok(template="yes")
-    out = build_input_text(tok, "Summarize:\nhello", label="finetuned")
+    out = build_input_text(tok, "Summarize:\nhello")
     assert out.startswith("<user>")
     assert "/no_think" not in out
+    # No unused label kw — one format for both systems.
+    assert "label" not in inspect.signature(build_input_text).parameters
 
 
 def test_train_hf_job_uses_train_config_and_chat_wrap():
-    """Structural guard: remote job must not hardcode qlora lr/batch; must chat-wrap train."""
+    """Structural guard: remote job uses TRAIN_CONFIG, chat-wraps train+infer, no think inject."""
     src = Path("training/train_hf_job.py").read_text(encoding="utf-8")
     assert "TRAIN_CONFIG" in src
     assert "TRAIN_CFG[" in src or 'TRAIN_CFG.get' in src
-    assert "per_device_train_batch_size=2" not in src  # was hardcoded; now from TRAIN_CFG
+    assert "per_device_train_batch_size=2" not in src
     assert "learning_rate=2e-4" not in src
     assert "format_chat_prompt" in src
+    assert "build_input_text" not in src  # collapsed into format_chat_prompt
     assert 'f"{prompt}\\n/no_think"' not in src and 'prompt}\\n/no_think' not in src
     assert "add_special_tokens=False" in src
     assert "add_bos_token = False" in src
+    assert 'MODEL_SLUG = os.environ.get("MODEL_SLUG")' in src
+    assert 'or "dictalm2-instruct"' in src
+    # Must not naively turn dictalm2.0 into dictalm2-0
+    assert 'MODEL_ID.split("/")[-1].lower().replace(".", "-")' not in src
+    # Cost lever: decode budget from env, not a hardcoded 256 on generate().
+    assert 'os.environ.get("MAX_NEW_TOKENS")' in src
+    assert "max_new_tokens=MAX_NEW_TOKENS" in src
+    assert "max_new_tokens=256" not in src
 
 
 def test_train_py_serializes_train_config_and_8h_timeout():
@@ -166,10 +178,29 @@ def test_train_py_serializes_train_config_and_8h_timeout():
     assert '_train_config_payload' in src
     assert 'timeout or "8h"' in src
     assert "format_chat_prompt" in src
+    assert '"MODEL_SLUG": MODEL_SLUG' in src
+    # Cost lever: submit path ships MAX_NEW_TOKENS to the remote job.
+    assert '"MAX_NEW_TOKENS"' in src
+    assert "DEFAULT_MAX_NEW_TOKENS" in src
+
+
+def test_default_max_new_tokens_is_cheaper_than_legacy_256():
+    """Shipped decode default must be below the legacy 256 cap (gen-time cost lever)."""
+    from training.config import DEFAULT_MAX_NEW_TOKENS
+
+    assert isinstance(DEFAULT_MAX_NEW_TOKENS, int)
+    assert 16 <= DEFAULT_MAX_NEW_TOKENS < 256
+    # infer twin uses the same constant (structural: no torch import required locally).
+    infer_src = Path("evaluation/infer.py").read_text(encoding="utf-8")
+    assert "DEFAULT_MAX_NEW_TOKENS" in infer_src
+    assert "max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS" in infer_src
+    # CLI default on the real submit path.
+    from training.train import DEFAULT_MAX_NEW_TOKENS as train_default
+    assert train_default == DEFAULT_MAX_NEW_TOKENS
 
 
 def test_load_finetuned_model_defaults_to_quantize():
-    """C3: 7B on T4 needs 4-bit by default."""
+    """7B on T4 needs 4-bit by default."""
     import inspect
     from evaluation.infer import load_finetuned_model
 
