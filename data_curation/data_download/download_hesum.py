@@ -1,5 +1,10 @@
 """Download and normalize the raw HeSum dataset.
 
+This is stage 1 of the data-curation pipeline (see `CURATION_ROADMAP.md`): the entry point that
+turns the external `biunlp/HeSum` Hub dataset into the stable, locally-owned `raw_hesum.json`
+every later stage (tail trimming, the two deterministic filters, model curation) builds on.
+Runs locally, CPU-only, network-bound.
+
 Run:
     python -m data_curation.data_download.download_hesum
 
@@ -12,6 +17,7 @@ from __future__ import annotations
 import argparse
 
 from data_curation.utils.json_io import save_json
+from data_curation.utils.lzma_shim import ensure_lzma_importable
 from data_curation.utils.paths import ARTIFACTS_DIR
 
 DATASET_NAME = "biunlp/HeSum"
@@ -31,10 +37,13 @@ def parse_args() -> argparse.Namespace:
 
 def download_records() -> list[dict]:
     """Download HeSum splits and normalize them into records with string ids."""
+    ensure_lzma_importable()
     import datasets
 
     print(f"Loading {DATASET_NAME} from HuggingFace Hub...")
-    dataset = datasets.load_dataset(DATASET_NAME)
+    # token=False: HeSum is public, and some local setups carry an invalid cached HF token that
+    # would otherwise turn every anonymous-eligible request into a 401.
+    dataset = datasets.load_dataset(DATASET_NAME, token=False)
     merged_dataset = datasets.concatenate_datasets(dataset.values())
 
     records = []

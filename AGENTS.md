@@ -52,8 +52,12 @@
 │   │   ├── source_filter/                # Stage 6: 6 usability labels over 6,486 rows (5,854 usable)
 │   │   └── headline_target_curation/     # Stage 7: keep-or-replace headline target (3,069 rewritten)
 │   ├── final_dataset/build_final_dataset.py   # Stage 8: assemble + validate final_clean_hesum.json
-│   ├── utils/                            # json_io, paths
-│   └── artifacts/                        # Supplied: source_filter_results.json, headline_target_curation_results.json
+│   ├── analysis/                         # Dataset-review analysis: row-label artifact + paper figures
+│   │   ├── row_labels.py                 # Join every artifact into one row per id (10,000) — spec section 2
+│   │   ├── plotting.py                   # House visual style: template, colorblind-safe palettes, export helper
+│   │   └── figures.py                    # F1 curation-funnel Sankey, F2 defect-prevalence bars
+│   ├── utils/                            # json_io, paths, lzma_shim (stubs _lzma when the local Python lacks it)
+│   └── artifacts/                        # Supplied: source_filter_results.json, headline_target_curation_results.json; rest regenerates
 ├── training/
 │   ├── __init__.py
 │   ├── config.py                         # MODEL_ID, METHOD_PRESETS, LoRAConfig, TrainingConfig, WANDB_PROJECT, repo helpers
@@ -90,7 +94,9 @@
 │   ├── test_topic_clustering.py          # BERTopic fit + Gemini naming + plot (live test gated)
 │   ├── test_style_labels.py              # rule-based style classification (pipe digest / question / sentence count)
 │   ├── test_clean.py                     # clean-profile reference normalization + roundup-digest filter
-│   └── test_viewer.py                    # predictions-viewer load/keyword-search/discovery logic
+│   ├── test_viewer.py                    # predictions-viewer load/keyword-search/discovery logic
+│   ├── test_row_labels.py                # row-label join/classification logic (no tokenizer/API)
+│   └── test_figures.py                   # F1/F2 count derivation + figure construction on a tiny fixture
 ├── docs/
 │   ├── obsidian/                         # Shared Obsidian vault (team research notes; open folder as vault)
 │   │   ├── Home.md                       # Map of content; START HERE
@@ -128,6 +134,11 @@
 * `data/preprocess.py`: Reads `combined.jsonl`, builds `(prompt, completion)` pairs for completion-only SFT, applies the `--variant whole|lead|body` truncation probe (`make_variant`), truncates each article to `MAX_LENGTH-256` tokens so the summary always survives (HeSum articles are long — median ~2500 tokens; without this, completion-only loss goes nan), splits 80/10/10, saves Arrow splits to `outputs/data/processed/<variant>/`. `build_prompt`/`make_variant` are the single source of truth, reused by `evaluation/predict.py`. `--clean` selects the opt-in clean pipeline profile: rewrites pipe/bullet references into prose (`normalize_summary`), builds the hardened prompt (`build_prompt(clean=True)`), and writes to `outputs/data/processed/<variant>-clean/` (all 10k records). Add `--drop-roundups` to also remove 3+ pipe roundups (~2.4k records) into `<variant>-clean-drop/`; the raw pipeline is never clobbered.
 * `data_curation/`: **The current data pipeline**, superseding `data/clean.py`'s `--clean` profile. Turns raw HeSum into `artifacts/final_clean_hesum.json` (5,854 × `{hesum_id, text, headline}`) through eight stages: download → tail-boilerplate trim → two independent deterministic keep-maps (DictaLM token budget ≤ 4000 on text+headline; headline pipes ≤ 1) → intersect into `source_filter_input.json` (6,486) → `gpt-5.6-luna` source-usability labels (5,854 usable / 632 unusable) → `gpt-5.6-luna` headline keep-or-replace (2,785 kept / 3,069 rewritten) → final assembly. Rebuild with `python -m data_curation.build_curated_dataset`; only the two `artifacts/*_results.json` model outputs need shipping, everything else regenerates, and the rebuild aborts unless the regenerated `source_filter_input.json` matches the sha256 the model actually saw. Local, CPU + OpenAI Batch API. Full reference: `data_curation/CURATION_ROADMAP.md`; findings and critique: `docs/obsidian/Dataset Defect Taxonomy.md`.
 * `data_curation/model_curation/*/[filter|refine]_prompt_schema.py`: The two curation prompts and their strict JSON schemas. **These prompts are the measurement instrument** — the six source labels' exact wording (including the "Do not use this when..." guards that keep LLM labeling stable) defines what the counts mean, so treat edits as changing the experiment. Note the asymmetry: the source stage emits a *label* per row, while the headline stage emits only `replacement_headline: null | string` with **no reason code**, so the 3,069 rewrites are unexplained per row and must be sub-typed post hoc from the `(original, replacement)` diff.
+* `data_curation/utils/lzma_shim.py`: `ensure_lzma_importable()` installs a process-local stub `_lzma` module when the local pyenv build has no compiled `_lzma` extension (a pre-existing environment issue), so `import datasets` (needed by `download_hesum.py`) works without a real xz codec — HeSum ships as plain parquet, so nothing actually needs it. Called once, before `import datasets`. `download_hesum.py` and `filter_over_token_budget.load_dictalm_tokenizer()` also pass `token=False` to their Hub calls, since this machine's cached HF token is invalid and would otherwise turn public-repo requests into 401s.
+* `data_curation/analysis/`: Turns the curation-pipeline artifacts into the row-label artifact and the F1/F2 paper figures specified in `docs/superpowers/specs/2026-07-26-dataset-review-experimental-design.md` (section 2) and `docs/obsidian/Paper Figures.md`. Local, CPU-only.
+  * `row_labels.py`: Builds `artifacts/row_labels.json` — one row per HeSum id (10,000), joining `raw_hesum.json`/`tail_boilerplate_removed.json`, the two deterministic keep-maps, and the two supplied model-curation result files. `article_tokens`/`headline_tokens` are tokenized fresh (the DictaLM tokenizer, article and headline counted separately — the existing `dictalm_token_counts.json` only stores their sum). `classify_headline_edit()` sub-types each of the 3,069 rewrites from the `(original, replacement)` string pair alone (`pipes_removed` → `boilerplate_stripped` → `truncation_repaired` → `light_edit`/`full_rewrite`, first match wins) — a documented heuristic, not a new LLM label. `compute_lead_overlap()` is the reference-free lead-bias probe: fraction of a headline's Hebrew words also in the article's first 50 Hebrew words. `validate_counts()` checks the fresh build against the pre-registered verified counts (spec section 1) and raises if they drift. `load_row_labels()` builds the artifact on first use if missing.
+  * `plotting.py`: The shared "amlk" Plotly template (`apply_house_style`, `save_figure`) every figure routes through — Helvetica-family font, left-aligned bold titles with a muted subtitle line, an Okabe-Ito colorblind-safe categorical palette (`CATEGORICAL_PALETTE`), a perceptually-ordered sequential palette for ordinal 1-to-5 data (`ordinal_palette`), and a source-note annotation. `save_figure` writes interactive HTML plus text-preserving vector SVG/PNG (via kaleido) to `outputs/figures/`, never a flattened-path export.
+  * `figures.py`: F1 (`build_f1_curation_funnel` — Sankey, the two deterministic filters shown as separate converging flows, not one combined node) and F2 (`build_f2_defect_prevalence` — horizontal bars of the analysis-strata sizes, `other_unusable` broken into its three constituent labels). Both read only `row_labels.load_row_labels()`, so the pipeline's real counts and the figures cannot drift apart. `python -m data_curation.analysis.figures` writes both to `outputs/figures/`.
 * `data/clean.py`: Reference-summary cleaning for the `--clean` profile. **Superseded by `data_curation/`** — kept so the raw pipeline stays byte-for-byte reproducible; do not use for new work. `normalize_summary` rewrites HeSum's `"headline | headline | headline"` pipe/bullet digests into natural prose (periods/commas, terminal period, idempotent on clean text); `is_roundup_digest`/`pipe_segments` flag the worst multi-headline roundups for removal. Import-light (stdlib only, like `style_labels.py`) so it works even where the `datasets` import is broken. Applied at the single choke point in `preprocess.py`, so both training targets and eval references are cleaned at once.
 * `training/config.py`: Shared constants: `MODEL_ID="Qwen/Qwen3-2B"`, `METHOD_PRESETS` (the qlora/lora/full deltas), `LoRAConfig` (r=32, alpha=64, q/k/v/o + gate/up/down_proj), `TrainingConfig`, `WANDB_PROJECT`, and `dataset_repo`/`model_repo` Hub-id helpers.
 * `training/train.py`: One trainer for all three regimes (`--method qlora|lora|full`). Trains with `completion_only_loss=True`, logs to wandb, saves the adapter; `--push-to-hub` or `--submit-hf` push to the Hub. Inference is NOT here — that's `evaluation/predict.py`.
@@ -146,7 +157,7 @@
 * `notebooks/evaluation_observation.ipynb`: The **evaluation-observation** stage. A self-bootstrapping Colab notebook that runs the *real* evaluation functions live and **displays** the per-example process (article → model summary → reference → judge faithfulness/fluency → error-analysis failure labels) for finetuned/base/gemini. Loads existing Hub predictions (finetuned/base at repo root, gemini under `reports/`) and generates fresh summaries on a T4. Judge/error/browse cells are API+CPU; only the generation cell needs a GPU.
 * `notebooks/cluster_topics_databricks.py`: Databricks source-format notebook (`# Databricks notebook source` / `# COMMAND ----------` cell markers) driving `evaluation/topic_clustering.py` and `evaluation/style_labels.py`. Manual, occasional run on a Databricks GPU cluster — the GPU is for speed, not required (the embedding model is 0.4B params, encoder-only, the same class of job as the local-CPU AlephBERT BERTScore step). Clones the repo (or reuses an uploaded Workspace copy) so it calls the same tested functions rather than duplicating logic; computes both `topic_label` (BERTopic) and `style_label` (regex) over the same records. Plots (all inline via `displayHTML`, small enough to skip the DBFS round-trip): a `plot_topic_sizes` cluster-size bar chart, an interactive 2D/3D cluster scatter (`plot_clusters(dimensions=2|3)`, `plot_dimensions` widget; written to DBFS + iframe-embedded since 10k-doc hovers exceed the ~20 MB cell-output cap), a `plot_style_distribution` bar chart, and a topic×style stacked bar chart alongside the crosstab table. Writes one `topics.jsonl`/`topics-summary.json` (carrying both label fields) to DBFS for manual download into `outputs/data/raw/` and `outputs/results/`. Widgets expose `min_cluster_size`/`min_samples`/`reduce_outliers`/`nr_topics`/`merge_duplicate_labels`/`topic_size_plot_top_n`/`plot_dimensions` so noise/near-duplicate-topic tuning (see `topic_clustering.py`) doesn't require editing the notebook. A scoped, one-off departure from AMLK's default local/HF-Jobs/Colab stack — no agent-driven Databricks deployment (no MCP connection today), the notebook is handed off for manual import/run.
 * `scripts/run_nb_cell.py`: Agent cell-runner — reads the notebook with `nbformat` and execs a chosen code cell / range against a persistent Colab session via `colab exec` (the Colab CLI has no native `.ipynb` runner). `--list` shows cell indices; the caller owns `colab new`/`stop`. This is how an agent observes the eval cell-by-cell.
-* `tests/`: 59 fast behavioral tests + 2 gated live tests (Gemini judge; BERTopic fit + Gemini topic naming + plot), all passing.
+* `tests/`: 62 fast behavioral tests + 2 gated live tests (Gemini judge; BERTopic fit + Gemini topic naming + plot), all passing.
 
 ---
 
@@ -240,6 +251,20 @@ python -m data_curation.model_curation.source_filter.filter_records          # O
 python -m data_curation.model_curation.headline_target_curation.refine_records  # OpenAI Batch API
 ```
 
+**Dataset-review analysis (row-label artifact + F1/F2 figures):**
+```bash
+source .env && source .venv/bin/activate
+
+# Requires the pipeline artifacts above to exist first (raw_hesum.json, tail_boilerplate_removed.json,
+# the two keep-maps). Builds artifacts/row_labels.json (10,000 rows) and validates it against the
+# pre-registered verified counts.                                                        [local, CPU]
+python -m data_curation.analysis.row_labels
+
+# Draws F1 (curation funnel) and F2 (defect prevalence) straight from row_labels.json, no API spend.
+# Writes interactive HTML + text-preserving SVG/PNG to outputs/figures/.                  [local, CPU]
+python -m data_curation.analysis.figures
+```
+
 **Running tests:**
 ```bash
 source .venv/bin/activate && python -m pytest tests/ -v
@@ -264,6 +289,16 @@ Two model eras established that HeSum, not the model, is the bottleneck. Qwen3-2
 Docs live on branch `docs/dataset-review-pivot`. Vault entry point: `docs/obsidian/Home.md` → `Project Pivot.md`. Qwen-era notes are tagged `#status/superseded` with a banner explaining what still holds.
 
 **Superseded by the above:** the `--clean` profile (`data/clean.py`), the `--variant whole|lead|body` training probe, the Fix Plan phases, and the "next steps" list at the end of this section. Prior-era numbers below remain accurate as history.
+
+---
+
+**2026-07-26 — Row-label artifact + F1/F2 figures built; local pipeline unblocked.** `data_curation/analysis/` added (`row_labels.py`, `plotting.py`, `figures.py`) per spec section 2 and `Paper Figures.md`. Two pre-existing local-environment blockers fixed along the way, both narrowly scoped:
+- **`_lzma` missing** (this pyenv build has no compiled `_lzma` extension, so any `import datasets` failed before touching the network — the same root cause `AGENTS.md` already flagged for `tests/test_download.py`/`test_preprocess.py`). `data_curation/utils/lzma_shim.py` installs a process-local stub `_lzma` module satisfying `lzma.py`'s imports; HeSum is plain parquet so nothing ever needs a real xz codec. `download_hesum.py` calls it before `import datasets`.
+- **Invalid cached HF token** (`~/.cache/huggingface/token` fails `whoami`, turning anonymous-eligible requests into 401s). `download_hesum.py` and `filter_over_token_budget.load_dictalm_tokenizer()` now pass `token=False` for these public repos.
+- With both fixed, ran the real pipeline locally end to end (`download_hesum` → `run_pre_model_cleanup`) and got **exact matches** to every pre-registered count in the spec (722 tail-trims, 2,659 over-budget, 2,412 multi-pipe, 6,486 reached model curation) and **identical id membership** to the supplied `source_filter_results.json` (verified by direct set comparison) — confirms the local rebuild reconstructs the same raw-HeSum row-to-id mapping the original curation run used, which the row-label join depends on. (One loose end: the rebuilt `source_filter_input.json`'s sha256 does not match the value pinned in `build_curated_dataset.py`, despite identical id membership and identical verified counts — likely formatting drift in code since that pin was set, not a content problem. Not chased further since `row_labels.py`/`figures.py` never call `build_curated_dataset.py`'s validator; worth reconciling before the next full `build_curated_dataset` run.)
+- `row_labels.py` output validated against every count in spec section 1 (`validate_counts()`, raises on drift). `plotting.py` is the shared "amlk" Plotly template (Okabe-Ito categorical palette, ordered sequential palette for the future rubric scores, left-aligned editorial titles, text-preserving SVG/PNG export via `kaleido`, added to `requirements.txt` alongside `plotly`). F1/F2 rendered and reviewed as PNG.
+- 3 new fast tests (`test_row_labels.py`, `test_figures.py`); full suite (minus the two pre-existing `_lzma`-blocked files) at 62 passed / 2 skipped.
+- Remaining from `Paper Figures.md`'s sequencing: pilot the rubric judge on a few hundred rows, then the full E1 pass and F3-F5.
 
 ---
 

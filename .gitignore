@@ -24,6 +24,18 @@ __pycache__/
 # Project outputs (checkpoints, predictions, reports)
 outputs/
 
+# data_curation: locally regenerated pipeline artifacts (raw dataset dumps, deterministic keep-maps,
+# the row-label join) — reproducible in minutes via `python -m data_curation.build_curated_dataset`
+# / `python -m data_curation.analysis.row_labels`. Only the two supplied, API-expensive model-curation
+# result files (source_filter_results.json, headline_target_curation_results.json) are checked in.
+data_curation/artifacts/raw_hesum.json
+data_curation/artifacts/tail_boilerplate_removed.json
+data_curation/artifacts/source_filter_input.json
+data_curation/artifacts/headline_pipes_upto_1.json
+data_curation/artifacts/token_budget_upto_4000.json
+data_curation/artifacts/row_labels.json
+data_curation/artifacts/final_clean_hesum.json
+
 # macOS
 .DS_Store
 

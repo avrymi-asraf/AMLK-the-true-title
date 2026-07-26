@@ -35,7 +35,9 @@ def load_dictalm_tokenizer():
     """Load the DictaLM tokenizer used for all token-budget decisions."""
     from transformers import AutoTokenizer
 
-    return AutoTokenizer.from_pretrained(TOKENIZER_NAME)
+    # token=False: the tokenizer repo is public; some local setups carry an invalid cached HF
+    # token that would otherwise turn this anonymous-eligible request into a 401.
+    return AutoTokenizer.from_pretrained(TOKENIZER_NAME, token=False)
 
 
 def count_tokens(tokenizer, text: str) -> int:
