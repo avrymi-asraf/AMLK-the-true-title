@@ -1,6 +1,12 @@
 # Current Results
 
-#status/done
+#status/superseded
+
+> **Qwen era (2026-06). Superseded by the dataset review — see [[Project Pivot]].**
+> These numbers are real and two findings still matter: the v1-to-v2 collapse showed ROUGE was
+> measuring repetition artifacts, and the judge rating the *base* model as more faithful than the
+> fine-tuned one is what eventually pointed at the references rather than the model. The remedies
+> proposed here ([[Fix Plan]]) were overtaken. Nothing on this page describes current work.
 
 First full evaluation on the **whole** variant test set (n=1000). Predictions from HF Jobs training run; scored locally.
 

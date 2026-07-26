@@ -1,6 +1,11 @@
 # Fix Plan
 
-#status/in-progress
+#status/superseded
+
+> **Qwen era (2026-06). Superseded by the dataset review — see [[Project Pivot]].**
+> All three phases ran. Phase 2's outcome — a model producing fluent, correctly formatted Hebrew
+> with wrong facts — is what ended this line of work: it suggested the training targets, not the
+> training setup, were the problem. Current plan: [[Reference Quality Experiment]].
 
 Phased plan from June 2026 discussion. Full Cursor plan: `.cursor/plans/hebrew_summarization_fixes_6d7e5cc1.plan.md`
 

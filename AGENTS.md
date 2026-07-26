@@ -1,6 +1,8 @@
 ## Project Goal
 
-* **Description:** AMLK is a Hebrew **news** summarization research project. The goal is to fine-tune `Qwen/Qwen3-2B` on Hebrew journalism datasets (HeSum, IAHLT summarization_he), evaluate with ROUGE, BERTScore, and LLM-as-judge, and produce a research paper and presentation. Design choices are informed by **English summarization literature** (lead bias, metric limits, strong baselines) without re-running English experiments. Evaluation includes an **advanced-model baseline** (e.g. Gemini API on the same test set and prompt) so metrics can be interpreted against a stronger system. A **truncation / positional-shortcut probe** trains separate models on Whole text, Lead-only, and Body-only inputs. Optional **headline-style control** varies the instruction (short headline vs longer summary). **Error analysis** labels a sampled set of predictions for failure types common in the literature. Runs locally or on HuggingFace Jobs; all scripts are command-line Python.
+* **Description (current, since 2026-07-26):** AMLK is a **review of HeSum as a training resource** for Hebrew news headline generation. Two model eras (Qwen3-2B, then DictaLM) established that the bottleneck is the dataset, not the model: HeSum is scraped, its "summaries" are news-site subheadings, and a large fraction are unfit as training targets. Of 10,000 raw rows, 5,854 survive curation and **52.4% of survivors needed their headline rewritten**. The project now audits those defects (`data_curation/`), measures whether the defects matter and whether the repair helped, and reports it as a dataset review. **Training is owned externally** — we own the audit, the figures, and the post-training evaluation. The lead-bias question survives as a continuous per-row covariate rather than a training-variant probe. Read `docs/obsidian/Project Pivot.md` first; the pre-registered design is `docs/superpowers/specs/2026-07-26-dataset-review-experimental-design.md`.
+
+* **Description (original, retained for context):** AMLK is a Hebrew **news** summarization research project. The goal is to fine-tune `Qwen/Qwen3-2B` on Hebrew journalism datasets (HeSum, IAHLT summarization_he), evaluate with ROUGE, BERTScore, and LLM-as-judge, and produce a research paper and presentation. Design choices are informed by **English summarization literature** (lead bias, metric limits, strong baselines) without re-running English experiments. Evaluation includes an **advanced-model baseline** (e.g. Gemini API on the same test set and prompt) so metrics can be interpreted against a stronger system. A **truncation / positional-shortcut probe** trains separate models on Whole text, Lead-only, and Body-only inputs. Optional **headline-style control** varies the instruction (short headline vs longer summary). **Error analysis** labels a sampled set of predictions for failure types common in the literature. Runs locally or on HuggingFace Jobs; all scripts are command-line Python.
 
 ---
 
@@ -36,6 +38,22 @@
 │   ├── prompts.py                        # Shared prompt templates (raw + hardened clean) + probe make_variant
 │   ├── clean.py                          # Clean-profile reference normalization (pipes/bullets→prose) + digest filter
 │   └── preprocess.py                     # Pipeline step 2: prompt/completion pairs + probe variants, 80/10/10 split
+├── data_curation/                        # CURRENT pipeline: audit + repair HeSum → final_clean_hesum.json
+│   ├── CURATION_ROADMAP.md               # Authoritative stage-by-stage reference (paths, shapes, counts)
+│   ├── build_curated_dataset.py          # One entry point: download → deterministic cleanup → validate → final dataset
+│   ├── data_download/download_hesum.py   # Stage 1: biunlp/HeSum → raw_hesum.json (10,000 × {id,text,headline})
+│   ├── pre_model_cleanup/
+│   │   ├── run_pre_model_cleanup.py      # Stages 2-5 driver; builds source_filter_input.json
+│   │   ├── tail_boilerplate_trimming/    # Stage 2: find + strip repeated scraped tails (722 rows affected)
+│   │   ├── dictalm_token_budget_filtering/  # Stage 3: keep map, tokens(text)+tokens(headline) ≤ 4000 (2,659 removed)
+│   │   └── multi_pipe_headline_filtering/   # Stage 4: keep map, headline.count("|") ≤ 1 (2,412 removed)
+│   ├── model_curation/
+│   │   ├── openai_batch_api/openai_client.py  # Batch API mechanics: submit, poll, collect, resume
+│   │   ├── source_filter/                # Stage 6: 6 usability labels over 6,486 rows (5,854 usable)
+│   │   └── headline_target_curation/     # Stage 7: keep-or-replace headline target (3,069 rewritten)
+│   ├── final_dataset/build_final_dataset.py   # Stage 8: assemble + validate final_clean_hesum.json
+│   ├── utils/                            # json_io, paths
+│   └── artifacts/                        # Supplied: source_filter_results.json, headline_target_curation_results.json
 ├── training/
 │   ├── __init__.py
 │   ├── config.py                         # MODEL_ID, METHOD_PRESETS, LoRAConfig, TrainingConfig, WANDB_PROJECT, repo helpers
@@ -75,9 +93,19 @@
 │   └── test_viewer.py                    # predictions-viewer load/keyword-search/discovery logic
 ├── docs/
 │   ├── obsidian/                         # Shared Obsidian vault (team research notes; open folder as vault)
+│   │   ├── Home.md                       # Map of content; START HERE
+│   │   ├── Project Pivot.md              # The three eras (Qwen → DictaLM → dataset review) and why each ended
+│   │   ├── Data Curation Pipeline.md     # The 8 stages, verified counts, design consequences
+│   │   ├── Dataset Defect Taxonomy.md    # 6 source labels verbatim, analysis strata, why length is a covariate
+│   │   ├── Reference Quality Rubric.md   # The 4-dimension judge — the instrument everything rests on
+│   │   ├── Reference Quality Experiment.md  # E1-E4 readable map (full detail in the spec)
+│   │   ├── Training Handoff Contract.md  # Boundary with externally owned training; frozen split is ours
+│   │   ├── Paper Figures.md              # 9-figure manifest, conventions, compute placement, sequencing
+│   │   └── (Qwen-era notes, #status/superseded: Current Results, Fix Plan, Prediction Failure Modes, …)
 │   ├── ANLP Project abstract.md          # The research proposal this project implements
 │   ├── 2026-06-12-qlora-training-job-postmortem.md  # Full-run post-mortem: cost, root cause, probe-run recommendations
 │   └── superpowers/
+│       ├── specs/2026-07-26-dataset-review-experimental-design.md  # CURRENT pre-registered design (E1-E4)
 │       ├── specs/2026-05-26-training-pipeline-design.md
 │       └── plans/2026-05-26-stage-a-training-pipeline.md
 ├── outputs/
@@ -98,7 +126,9 @@
 
 * `data/download.py`: Downloads Hebrew summarization datasets (biunlp/HeSum; IAHLT/summarization_he inaccessible with current credentials), normalises to `{text, summary, source}`, writes `outputs/data/raw/combined.jsonl`.
 * `data/preprocess.py`: Reads `combined.jsonl`, builds `(prompt, completion)` pairs for completion-only SFT, applies the `--variant whole|lead|body` truncation probe (`make_variant`), truncates each article to `MAX_LENGTH-256` tokens so the summary always survives (HeSum articles are long — median ~2500 tokens; without this, completion-only loss goes nan), splits 80/10/10, saves Arrow splits to `outputs/data/processed/<variant>/`. `build_prompt`/`make_variant` are the single source of truth, reused by `evaluation/predict.py`. `--clean` selects the opt-in clean pipeline profile: rewrites pipe/bullet references into prose (`normalize_summary`), builds the hardened prompt (`build_prompt(clean=True)`), and writes to `outputs/data/processed/<variant>-clean/` (all 10k records). Add `--drop-roundups` to also remove 3+ pipe roundups (~2.4k records) into `<variant>-clean-drop/`; the raw pipeline is never clobbered.
-* `data/clean.py`: Reference-summary cleaning for the `--clean` profile. `normalize_summary` rewrites HeSum's `"headline | headline | headline"` pipe/bullet digests into natural prose (periods/commas, terminal period, idempotent on clean text); `is_roundup_digest`/`pipe_segments` flag the worst multi-headline roundups for removal. Import-light (stdlib only, like `style_labels.py`) so it works even where the `datasets` import is broken. Applied at the single choke point in `preprocess.py`, so both training targets and eval references are cleaned at once.
+* `data_curation/`: **The current data pipeline**, superseding `data/clean.py`'s `--clean` profile. Turns raw HeSum into `artifacts/final_clean_hesum.json` (5,854 × `{hesum_id, text, headline}`) through eight stages: download → tail-boilerplate trim → two independent deterministic keep-maps (DictaLM token budget ≤ 4000 on text+headline; headline pipes ≤ 1) → intersect into `source_filter_input.json` (6,486) → `gpt-5.6-luna` source-usability labels (5,854 usable / 632 unusable) → `gpt-5.6-luna` headline keep-or-replace (2,785 kept / 3,069 rewritten) → final assembly. Rebuild with `python -m data_curation.build_curated_dataset`; only the two `artifacts/*_results.json` model outputs need shipping, everything else regenerates, and the rebuild aborts unless the regenerated `source_filter_input.json` matches the sha256 the model actually saw. Local, CPU + OpenAI Batch API. Full reference: `data_curation/CURATION_ROADMAP.md`; findings and critique: `docs/obsidian/Dataset Defect Taxonomy.md`.
+* `data_curation/model_curation/*/[filter|refine]_prompt_schema.py`: The two curation prompts and their strict JSON schemas. **These prompts are the measurement instrument** — the six source labels' exact wording (including the "Do not use this when..." guards that keep LLM labeling stable) defines what the counts mean, so treat edits as changing the experiment. Note the asymmetry: the source stage emits a *label* per row, while the headline stage emits only `replacement_headline: null | string` with **no reason code**, so the 3,069 rewrites are unexplained per row and must be sub-typed post hoc from the `(original, replacement)` diff.
+* `data/clean.py`: Reference-summary cleaning for the `--clean` profile. **Superseded by `data_curation/`** — kept so the raw pipeline stays byte-for-byte reproducible; do not use for new work. `normalize_summary` rewrites HeSum's `"headline | headline | headline"` pipe/bullet digests into natural prose (periods/commas, terminal period, idempotent on clean text); `is_roundup_digest`/`pipe_segments` flag the worst multi-headline roundups for removal. Import-light (stdlib only, like `style_labels.py`) so it works even where the `datasets` import is broken. Applied at the single choke point in `preprocess.py`, so both training targets and eval references are cleaned at once.
 * `training/config.py`: Shared constants: `MODEL_ID="Qwen/Qwen3-2B"`, `METHOD_PRESETS` (the qlora/lora/full deltas), `LoRAConfig` (r=32, alpha=64, q/k/v/o + gate/up/down_proj), `TrainingConfig`, `WANDB_PROJECT`, and `dataset_repo`/`model_repo` Hub-id helpers.
 * `training/train.py`: One trainer for all three regimes (`--method qlora|lora|full`). Trains with `completion_only_loss=True`, logs to wandb, saves the adapter; `--push-to-hub` or `--submit-hf` push to the Hub. Inference is NOT here — that's `evaluation/predict.py`.
 * `training/train_hf_job.py`: Self-contained PEP 723 UV script submitted inline by `train.py --submit-hf`. Reads METHOD/VARIANT/DATASET_REPO/OUTPUT_REPO/WANDB_PROJECT from env, trains on the cloud GPU, then generates fine-tuned + zero-shot base test predictions (PEFT `disable_adapter`) and pushes the adapter + `predictions-finetuned.jsonl` / `predictions-base.jsonl` to the Hub. Never run directly.
@@ -194,6 +224,22 @@ source .venv/bin/activate && streamlit run evaluation/viewer/app.py
 # side-by-side comparison across systems (finetuned/base/gemini). Local, CPU-only, read-only.
 ```
 
+**Rebuilding the curated dataset (current pipeline):**
+```bash
+source .env && source .venv/bin/activate
+
+# Requires the two supplied model-result files in data_curation/artifacts/:
+#   source_filter_results.json, headline_target_curation_results.json
+# Downloads HeSum, regenerates every deterministic cleanup artifact, validates the supplied
+# results against the rebuilt input sha256, then writes artifacts/final_clean_hesum.json (5,854).
+python -m data_curation.build_curated_dataset          # [local, CPU]
+
+# Individual stages can be run alone; each is a module with its own __main__:
+python -m data_curation.pre_model_cleanup.run_pre_model_cleanup
+python -m data_curation.model_curation.source_filter.filter_records          # OpenAI Batch API
+python -m data_curation.model_curation.headline_target_curation.refine_records  # OpenAI Batch API
+```
+
 **Running tests:**
 ```bash
 source .venv/bin/activate && python -m pytest tests/ -v
@@ -202,6 +248,24 @@ source .venv/bin/activate && python -m pytest tests/ -v
 ---
 
 ## Status - remember to update it
+
+**2026-07-26 — PROJECT PIVOT: from model-building to dataset review. This supersedes the framing of every entry below.**
+
+Two model eras established that HeSum, not the model, is the bottleneck. Qwen3-2B v3 (3 epochs, full LoRA) produced fluent correctly-formatted Hebrew with wrong facts, and the LLM judge rated the *untuned base* as more faithful (2.98) than the fine-tuned model (2.64) — a model reliably learning its targets' *style* but not their content. Swapping to `dicta-il/dictalm2.0-instruct` (`notebooks/dictalm_hesum_zero_shot.ipynb`, 2026-07-09) gave a clear qualitative jump, but the outputs were often *better* than the references they were scored against. That moved the investigation to the data.
+
+**Finding: HeSum is not a gold dataset.** It is scraped, its summaries are news-site extended subheadings rather than task-written summaries, and its construction (documented honestly in the HeSum paper) produces concrete defects — multi-headline digests, roundups covering several stories, articles whose substance is in an embedded video, scraped boilerplate tails. Verified counts from `data_curation/artifacts` on 2026-07-26: 722 rows had a removable tail; **2,659 (26.6%)** exceed a 4,000 DictaLM-token budget on text+headline; **2,412 (24.1%)** have 2+ pipes in the headline; the intersection leaves 6,486 (**35.1% removed** before any model looked at a row); `gpt-5.6-luna` labeled 5,854 usable / 632 unusable; and of the usable rows **3,069 (52.4%) needed their headline rewritten**. Final dataset: **5,854** records, a 41.5% net reduction. (Earlier recollections of "4,096 tokens, ~20%" were wrong on both threshold and magnitude.)
+
+**The project is now a dataset review** — audit the defects, repair them, measure whether the defects mattered and whether the repair helped. Four experiments, pre-registered in `docs/superpowers/specs/2026-07-26-dataset-review-experimental-design.md`, one per curation action: **E1** diagnosis (are flagged rows genuinely worse?), **E2** repair graded, **E3** repair forced-choice, **E4** whole intervention. Primary instrument is a **rubric judge that reads the article** and scores a headline on four ordinal dimensions (faithfulness / single-focus / informativeness / cleanliness) — reference-free, so it sidesteps the confound that our curated references are LLM-written. ROUGE demoted to appendix-only; AlephBERT BERTScore is a secondary triangulation. Statistics are rank-based throughout (Mann-Whitney + Holm, **Cliff's delta as the conclusion-carrying statistic**, bootstrap CIs, ordinal logistic regression for confound control); no Kruskal-Wallis omnibus, since the strata overlap and violate its independence assumption.
+
+**Two methodological decisions worth not re-litigating.** (1) `over_token_budget` is **not** an analysis stratum: the filter is a hard cut at 4,000 tokens, so clean and over-budget rows share **no common support** in article length, making matching impossible and regression identification purely extrapolative. It is an arbitrary cut on a continuous covariate, so length is modeled continuously over all 10,000 rows — which also *recovers* the lead-bias question in a stronger form than the old `--variant whole|lead|body` probe. (2) No new LLM labeling pass is needed for the strata: both deterministic keep-maps are persisted as full 10,000-id boolean maps, so stratum membership is a join.
+
+**Division of labour: training is owned externally.** We own the audit, the nine-figure set (`docs/obsidian/Paper Figures.md`), and the post-training evaluation. The interface is `docs/obsidian/Training Handoff Contract.md`, whose non-negotiable terms are that **we produce the frozen split** (arms trained on independently drawn splits cannot be compared) and that **arm A is size-matched to arm B** (otherwise data quality is confounded with data quantity). Predictions are preferred over checkpoints so no model ever loads locally.
+
+Docs live on branch `docs/dataset-review-pivot`. Vault entry point: `docs/obsidian/Home.md` → `Project Pivot.md`. Qwen-era notes are tagged `#status/superseded` with a banner explaining what still holds.
+
+**Superseded by the above:** the `--clean` profile (`data/clean.py`), the `--variant whole|lead|body` training probe, the Fix Plan phases, and the "next steps" list at the end of this section. Prior-era numbers below remain accurate as history.
+
+---
 
 **Stages A + B complete as of 2026-06-12.** Stack: trl 1.6.0, transformers 5.11, peft 0.19, wandb 0.27.
 - `data/download.py` — 10,000 records from biunlp/HeSum in `outputs/data/raw/combined.jsonl`. IAHLT/summarization_he is inaccessible (not on HF Hub with current credentials).

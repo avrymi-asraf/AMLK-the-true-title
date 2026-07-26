@@ -17,17 +17,27 @@ How AMLK scores predictions and what to trust for Hebrew.
 - Flexible word order, ktiv haser/male
 - **Negative correlation with human judgment** (~−0.16 PCC)
 
-**Planned:** raw + **normalized** ROUGE (strip niqqud, normalize final letters) — `TODO.md` B'.2.
+**Done:** `evaluate.py` reports raw + **normalized** ROUGE (`normalize_hebrew` strips niqqud and folds
+final-form letters).
 
-Use ROUGE to compare with HeSum Table 3, not as sole quality signal.
+**Now appendix-only.** Under the dataset review ROUGE never carries a claim — it is reported solely for
+comparability with HeSum Table 3. The -0.16 correlation is reason enough, and the [[Project Pivot|v1-to-v2
+collapse]] showed it can be inflated outright by repetition artifacts.
 
 ## BERTScore
 
-**Current:** `xlm-roberta-large` (multilingual), CPU-pinned in `evaluate.py`.
-
-**Planned (HeSum-aligned):** `onlplab/alephbert-base` — see [[HeSum Paper Insights#AlephBERT for BERTScore]].
+**Done:** default is `onlplab/alephbert-base` (HeSum-aligned, far more discriminative than the old
+`xlm-roberta-large`, which clustered everything near 0.85 regardless of quality). Override with
+`--bertscore-model`. CPU-pinned in `evaluate.py`. See [[HeSum Paper Insights#AlephBERT for BERTScore]].
 
 Summaries are short → AlephBERT 512-token limit is fine.
+
+**Note on scale:** xlm-r numbers (~0.85) and AlephBERT numbers (~0.35-0.50) are not comparable. Any
+table mixing them must say so.
+
+**Role now:** secondary. Cheap, deterministic, reproducible, and it triangulates the rubric judge from a
+different instrument — but it compares against a reference, and under the dataset review the reference is
+the thing under suspicion.
 
 ## LLM-as-judge
 
@@ -42,11 +52,32 @@ Faithfulness + fluency (1–5), JSON reply. Default in recent runs: `meta-llama/
 
 `evaluation/error_analysis.py`: hallucination, omission, entity_or_number_error, **lead_copying**, fluency_problem.
 
+Applies to model *outputs*. The dataset review needed a taxonomy for *references* instead, which is why
+[[Reference Quality Rubric]] exists rather than reusing these labels.
+
+## The rubric judge — primary instrument for the dataset review
+
+Every metric above compares two strings, which is the wrong shape for "is this reference any good?".
+[[Reference Quality Rubric]] specifies a judge that reads the **article** and scores a headline directly
+on four ordinal dimensions — faithfulness, single-focus, informativeness, cleanliness.
+
+Three properties that matter here:
+
+- **Reference-free.** It never compares against another headline, so it is immune to the confound that
+  our curated references were LLM-written.
+- **Ordinal, so no means.** Report distributions and use rank-based tests. See
+  [[Reference Quality Rubric#Scores are ordinal]].
+- **Validated before use.** Test-retest kappa plus a 150-row human round. Unlike the judge described
+  above, it is not trusted on assertion.
+
+The same instrument scores dataset references and model outputs, which puts both on one axis.
+
 ## What to foreground in the paper
 
-1. AlephBERT BERTScore  
-2. LLM judge (non-Gemini family preferred)  
-3. Qualitative / failure-type rates  
-4. ROUGE (comparability + caveat from HeSum)
+1. **Rubric judge sub-scores** — primary, for both references and model outputs
+2. **Blind pairwise win rates** — null-calibrated, the credibility anchor
+3. AlephBERT BERTScore — secondary triangulation
+4. Qualitative examples and failure-type rates
+5. ROUGE — appendix, comparability with HeSum Table 3 only
 
-Related: [[Current Results]], [[Fix Plan#Phase 0]], [[Fix Plan#Phase 3]]
+Related: [[Reference Quality Rubric]], [[Reference Quality Experiment]], [[HeSum Paper Insights]], [[Current Results]]

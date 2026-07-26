@@ -1,5 +1,12 @@
 # Prediction Failure Modes
 
+#status/superseded
+
+> **Qwen era (2026-06). Superseded by the dataset review — see [[Project Pivot]].**
+> Retained because the lead-copying measurement (143/1000 predictions with >60% lead overlap)
+> is the ancestor of the continuous lead-overlap covariate now used in [[Lead Bias Probe]],
+> and because the failure taxonomy informed the rubric dimensions in [[Reference Quality Rubric]].
+
 > **v3 curated examples:** upload [failure-examples.docx](../failure-examples.docx) to Google Docs (or open in Word).
 
 Analysis of all **1000** fine-tuned predictions (`outputs/results/predictions-finetuned.jsonl`), June 2026.

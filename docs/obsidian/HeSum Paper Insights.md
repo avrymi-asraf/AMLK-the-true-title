@@ -12,6 +12,40 @@ Paper: **HeSum: a Novel Dataset for Abstractive Text Summarization in Hebrew**
 - Morphologically rich Hebrew → n-gram metrics undercount valid paraphrases
 
 AMLK uses `biunlp/HeSum` via `data/download.py` → `outputs/data/raw/combined.jsonl`.
+The curation pipeline downloads it separately via `data_curation/data_download/download_hesum.py`.
+
+## How HeSum was built, and what that implies (2026-07-26)
+
+Re-read as dataset criticism rather than as a benchmark to beat. This section is the literature basis
+for the [[Project Pivot]].
+
+The paper is honest about its construction, and the construction is the source of the defects we found:
+
+- **Scraped, not authored.** Articles and summaries were collected from Hebrew news sites. Nobody wrote
+  a summary for the summarization task; the "summary" field is whatever the site published as an
+  extended subheading.
+- **Subheadings serve the publisher, not the reader of a benchmark.** A subheading exists to draw a
+  click. That makes teasers, hooks, and promotional phrasing structurally likely rather than accidental
+  — which is why `informativeness` is a separate dimension in [[Reference Quality Rubric]].
+- **No filtering for one-story-per-row.** Press reviews, roundups, and digests were collected like any
+  other article, so a single "summary" can bundle several unrelated headlines. We measured 8.8% of
+  labeled rows as multi-item, plus 24.1% of the corpus carrying two or more pipes in the headline.
+- **Scraping artifacts survive into the fields.** Site labels, credits, category tags, and boilerplate
+  tails appear inside summaries. 722 rows had a repeated tail removable by pure string matching alone.
+
+**What this changes about the SOTA table below.** Those ROUGE numbers are computed against these
+references. A model that scores 17.5 ROUGE-1 is 17.5-similar to a subheading that may be a three-headline
+digest. High agreement with a defective reference is not evidence of quality, and this is the same logic
+as the paper's own finding that ROUGE correlates about -0.16 with human judgement here. Our conclusion
+goes one step further than the paper's: the problem is not only that ROUGE is a poor metric for Hebrew,
+it is that a meaningful share of the targets are not summaries.
+
+**What the paper already told us and we initially under-weighted.** The 90th-percentile article is about
+5,276 tokens. Any 4,000-token budget therefore excludes a large, non-random slice of the corpus — see
+the tension recorded in [[Lead Bias Probe]]. And "professional extended subheadings" was always a
+description of provenance, not a quality guarantee.
+
+Full defect counts and label definitions: [[Dataset Defect Taxonomy]].
 
 ## HeSum SOTA (Table 3)
 

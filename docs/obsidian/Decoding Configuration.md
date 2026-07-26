@@ -1,5 +1,12 @@
 # Decoding Configuration
 
+#status/superseded
+
+> **Qwen era (2026-06). Superseded — see [[Project Pivot]].**
+> The anti-degeneration settings here are still sound and the training owner should use equivalents,
+> but the decode config is no longer something we tune. Per [[Training Handoff Contract]] it must be
+> identical across arms and recorded in the returned manifest.
+
 Current generation in `training/train_hf_job.py` (post-training inference):
 
 ```python

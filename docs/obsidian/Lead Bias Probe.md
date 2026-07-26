@@ -2,6 +2,38 @@
 
 Research question: does the fine-tuned model **aggregate global context** or **latch onto the lead**?
 
+## Reframed for the dataset review (2026-07-26)
+
+The question survives the [[Project Pivot]], in better shape, but the *design* below is superseded.
+
+**Why the old design cannot work as written.** It presupposes trustworthy references. Measuring lead
+reliance against gold summaries that are themselves lead-aligned news subheadings mostly measures the
+references, not the model — and [[Dataset Defect Taxonomy]] establishes that a large fraction of those
+references are unfit as targets at all.
+
+**Tension with the curation pipeline.** The token-budget filter in [[Data Curation Pipeline]] drops every
+row over 4,000 tokens — 2,659 rows, 26.6% of the corpus — which is exactly the long-article tail where
+lead bias is most measurable. A short article has little distinction between lead and body; a 6,000-token
+one has a great deal. Curation is convenient for training and destructive for this probe.
+
+**The resolution.** Stop treating input slicing as a training variant and treat lead overlap as a
+**continuous per-row covariate** computed over all 10,000 rows, including the ones the filter removed:
+
+- `headline_lead_overlap` — token overlap between the headline and the article's first N tokens
+- Regressed against `log(article_tokens)` alongside the rubric sub-scores from [[Reference Quality Rubric]]
+- Reported as figure F5 in [[Paper Figures]], two panels on a shared length axis
+
+This is strictly more informative than the three-variant training probe. It uses every row rather than
+three subsets, it needs no extra training runs, and it separates two things the old design conflated:
+whether *references* are lead-aligned (a dataset property, measurable now) and whether a *model* relies
+on the lead (a model property, measurable from the arms described in [[Training Handoff Contract]]).
+
+The `--variant whole|lead|body` machinery in `data/preprocess.py` stays in the tree but is not used.
+
+Everything below is the Qwen-era design, retained for the record.
+
+---
+
 ## Reviewer redesign (`docs/research-proposal-revised.md`)
 
 **Old design (data question):** train separate models on whole / lead / body slices.  

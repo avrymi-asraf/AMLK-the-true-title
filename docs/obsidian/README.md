@@ -13,7 +13,16 @@ This folder is a **shared knowledge base** for the AMLK Hebrew summarization pro
 - Notes use `[[wikilinks]]` between topics.
 - Code paths are relative to the repo root (`AMLK-the-true-title/`).
 - Results under `outputs/results/` are gitignored; paths are still cited for local runs.
-- Status tags: `#status/done` `#status/planned` `#status/blocker`
+- Status tags: `#status/done` `#status/planned` `#status/in-progress` `#status/blocker` `#status/superseded`
+
+### `#status/superseded`
+
+Marks a note whose conclusions were overtaken by later work. Superseded notes are **kept, not deleted** —
+the project changed direction twice and the reasoning behind each turn is part of the research record.
+
+A superseded note carries a blockquote banner directly under its title stating which era it belongs to,
+what still holds, and where current work lives. Read the banner before trusting anything below it. The
+Qwen-era notes listed in [[Home]] are all in this state; [[Project Pivot]] explains why.
 
 ## Sync
 

@@ -1,5 +1,12 @@
 # Training Objective
 
+#status/superseded
+
+> **Qwen era (2026-06). Superseded — see [[Project Pivot]].**
+> The core observation holds and is now load-bearing for the whole project: the model minimises
+> cross-entropy against its targets, so a noisy target teaches noise faithfully. That is the argument
+> for auditing the references at all. Training itself is now owned externally.
+
 What the model is **trained on** vs what we **evaluate**.
 
 ## Trained on: cross-entropy (completion-only)
