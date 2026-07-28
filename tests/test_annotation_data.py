@@ -47,6 +47,21 @@ def test_build_pairwise_record():
     assert rec["task"] == "pairwise"
 
 
+def test_expand_tasks_filters_by_annotator():
+    worklist = {
+        "rows": [
+            {"hesum_id": "1", "tasks": ["rubric"], "assigned_annotator": "amit"},
+            {"hesum_id": "2", "tasks": ["rubric", "pairwise"], "assigned_annotator": "ofek"},
+        ]
+    }
+    amit_items = expand_tasks(worklist, annotator_id="amit")
+    assert len(amit_items) == 1
+    assert amit_items[0]["hesum_id"] == "1"
+    summary = export_summary([], worklist, annotator_id="ofek")
+    assert summary["rubric_total"] == 1
+    assert summary["pairwise_total"] == 1
+
+
 def test_expand_tasks_and_export_summary():
     worklist = {
         "rows": [
@@ -73,4 +88,5 @@ def test_filter_task_items_remaining():
 
 def test_default_annotations_path_sanitizes():
     path = default_annotations_path("amit.ben")
-    assert "human_annotations_amit_ben.jsonl" in str(path)
+    assert "human_annotations/amit_ben.jsonl" in str(path)
+    assert "artifacts" in str(path)

@@ -2,7 +2,7 @@
 F9a human-validation UI: blind rubric scoring and pairwise comparison over the frozen
 human_validation_worklist.json. Extends the evaluation viewer package alongside the read-only
 predictions browser (evaluation/viewer/app.py). Annotators run locally, CPU-only; progress
-appends to per-annotator JSONL under outputs/results/.
+Progress appends to per-annotator JSONL under `data_curation/artifacts/human_annotations/` (git-tracked).
 
 Run: streamlit run evaluation/viewer/annotate_app.py
 """
@@ -22,6 +22,7 @@ from evaluation.rubric_judge import DIMENSIONS, DIMENSION_QUESTIONS, RUBRIC_LEVE
 from evaluation.viewer.annotation_data import (
     DEFAULT_WORKLIST_PATH,
     TEAM_ANNOTATOR_IDS,
+    annotations_git_path,
     append_annotation,
     build_pairwise_record,
     build_rubric_record,
@@ -74,8 +75,12 @@ def main() -> None:
 
         annotations = load_annotations(ann_path) if annotator_id else []
         completed = completed_keys(annotations)
-        all_items = expand_tasks(worklist)
-        summary = export_summary(annotations, worklist)
+        all_items = expand_tasks(worklist, annotator_id=annotator_id) if annotator_id else []
+        summary = export_summary(annotations, worklist, annotator_id=annotator_id or None)
+        if worklist.get("split_mode") == "disjoint" and annotator_id:
+            assignment = worklist.get("assignment", {})
+            if annotator_id in assignment:
+                st.caption(f"Your assigned share: {assignment[annotator_id]} rows (disjoint split)")
         st.metric("Progress", f"{summary['total_done']} / {summary.get('total_tasks', len(all_items))}")
         st.write(
             f"Rubric: {summary['rubric_done']} / {summary.get('rubric_total', 0)} · "
@@ -89,14 +94,31 @@ def main() -> None:
         if ann_path.exists():
             with open(ann_path, "rb") as f:
                 st.download_button(
-                    "Download annotations JSONL",
+                    "Download annotations JSONL (backup)",
                     data=f.read(),
                     file_name=ann_path.name,
                     mime="application/json",
                 )
 
+        if annotator_id and summary.get("total_tasks") and summary["total_done"] >= summary["total_tasks"]:
+            rel = annotations_git_path(annotator_id)
+            st.success("All tasks complete — push your file to git:")
+            st.code(
+                f"git add {rel}\n"
+                f"git commit -m \"Add F9a human annotations ({annotator_id})\"\n"
+                "git push origin main",
+                language="bash",
+            )
+
     if not annotator_id:
         st.info("Enter your annotator ID in the sidebar to begin.")
+        return
+
+    if not all_items:
+        st.warning(
+            "No rows assigned to this annotator ID. Pick amit, avreymi, or ofek from the sidebar "
+            "(disjoint split — each person scores a different subset)."
+        )
         return
 
     navigable = filter_task_items(

@@ -20,15 +20,33 @@ DEFAULT_WORKLIST_PATH = (
     / "artifacts"
     / "human_validation_worklist.json"
 )
+ANNOTATIONS_DIR = (
+    Path(__file__).resolve().parents[2]
+    / "data_curation"
+    / "artifacts"
+    / "human_annotations"
+)
 
 # Team annotator ids for the F9a blind round (sidebar preset in annotate_app.py).
 TEAM_ANNOTATOR_IDS = ("amit", "avreymi", "ofek")
 
 
 def default_annotations_path(annotator_id: str) -> Path:
-    """Default JSONL path for one annotator's submissions."""
+    """Default JSONL path for one annotator's submissions (tracked in git)."""
     safe_id = "".join(c if c.isalnum() or c in "-_" else "_" for c in annotator_id.strip()) or "annotator"
-    return Path(__file__).resolve().parents[2] / "outputs" / "results" / f"human_annotations_{safe_id}.jsonl"
+    return ANNOTATIONS_DIR / f"{safe_id}.jsonl"
+
+
+def default_team_annotation_paths() -> list[Path]:
+    """Paths for all team annotators — used by human_validation_results default."""
+    return [default_annotations_path(aid) for aid in TEAM_ANNOTATOR_IDS]
+
+
+def annotations_git_path(annotator_id: str) -> str:
+    """Repo-relative path for git add/commit instructions."""
+    return str(default_annotations_path(annotator_id).relative_to(
+        Path(__file__).resolve().parents[2]
+    ))
 
 
 def load_worklist(path: str | Path = DEFAULT_WORKLIST_PATH) -> dict:
@@ -37,10 +55,15 @@ def load_worklist(path: str | Path = DEFAULT_WORKLIST_PATH) -> dict:
         return json.load(f)
 
 
-def expand_tasks(worklist: dict) -> list[dict]:
-    """Flatten worklist rows into navigable task items: one entry per (hesum_id, task)."""
+def expand_tasks(worklist: dict, annotator_id: str | None = None) -> list[dict]:
+    """Flatten worklist rows into navigable task items: one entry per (hesum_id, task).
+
+    When `annotator_id` is set, only rows assigned to that annotator are included (disjoint split).
+    """
     items = []
     for row in worklist.get("rows", []):
+        if annotator_id and row.get("assigned_annotator") != annotator_id:
+            continue
         for task in row.get("tasks", []):
             items.append({**row, "task": task})
     return items
@@ -143,7 +166,11 @@ def build_pairwise_record(
     }
 
 
-def export_summary(annotations: list[dict], worklist: dict | None = None) -> dict:
+def export_summary(
+    annotations: list[dict],
+    worklist: dict | None = None,
+    annotator_id: str | None = None,
+) -> dict:
     """Progress counts for the sidebar."""
     rubric_done = sum(1 for a in annotations if a["task"] == "rubric")
     pairwise_done = sum(1 for a in annotations if a["task"] == "pairwise")
@@ -153,7 +180,7 @@ def export_summary(annotations: list[dict], worklist: dict | None = None) -> dic
         "total_done": len(annotations),
     }
     if worklist is not None:
-        items = expand_tasks(worklist)
+        items = expand_tasks(worklist, annotator_id=annotator_id)
         summary["rubric_total"] = sum(1 for i in items if i["task"] == "rubric")
         summary["pairwise_total"] = sum(1 for i in items if i["task"] == "pairwise")
         summary["total_tasks"] = len(items)

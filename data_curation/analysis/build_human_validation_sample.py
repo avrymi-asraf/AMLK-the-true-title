@@ -26,6 +26,9 @@ from data_curation.utils.paths import ARTIFACTS_DIR
 
 WORKLIST_PATH = ARTIFACTS_DIR / "human_validation_worklist.json"
 FINAL_CLEAN_PATH = ARTIFACTS_DIR / "final_clean_hesum.json"
+# Must match evaluation.viewer.annotation_data.TEAM_ANNOTATOR_IDS
+WORKLIST_ANNOTATOR_IDS = ("amit", "avreymi", "ofek")
+FINAL_CLEAN_PATH = ARTIFACTS_DIR / "final_clean_hesum.json"
 
 
 def row_strata(row: dict) -> list[str]:
@@ -114,6 +117,41 @@ def build_worklist_rows(
     return rows
 
 
+def assign_annotators(
+    rows: list[dict],
+    annotator_ids: tuple[str, ...],
+    seed: int,
+) -> list[dict]:
+    """Split rows disjointly across annotators, balancing within each primary stratum."""
+    from collections import defaultdict
+
+    buckets: dict[str, list[dict]] = defaultdict(list)
+    for row in rows:
+        key = row["strata"][0] if row.get("strata") else "unassigned"
+        buckets[key].append(row)
+
+    rng = random.Random(seed + 3)
+    assigned: list[dict] = []
+    for stratum_rows in buckets.values():
+        pool = list(stratum_rows)
+        rng.shuffle(pool)
+        for i, row in enumerate(pool):
+            annotator = annotator_ids[i % len(annotator_ids)]
+            assigned.append({**row, "assigned_annotator": annotator})
+
+    assigned.sort(key=lambda r: int(r["hesum_id"]) if r["hesum_id"].isdigit() else r["hesum_id"])
+    return assigned
+
+
+def assignment_counts(rows: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {aid: 0 for aid in WORKLIST_ANNOTATOR_IDS}
+    for row in rows:
+        aid = row.get("assigned_annotator")
+        if aid in counts:
+            counts[aid] += 1
+    return counts
+
+
 def build_human_validation_worklist(
     *,
     n_per_stratum: int = 38,
@@ -131,14 +169,18 @@ def build_human_validation_worklist(
     tail_by_id = load_tail_by_id(ids)
     curated_by_id = load_curated_by_id(ids)
     rows = build_worklist_rows(rubric_entries, pairwise_ids, tail_by_id, curated_by_id)
+    rows = assign_annotators(rows, WORKLIST_ANNOTATOR_IDS, seed)
 
     return {
-        "version": "v1",
+        "version": "v1-split",
         "seed": seed,
         "n_per_stratum": n_per_stratum,
         "pairwise_n": pairwise_n,
         "n_rows": len(rows),
         "n_pairwise": sum(1 for r in rows if "pairwise" in r["tasks"]),
+        "assignment": assignment_counts(rows),
+        "split_mode": "disjoint",
+        "annotators": list(WORKLIST_ANNOTATOR_IDS),
         "rows": rows,
     }
 
@@ -163,7 +205,10 @@ def main() -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(json.dumps(worklist, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"Wrote {worklist['n_rows']} rows ({worklist['n_pairwise']} with pairwise) to {output}")
+    print(
+        f"Wrote {worklist['n_rows']} rows ({worklist['n_pairwise']} with pairwise) to {output}\n"
+        f"Assignment: {worklist.get('assignment', {})}"
+    )
 
 
 if __name__ == "__main__":

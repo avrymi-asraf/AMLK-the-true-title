@@ -1,11 +1,13 @@
 """Tests for build_human_validation_sample: stratified draw, anchor exclusion, pairwise subset."""
 
 from data_curation.analysis.build_human_validation_sample import (
+    assign_annotators,
     build_worklist_rows,
     build_human_validation_worklist,
     row_strata,
     select_pairwise_ids,
     unique_rubric_ids,
+    WORKLIST_ANNOTATOR_IDS,
 )
 from data_curation.analysis.rubric_anchors import ANCHOR_HESUM_IDS
 from data_curation.analysis.rubric_pilot import STRATA
@@ -129,3 +131,39 @@ def test_build_human_validation_worklist_deterministic(monkeypatch):
     a = build_human_validation_worklist(n_per_stratum=10, pairwise_n=5, seed=7, row_labels=labels)
     b = build_human_validation_worklist(n_per_stratum=10, pairwise_n=5, seed=7, row_labels=labels)
     assert [r["hesum_id"] for r in a["rows"]] == [r["hesum_id"] for r in b["rows"]]
+
+
+def test_assign_annotators_disjoint_and_balanced():
+    rows = [
+        {"hesum_id": str(i), "strata": ["S0_clean"], "tasks": ["rubric"]}
+        for i in range(9)
+    ]
+    assigned = assign_annotators(rows, WORKLIST_ANNOTATOR_IDS, seed=1)
+    by_annotator = {aid: [] for aid in WORKLIST_ANNOTATOR_IDS}
+    for row in assigned:
+        by_annotator[row["assigned_annotator"]].append(row["hesum_id"])
+    assert len(assigned) == 9
+    assert all(len(ids) == 3 for ids in by_annotator.values())
+    all_ids = [row["hesum_id"] for row in assigned]
+    assert len(all_ids) == len(set(all_ids))
+
+
+def test_build_human_validation_worklist_has_split_assignments(monkeypatch):
+    labels = [_row(str(i), headline_action="kept") for i in range(1, 200)]
+    for i in range(200, 250):
+        labels.append(_row(str(i), multi_pipe=True, headline_action="rewritten"))
+
+    monkeypatch.setattr(
+        "data_curation.analysis.build_human_validation_sample.load_tail_by_id",
+        lambda ids: {hid: {"text": "t", "headline": "h"} for hid in ids},
+    )
+    monkeypatch.setattr(
+        "data_curation.analysis.build_human_validation_sample.load_curated_by_id",
+        lambda ids: {hid: {"headline": "c"} for hid in ids},
+    )
+
+    wl = build_human_validation_worklist(n_per_stratum=10, pairwise_n=5, seed=7, row_labels=labels)
+    assert wl["version"] == "v1-split"
+    assert wl["split_mode"] == "disjoint"
+    assert all(r.get("assigned_annotator") in WORKLIST_ANNOTATOR_IDS for r in wl["rows"])
+    assert sum(wl["assignment"].values()) == len(wl["rows"])

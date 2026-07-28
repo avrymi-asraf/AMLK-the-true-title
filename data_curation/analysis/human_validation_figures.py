@@ -49,6 +49,11 @@ def build_f9a_heatmap(summary: dict, pilot_kappa: dict[str, float]) -> go.Figure
         for aid, kappas in judge_human.items():
             row_labels.append(f"Judge vs {aid}")
             matrix.append([kappas.get(dim) for dim in DIMENSIONS])
+
+    pooled = rubric.get("judge_human_pooled")
+    if pooled and rubric.get("split_mode") == "disjoint":
+        row_labels.append("Judge vs human (pooled)")
+        matrix.append([pooled.get(dim) for dim in DIMENSIONS])
     else:
         annotators = rubric.get("annotator_ids", [])
         if rubric.get("judge_human_a"):

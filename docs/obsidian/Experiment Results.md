@@ -255,21 +255,24 @@ Lift these into the paper/discussion as needed:
 4. **DictaLM2 zero-shot:** On multi-pipe rows, the model is **more single-focus** than the reference
    (median 2 vs 1) — evidence the reference, not the model, carries the multi-headline defect.
 5. **DictaLM2 fine-tuned:** Training nearly finished; inference in progress. E4 conclusion pending.
-6. **Instrument:** Pilot κ 0.65–0.90; pairwise placebo validates E3. Human round: UI on
-   `feature/human-validation-ui`, 152-row worklist committed; κ heatmap after all three annotate.
+6. **Instrument:** Pilot κ 0.65–0.90; pairwise placebo validates E3. Human round: disjoint split
+   (~52/52/48 rows across amit/avreymi/ofek), UI on `main`; κ heatmap after all three finish their shares.
 
 ---
 
 ## F9a — Human judge validation (pending annotations)
 
-**Status:** worklist built (152 rubric rows, 38 pairwise); annotation UI ready
-(`evaluation/viewer/annotate_app.py`). Awaiting blind scores from amit, avreymi, and ofek.
+**Status:** worklist `v1-split` (152 rows total, 38 pairwise); annotation UI ready
+(`evaluation/viewer/annotate_app.py`). Each annotator scores **only their assigned subset**
+(disjoint — no averaging three scores on the same row).
 
-**Worklist:** `data_curation/artifacts/human_validation_worklist.json` (seed 42, stratified S0/S2/S3/S4).
+**Worklist:** `data_curation/artifacts/human_validation_worklist.json` (seed 42, stratified S0/S2/S3/S4;
+assignment amit 52 / avreymi 52 / ofek 48).
 
-**After annotations land:** `human_validation_results.py` → per-dimension human–human and
-judge–human κ; `human_validation_figures.py` → `f9a_judge_validation` heatmap (includes pilot
-test-retest row from `rubric_pilot.json`).
+**After annotations land:** teammates push `data_curation/artifacts/human_annotations/*.jsonl`;
+`human_validation_results.py` → judge–human κ per annotator + pooled over the combined set;
+`human_validation_figures.py` → `f9a_judge_validation` heatmap (includes pilot
+test-retest row from `rubric_pilot.json`). Human–human κ not computed (no overlapping rows).
 
 ---
 
