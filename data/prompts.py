@@ -1,42 +1,61 @@
 """
-Shared Hebrew summarization prompt and probe-variant helpers (build_prompt, make_variant).
-Used by data/preprocess.py at training-data build time and by evaluation/predict.py at
-inference. Kept free of datasets/transformers imports so API-only evaluation scripts
-can import it on minimal Python builds.
+Shared Hebrew summarization prompt, probe-variant helpers, and chat-template wrapping.
+Preprocess stores raw `build_prompt` text; train and inference wrap with
+`format_chat_prompt` (dictalm2.0-instruct needs [INST]…[/INST]). Single source of truth
+for instruct formatting — no per-arm branches. Free of datasets/transformers imports so
+API-only scripts can import build_prompt on minimal builds.
 
-Execution environment: imported locally by preprocess and predict.
+Execution environment: imported locally by preprocess, train, and evaluation helpers.
 """
 import re
 
-# The "in Hebrew" instruction matters for the zero-shot baselines (base Qwen, Gemini):
-# without it they summarize in English and score near-zero against the Hebrew references.
-# "in up to 3 sentences" caps length (borrowed from HeSum's GPT prompt, Figure 2) — v1 ran on
-# for hundreds of tokens; an explicit budget anchors the model toward reference-length summaries.
-PROMPT_TEMPLATE = "Summarize the following Hebrew text in up to 3 sentences. Write the summary in Hebrew:\n\n{text}\n\nSummary:\n"
-
-# Hardened prompt for the opt-in "clean" pipeline profile. Adds an explicit anti-elaboration
-# cap and negative instructions (no lists / pipes / added detail) — the v3 error analysis
-# traced most hallucination to the model running on and reproducing HeSum's "headline | headline"
-# digest style. Kept as a separate template so the original PROMPT_TEMPLATE stays reproducible.
-PROMPT_TEMPLATE_CLEAN = (
-    "Summarize the following Hebrew news article in one or two short, factual sentences. "
-    "Write the summary in Hebrew.\n"
-    "Rules:\n"
-    "- Use only information stated in the article; do not add, infer, or speculate.\n"
-    "- Do not elaborate, editorialize, or list unrelated items.\n"
-    "- Write plain prose with periods and commas — no bullet points, lists, or '|' separators.\n\n"
-    "{text}\n\nSummary:\n"
+# Prompt-arena round-3 winner (full experiment log: docs/prompt-arena-notebook.md). A numeric
+# word cap alone bound length only weakly across 3 rounds; adding an explicit stop cue ("write
+# one sentence only and stop right after it") beat every other candidate tested, including
+# worked examples (which hallucinated content). Still short of the loop's 0.9 compliance / 4.0
+# faithfulness target — re-run the loop if a stronger prompt is needed.
+PROMPT_TEMPLATE = (
+    "סכם את כתבת החדשות הבאה בעברית במשפט קצר אחד, לא יותר מ-15 מילים. "
+    "כתוב משפט אחד בלבד ועצור מיד בסופו.\n\n"
+    "{text}\n\nתקציר (משפט אחד, עד 15 מילים):"
 )
 
 
-def build_prompt(text: str, clean: bool = False) -> str:
-    """Render the Hebrew summarization instruction prompt for an article.
+def build_prompt(text: str) -> str:
+    """Render the Hebrew summarization instruction prompt for an article."""
+    return PROMPT_TEMPLATE.format(text=text)
 
-    clean=True selects the hardened, anti-elaboration template used by the clean pipeline
-    profile; the default reproduces the original prompt.
+
+def format_chat_prompt(tokenizer, prompt: str) -> str:
+    """Wrap a user instruction in the model's chat template when one exists.
+
+    Instruct checkpoints (dictalm2.0-instruct: `[INST] … [/INST]`) must see this format
+    at train and inference. Pure base checkpoints with no chat template get the raw prompt.
+    Does not inject family-specific control tokens. `enable_thinking=False` is attempted
+    when supported and ignored (TypeError) on Mistral-style templates.
     """
-    template = PROMPT_TEMPLATE_CLEAN if clean else PROMPT_TEMPLATE
-    return template.format(text=text)
+    if not getattr(tokenizer, "chat_template", None):
+        return prompt
+    messages = [{"role": "user", "content": prompt}]
+    kwargs = dict(tokenize=False, add_generation_prompt=True)
+    try:
+        return tokenizer.apply_chat_template(
+            messages, enable_thinking=False, **kwargs,
+        )
+    except TypeError:
+        return tokenizer.apply_chat_template(messages, **kwargs)
+
+
+def prepare_tokenizer_for_templated_prompts(tokenizer):
+    """Avoid double-BOS after chat templating.
+
+    dictalm2's template starts with `{{bos_token}}`; with add_bos_token=True the next
+    tokenizer(...) would produce ['<s>', '<s>', …]. Call after load whenever generation
+    or SFT will encode already-templated strings; pair with add_special_tokens=False.
+    """
+    if getattr(tokenizer, "chat_template", None) and hasattr(tokenizer, "add_bos_token"):
+        tokenizer.add_bos_token = False
+    return tokenizer
 
 
 def _split_lead_body(text: str) -> tuple[str, str]:

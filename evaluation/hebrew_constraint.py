@@ -1,25 +1,32 @@
 """
-Optional Hebrew-script decode constraint for the clean pipeline profile. Fine-tuned Qwen3-2B
-outputs occasionally leak foreign scripts mid-word (Cyrillic "מעריб", Arabic in "התרגיל…") —
-a vocab/decoding artifact. build_bad_words_ids scans the tokenizer vocabulary once and returns
-the ids of every token whose decoded surface form contains a Latin/Cyrillic/Greek/Arabic
-letter, so generate(bad_words_ids=...) can forbid emitting them. Hebrew letters, digits,
+Hebrew-script decode constraint for generation. Fine-tuned outputs occasionally leak
+foreign scripts mid-word (Cyrillic, Arabic, Latin, CJK, etc.) — a vocab/decoding artifact.
+build_bad_words_ids scans the tokenizer vocabulary once and returns the ids of every
+token whose decoded surface form contains a Latin/Cyrillic/Greek/Arabic/CJK/Hangul letter,
+so generate(bad_words_ids=...) can forbid emitting them. Hebrew letters, digits,
 punctuation, and whitespace stay allowed.
 
-Wired into evaluation/infer.py and training/train_hf_job.py's generation only under the clean
-profile (it is experimental — an aggressive constraint can hurt fluency, so it is easy to A/B).
+Wired into evaluation/infer.py and training/train_hf_job.py generation (always on).
 Execution environment: wherever generation runs (remote GPU: HF Jobs / Colab).
 """
 import re
 
 # Scripts we forbid inside generated summaries. Hebrew (0x0590-0x05FF) is intentionally absent.
+# CJK/Hangul added after the round-1 prompt-arena sweep found dictalm2.0-instruct emitting a
+# garbled Hangul near-token ("[/인스트]") when the prompt reads as a long, English, bulleted
+# instruction — an apparent hallucinated echo of Mistral's own [/INST] closing tag.
 _FORBIDDEN_SCRIPT_RE = re.compile(
-    "[" 
-    "\u0041-\u005A\u0061-\u007A"        # Latin A-Z a-z
-    "\u00C0-\u024F"                       # Latin-1 supplement + extended (accented Latin)
-    "\u0400-\u04FF"                       # Cyrillic
-    "\u0370-\u03FF"                       # Greek
-    "\u0600-\u06FF"                       # Arabic
+    "["
+    "A-Za-z"        # Latin A-Z a-z
+    "À-ɏ"                       # Latin-1 supplement + extended (accented Latin)
+    "Ѐ-ӿ"                       # Cyrillic
+    "Ͱ-Ͽ"                       # Greek
+    "؀-ۿ"                       # Arabic
+    "぀-ヿ"                      # Hiragana + Katakana
+    "㐀-鿿"                      # CJK Unified Ideographs (+ Extension A)
+    "가-힯"                      # Hangul Syllables
+    "ᄀ-ᇿ"                       # Hangul Jamo
+    "ㄱ-ㆿ"                      # Hangul Compatibility Jamo
     "]"
 )
 

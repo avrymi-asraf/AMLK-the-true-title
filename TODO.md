@@ -3,11 +3,16 @@
 Implements `docs/ANLP Project abstract.md`, `docs/research-proposal.md`, and the reviewer-revised
 `docs/research-proposal-revised.md` (current plan of record). Milestones from the abstract are dated below.
 
-## A. Training pipeline — DONE
-- [x] A.1 Download datasets (HeSum 10,000 records; IAHLT inaccessible with current credentials)
-- [x] A.2 Base model: Qwen/Qwen3-2B
+## A. Training pipeline — DONE (stack; full DictaLM2 epoch still open under D)
+- [x] A.1 Training data = **curated HeSum only** (`data_curation` → `final_clean_hesum.json` →
+      HF Arrow via `data.download` + `data.preprocess`). No raw biunlp/HeSum + IAHLT merge as
+      the train path (curation stays in `data_curation/`).
+- [x] A.2 Base model: `dicta-il/dictalm2.0-instruct` (MODEL_SLUG `dictalm2-instruct`)
 - [x] A.3 Fine-tune via HF `trl` SFT — one `training/train.py` for qlora | lora | full,
-      completion-only loss, wandb logging, local or HF Jobs (`--submit-hf`)
+      completion-only loss, curated HF dataset path, **1 epoch** default, informative wandb
+      names (`amlk-{model}`, date/method/variant/epochs), mid-run Hub checkpoint commits
+      (`hub_strategy=every_save` + `/data/output` resume + `training/resume.py`), HF Jobs
+      (`--submit-hf`, a10g-small, 8h). Chat wrap + Hebrew decode constraint always on.
 
 ## B. Evaluation pipeline — DONE (Stage B, due 07.06)
 - [x] B.1 ROUGE-1/2/L (Hebrew-aware tokenizer)
@@ -29,8 +34,10 @@ Implements `docs/ANLP Project abstract.md`, `docs/research-proposal.md`, and the
 - [x] C.3 Goals and milestones
 
 ## D. Initial results — IN PROGRESS
-- [ ] D.1 Full QLoRA run on HF Jobs + evaluation battery (finetuned vs zero-shot vs Gemini)
-- [ ] D.2 Improve training (regime comparison: lora / full FT)
+- [ ] D.1 Full **1-epoch** run on `dicta-il/dictalm2.0-instruct` + curated HeSum (HF Jobs;
+      default `--method lora`) + evaluation battery (finetuned vs zero-shot vs Gemini)
+- [ ] D.2 Improve training (regime comparison: qlora / lora / full FT; still 1 epoch per run)
+      — see `IMPROVEMENT_PLAN.md` for diagnosis / gates
 
 ## E. Present results — 14.06
 - [ ] E.1 Paper draft
@@ -53,7 +60,7 @@ whole-article model, ablate the input at inference" (what the trained model reli
       subset vs matched random subset); run the F.2 ablation on both; compare lead reliance
 
 ## G. Hebrew news / headline control (optional)
-- [ ] G.1 Emphasize journalism subset in analysis (HeSum + IAHLT; stratify or report by source)
+- [ ] G.1 Emphasize journalism subset in analysis (HeSum; stratify or report by source)
 - [ ] G.2 Optional: alternate instructions (one-line headline vs multi-sentence summary) and compare metrics
 
 ## H. Finalize — 31.07
