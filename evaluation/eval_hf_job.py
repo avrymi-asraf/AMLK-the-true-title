@@ -100,9 +100,11 @@ def run_cloud_job():
     # 3. Gemini advanced baseline — reuse a complete one already on the Hub (so a re-run after a
     #    crash skips the ~40-min generation).
     cached = hub_file("predictions-gemini.jsonl")
-    if cached and not limit and line_count(cached) >= 1000:
+    # Curated HeSum test is 586 rows (not the old 1k+); reuse any complete-looking baseline.
+    n_cached = line_count(cached) if cached else 0
+    if cached and not limit and n_cached >= 500:
         copyfile(cached, results / "predictions-gemini.jsonl")
-        print(f"Reusing Gemini baseline from the Hub ({line_count(cached)} rows)")
+        print(f"Reusing Gemini baseline from the Hub ({n_cached} rows)")
     else:
         step(["evaluation.predict", "--variant", variant,
               "--data", f"outputs/data/processed/{variant}/test",
@@ -111,6 +113,9 @@ def run_cloud_job():
 
     # 4. Score + error-analyse every system; skip any whose report is already complete (resume),
     #    push each report immediately (timeout-safe).
+    # Judge must be Gemini: project contract + GEMINI_API_KEY is already a job secret.
+    # Default evaluate.py --judge-provider hf (Llama via Inference Providers) fails when that
+    # model is not enabled on the account (job 6a67cbd5: model_not_supported).
     for name in SYSTEMS:
         preds = f"outputs/results/predictions-{name}.jsonl"
         n_pred = line_count(results / f"predictions-{name}.jsonl")
@@ -120,7 +125,8 @@ def run_cloud_job():
             print(f"Skipping {name}: report already complete (n={n_pred})")
             continue
         step(["evaluation.evaluate", "--predictions", preds,
-              "--output", f"outputs/results/{report}", *lim])
+              "--output", f"outputs/results/{report}",
+              "--judge-provider", "gemini", *lim])
         push(report)
         step(["evaluation.error_analysis", "--predictions", preds,
               "--output", f"outputs/results/{errors}", "--n", str(n_errors)])

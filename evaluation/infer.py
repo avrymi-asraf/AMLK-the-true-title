@@ -129,6 +129,8 @@ def build_input_text(tokenizer, prompt: str) -> str:
 
 def generate_summaries(
     model, tokenizer, dataset, variant: str, device,
+    # batch_size stays 8 on purpose: train_hf_job.py raises its twin to 16 under a 4-bit base as a
+    # billed-GPU cost lever, but this path runs on a Colab T4 (16 GB) where 16 would not fit.
     batch_size: int = 8, max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     label: str = "finetuned",
 ) -> list[dict]:

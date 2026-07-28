@@ -4,10 +4,13 @@ Implements `docs/ANLP Project abstract.md`, `docs/research-proposal.md`, and the
 `docs/research-proposal-revised.md` (current plan of record). Milestones from the abstract are dated below.
 
 ## A. Training pipeline — DONE
-- [x] A.1 Download datasets (HeSum 10,000 records; IAHLT inaccessible with current credentials)
+- [x] A.1 Training data = **curated HeSum only** (`final_clean_hesum.json` → HF Arrow
+      via `data.download` + `data.preprocess`; 5854 rows → 4683/585/586). Pushed to
+      private Hub dataset `avreymi/amlk-training-data` (2026-07-26; re-download verified).
+      No raw biunlp/HeSum + IAHLT merge in this repo (curation is main-branch `data_curation`).
 - [x] A.2 Base model: dicta-il/dictalm2.0-instruct
 - [x] A.3 Fine-tune via HF `trl` SFT — one `training/train.py` for qlora | lora | full,
-      completion-only loss, **clean-only** data path, **1 epoch** default, informative wandb
+      completion-only loss, **curated HF dataset** path, **1 epoch** default, informative wandb
       names (`amlk-{model}`, date/method/variant/epochs), mid-run Hub checkpoint commits
       (`hub_strategy=every_save` + `/data/output` resume), HF Jobs (`--submit-hf`)
 
