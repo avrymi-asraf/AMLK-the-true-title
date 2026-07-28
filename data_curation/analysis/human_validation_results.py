@@ -195,6 +195,28 @@ def completion_check(
     }
 
 
+def judge_human_kappa(
+    judge_scores: dict[str, dict[str, int]],
+    human: dict[str, dict[str, int]],
+) -> dict[str, float | None]:
+    paired = paired_dimension_scores(judge_scores, human)
+    return {
+        dim: weighted_kappa(*paired[dim]) if len(paired[dim][0]) >= 2 else None
+        for dim in DIMENSIONS
+    }
+
+
+def human_human_kappa_pair(
+    human_a: dict[str, dict[str, int]],
+    human_b: dict[str, dict[str, int]],
+) -> dict[str, float | None]:
+    paired = paired_dimension_scores(human_a, human_b)
+    return {
+        dim: weighted_kappa(*paired[dim]) if len(paired[dim][0]) >= 2 else None
+        for dim in DIMENSIONS
+    }
+
+
 def build_summary(
     annotation_paths: list[Path],
     *,
@@ -215,16 +237,37 @@ def build_summary(
         "pairwise": {},
     }
 
+    human_by_annotator = {
+        aid: rubric_scores_by_id(by_annotator[aid]) for aid in annotator_ids
+    }
+
+    human_human_pairs: dict[str, dict[str, float | None]] = {}
+    for i, a in enumerate(annotator_ids):
+        for b in annotator_ids[i + 1:]:
+            key = f"{a}_vs_{b}"
+            human_human_pairs[key] = human_human_kappa_pair(
+                human_by_annotator[a], human_by_annotator[b],
+            )
+
+    judge_human = {
+        aid: judge_human_kappa(judge_scores, human_by_annotator[aid])
+        for aid in annotator_ids
+    }
+
+    rubric_block: dict = {
+        "annotator_ids": annotator_ids,
+        "human_human_pairs": human_human_pairs,
+        "judge_human": judge_human,
+    }
     if len(annotator_ids) >= 2:
-        human_a = rubric_scores_by_id(by_annotator[annotator_ids[0]])
-        human_b = rubric_scores_by_id(by_annotator[annotator_ids[1]])
-        summary["rubric"] = rubric_agreement(human_a, human_b, judge_scores)
-        summary["rubric"]["annotator_ids"] = annotator_ids[:2]
+        first_pair = f"{annotator_ids[0]}_vs_{annotator_ids[1]}"
+        rubric_block["human_human"] = human_human_pairs.get(first_pair, {})
+        rubric_block["judge_human_a"] = judge_human.get(annotator_ids[0], {})
+        rubric_block["judge_human_b"] = judge_human.get(annotator_ids[1], {})
     elif len(annotator_ids) == 1:
-        human_a = rubric_scores_by_id(by_annotator[annotator_ids[0]])
-        summary["rubric"] = rubric_agreement(human_a, human_a, judge_scores)
-        summary["rubric"]["annotator_ids"] = annotator_ids
-        summary["rubric"]["note"] = "Single annotator — human_human kappa is trivially 1.0"
+        rubric_block["note"] = "Single annotator — no human–human κ"
+
+    summary["rubric"] = rubric_block
 
     for aid in annotator_ids:
         summary["pairwise"][aid] = pairwise_agreement(by_annotator[aid], judge_pairwise)

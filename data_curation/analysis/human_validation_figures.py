@@ -35,19 +35,29 @@ def build_f9a_heatmap(summary: dict, pilot_kappa: dict[str, float]) -> go.Figure
     row_labels = []
     matrix = []
 
-    if rubric.get("human_human"):
+    for pair_key, kappas in rubric.get("human_human_pairs", {}).items():
+        label = pair_key.replace("_vs_", " vs ")
+        row_labels.append(f"Human–human ({label})")
+        matrix.append([kappas.get(dim) for dim in DIMENSIONS])
+
+    if not rubric.get("human_human_pairs") and rubric.get("human_human"):
         row_labels.append("Human–human")
         matrix.append([rubric["human_human"].get(dim) for dim in DIMENSIONS])
 
-    annotators = rubric.get("annotator_ids", [])
-    if rubric.get("judge_human_a"):
-        label = f"Judge vs {annotators[0]}" if annotators else "Judge vs human A"
-        row_labels.append(label)
-        matrix.append([rubric["judge_human_a"].get(dim) for dim in DIMENSIONS])
-
-    if rubric.get("judge_human_b") and len(annotators) > 1:
-        row_labels.append(f"Judge vs {annotators[1]}")
-        matrix.append([rubric["judge_human_b"].get(dim) for dim in DIMENSIONS])
+    judge_human = rubric.get("judge_human", {})
+    if judge_human:
+        for aid, kappas in judge_human.items():
+            row_labels.append(f"Judge vs {aid}")
+            matrix.append([kappas.get(dim) for dim in DIMENSIONS])
+    else:
+        annotators = rubric.get("annotator_ids", [])
+        if rubric.get("judge_human_a"):
+            label = f"Judge vs {annotators[0]}" if annotators else "Judge vs human A"
+            row_labels.append(label)
+            matrix.append([rubric["judge_human_a"].get(dim) for dim in DIMENSIONS])
+        if rubric.get("judge_human_b") and len(annotators) > 1:
+            row_labels.append(f"Judge vs {annotators[1]}")
+            matrix.append([rubric["judge_human_b"].get(dim) for dim in DIMENSIONS])
 
     if pilot_kappa:
         row_labels.append("Judge test-retest (pilot)")

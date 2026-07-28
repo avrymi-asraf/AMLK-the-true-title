@@ -58,7 +58,7 @@ Training is owned externally. We own the dataset audit, the figure set, and the 
 - [ ] Finish DictaLM2 baseline inference (648/800) and finetuned Arm B test inference (~50/586)
 - [ ] Arm A training + predictions (external); align eval to `frozen_split_v1.json` (1,162 test ids)
 - [x] Human-validation UI + frozen worklist on `feature/human-validation-ui` → F9a (see `evaluation/viewer/ANNOTATION.md`)
-- [ ] Both annotators complete the 150-row blind round → appendix κ heatmap
+- [ ] All three annotators (amit, avreymi, ofek) complete the blind round → appendix κ heatmap
 - [ ] Render F6; build F8 once E4 predictions land; Q1 qualitative exhibit
 
 See [[Experiment Results]] for the full checklist and measured numbers.

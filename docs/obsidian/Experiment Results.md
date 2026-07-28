@@ -256,14 +256,14 @@ Lift these into the paper/discussion as needed:
    (median 2 vs 1) — evidence the reference, not the model, carries the multi-headline defect.
 5. **DictaLM2 fine-tuned:** Training nearly finished; inference in progress. E4 conclusion pending.
 6. **Instrument:** Pilot κ 0.65–0.90; pairwise placebo validates E3. Human round: UI on
-   `feature/human-validation-ui`, 152-row worklist committed; κ heatmap after both annotate.
+   `feature/human-validation-ui`, 152-row worklist committed; κ heatmap after all three annotate.
 
 ---
 
 ## F9a — Human judge validation (pending annotations)
 
 **Status:** worklist built (152 rubric rows, 38 pairwise); annotation UI ready
-(`evaluation/viewer/annotate_app.py`). Awaiting blind scores from both annotators.
+(`evaluation/viewer/annotate_app.py`). Awaiting blind scores from amit, avreymi, and ofek.
 
 **Worklist:** `data_curation/artifacts/human_validation_worklist.json` (seed 42, stratified S0/S2/S3/S4).
 

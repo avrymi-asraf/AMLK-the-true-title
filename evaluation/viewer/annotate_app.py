@@ -21,6 +21,7 @@ import streamlit as st
 from evaluation.rubric_judge import DIMENSIONS, DIMENSION_QUESTIONS, RUBRIC_LEVELS
 from evaluation.viewer.annotation_data import (
     DEFAULT_WORKLIST_PATH,
+    TEAM_ANNOTATOR_IDS,
     append_annotation,
     build_pairwise_record,
     build_rubric_record,
@@ -52,8 +53,10 @@ def main() -> None:
 
     with st.sidebar:
         st.header("Annotator")
-        annotator_id = st.text_input("Annotator ID", value=st.session_state.get("annotator_id", ""))
-        st.session_state.annotator_id = annotator_id.strip()
+        preset = st.selectbox("Annotator ID", TEAM_ANNOTATOR_IDS, index=None, placeholder="Choose your id…")
+        custom_id = st.text_input("Or type a custom id", value="", placeholder="only if not listed above")
+        annotator_id = (custom_id.strip() or preset or "").strip()
+        st.session_state.annotator_id = annotator_id
 
         worklist_path = st.text_input("Worklist path", value=str(DEFAULT_WORKLIST_PATH))
         if not Path(worklist_path).exists():

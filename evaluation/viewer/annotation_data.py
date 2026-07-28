@@ -21,6 +21,9 @@ DEFAULT_WORKLIST_PATH = (
     / "human_validation_worklist.json"
 )
 
+# Team annotator ids for the F9a blind round (sidebar preset in annotate_app.py).
+TEAM_ANNOTATOR_IDS = ("amit", "avreymi", "ofek")
+
 
 def default_annotations_path(annotator_id: str) -> Path:
     """Default JSONL path for one annotator's submissions."""
