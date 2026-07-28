@@ -35,6 +35,16 @@ data_curation/artifacts/headline_pipes_upto_1.json
 data_curation/artifacts/token_budget_upto_4000.json
 data_curation/artifacts/row_labels.json
 data_curation/artifacts/final_clean_hesum.json
+!data_curation/artifacts/human_validation_worklist.json
+
+# LaTeX build artifacts (paper/ source and figures are tracked; compile on Overleaf or locally)
+paper/*.aux
+paper/*.bbl
+paper/*.blg
+paper/*.log
+paper/*.out
+paper/*.pdf
+paper/*.synctex.gz
 
 # macOS
 .DS_Store

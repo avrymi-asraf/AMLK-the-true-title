@@ -1,7 +1,7 @@
 # AMLK — shared research notes
 
 > Hebrew news headline generation, and a review of HeSum as a training resource.
-> Last updated: 2026-07-26.
+> Last updated: 2026-07-27.
 
 ## One-paragraph summary
 
@@ -20,6 +20,7 @@ Start at [[Project Pivot]] for how we got here.
 - [[Reference Quality Experiment]] — E1 to E4, the hypotheses and statistical design
 - [[Training Handoff Contract]] — the boundary with externally owned training
 - [[Paper Figures]] — the nine-figure manifest, conventions, compute placement, sequencing
+- [[Experiment Results]] — measured outcomes, exact numbers, and article-ready narrative (E1–E4 + DictaLM)
 
 ### Literature & metrics
 
@@ -50,9 +51,14 @@ Training is owned externally. We own the dataset audit, the figure set, and the 
 
 ## Open decisions
 
-- [ ] Draft the Hebrew anchor examples for [[Reference Quality Rubric]] and have both team members review before any full judge run
-- [ ] Pilot the rubric on a few hundred rows and check test-retest agreement before spending on the full 10,000-row pass
-- [ ] Draw F1 and F2 from existing artifacts — no API cost, immediately useful
-- [ ] Decide the judge model family, which must differ from `gpt-5.6-luna` and from the training base model
-- [ ] Confirm with the training owner that arm A will be size-matched to arm B
-- [ ] Schedule the 150-row human annotation round (both members, independent, blind)
+- [x] Hebrew rubric anchors drafted (`rubric_anchors.py`) and used in pilot + full E1 pass
+- [x] Rubric pilot complete (κ 0.65–0.90; no degenerate dimensions)
+- [x] F1–F5 drawn; E2/E3 complete (F6 render pending; F7 done)
+- [x] Judge family: Gemini `gemini-2.5-flash-lite` (separate from curator + training base)
+- [ ] Finish DictaLM2 baseline inference (648/800) and finetuned Arm B test inference (~50/586)
+- [ ] Arm A training + predictions (external); align eval to `frozen_split_v1.json` (1,162 test ids)
+- [x] Human-validation UI + frozen worklist on `feature/human-validation-ui` → F9a (see `evaluation/viewer/ANNOTATION.md`)
+- [ ] Both annotators complete the 150-row blind round → appendix κ heatmap
+- [ ] Render F6; build F8 once E4 predictions land; Q1 qualitative exhibit
+
+See [[Experiment Results]] for the full checklist and measured numbers.
