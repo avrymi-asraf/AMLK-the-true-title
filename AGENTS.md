@@ -37,6 +37,7 @@
 │   ├── pre_model_cleanup/                # Deterministic filters (token budget, multi-pipe, tail boilerplate)
 │   ├── model_curation/                   # Batch API source filter + headline target repair
 │   ├── final_dataset/                    # Assemble final_clean_hesum.json
+│   ├── analysis/                         # Dataset-review analysis + paper figures (row_labels, E1-E3 stats, rubric pilot)
 │   ├── utils/                            # Shared JSON I/O and paths
 │   └── artifacts/                        # Intermediate + final_clean_hesum.json (gitignored bulk)
 ├── data/
@@ -106,6 +107,7 @@
 ```
 
 * `data_curation/`: Offline pipeline that produces `artifacts/final_clean_hesum.json` (`{hesum_id, text, headline}`). Download → deterministic pre-model cleanup → model curation (source filter + headline rewrite) → final dataset. See `CURATION_ROADMAP.md`. Training never re-runs this; `data.download` only consumes the product.
+* `data_curation/analysis/`: The dataset-review analysis and paper-figure pipeline behind `paper/main.tex` (Sections: Data, Methods, Results). `row_labels.py` joins every curation artifact into one per-id record (article/headline tokens, filter flags, source label, headline edit sub-type, headline-lead overlap); `figures.py` builds F1/F2 from that alone. `stats.py` holds the shared rank statistics (Cliff's delta + bootstrap CI, Wilson CI). `rubric_results.py` joins the E1 judge output (`outputs/results/e1_rubric_scores.jsonl`) to row labels and computes the Table 1 per-stratum medians/deltas; `rubric_figures.py` renders F3 (distributions), F4 (effect-size forest plot), F5 (length/lead-bias). `repair_figures.py` renders F6 (E2 dumbbell + transition heatmap) and F7 (E3 win rate) from the precomputed `e2_repair_summary.json` / `e3_pairwise_summary.json`. `baseline_reliability_figures.py` renders F9 (zero-shot DictaLM2 vs. reference) from `baseline-rubric-comparison.json`. `supplementary_figures.py` renders the appendix figures (filter overlap, edit sub-types, pilot test-retest kappa). `finetuned_baseline_figures.py` renders the interim, explicitly-not-E4 fine-tuned-vs-zero-shot caution figure from `outputs/results/finetuned-by-edit-type.json` (an external eval artifact whose generating script no longer exists on disk). `human_validation_*.py` and `rubric_pilot.py`/`rubric_anchors.py` support the (separate) human-validation and instrument-pilot rounds. All local, CPU-only — no GPU/API, since every input here is a judge-output artifact already on disk. Output figures land in `outputs/figures/`; copy the ones a given paper draft cites into `paper/figures/`.
 * `data/download.py`: **Only training-data source path (step 1).** Loads curated HeSum `final_clean_hesum.json` (prefers `outputs/data/curated/`, else `data_curation/artifacts/`), normalizes to `{text, summary, source=hesum-curated, hesum_id}`, writes `outputs/data/curated/curated_records.jsonl`. Does not re-download raw biunlp/HeSum or re-run model curation.
 * `data/prompts.py`: Single hardened `PROMPT_TEMPLATE` (Hebrew stop-cue prompt from the prompt-arena loop), `build_prompt(text)`, `make_variant` (whole|lead|body), plus `format_chat_prompt` / `prepare_tokenizer_for_templated_prompts` — wraps instructions in the model's chat template at train/infer time. No Qwen-era `/no_think` injection. Shared by preprocess, train, and evaluation.
 * `data/clean.py`: Legacy pure-regex digest helpers (`normalize_summary`, `is_roundup_digest`, `pipe_segments`). **Not used by the train path** (curation already cleaned headlines); kept for style/diagnostics and tests.
@@ -224,6 +226,28 @@ source .venv/bin/activate && python -m pytest tests/ -v
 ---
 
 ## Status - remember to update it
+
+**2026-07-29 — Paper (`paper/main.tex`) and its 13 dataset-review figures rebuilt locally; `paper/`
+is currently untracked in git.** `paper/main.tex`, `paper/main.pdf`, and `paper/figures/` exist on
+disk but are **not committed to any branch** — `docs/obsidian/Experiment Results.md` referenced
+figure-generation scripts (`rubric_figures.py`, `repair_figures.py`, `baseline_reliability_figures.py`,
+`supplementary_figures.py`) that did not exist in this clone; they were written this session in
+`data_curation/analysis/` (see that section's entry above) and validated against the exact numbers
+already in `main.tex` Table 1 and the obsidian notes (Cliff's deltas, E2/E3 percentages, pilot kappa
+all match). Running `python -m data_curation.analysis.{figures,rubric_results,rubric_figures,repair_figures,baseline_reliability_figures,supplementary_figures,finetuned_baseline_figures}`
+regenerates all of F1-F7, F9, and the sx01/sx05/sx16/sx17 appendix figures into `outputs/figures/`;
+copy into `paper/figures/` for the paper build. `paper/bib.bib` is still missing (bibliography stays
+disabled in any local preview compile until it's restored). **Confirmed via exhaustive git archaeology
+(all local branches, `git ls-remote` on the GitHub remote, the stash, and full commit history for any
+image file) that no branch anywhere has additional/different figures** — the only figures ever
+committed to any branch are F1/F2 (on local-only `docs/dataset-review-pivot`), byte-identical to what's
+regenerated here. F8 (the real Arm A vs.\ Arm B E4 comparison) remains genuinely blocked — Arm A
+training has still not started anywhere. A **different, uncommitted, unscripted** result
+(`outputs/results/finetuned-by-edit-type.json`, `n=580`, external eval run, generating script since
+lost) compares the partially-trained Arm B checkpoint against zero-shot base (not Arm A) — added to the
+paper as appendix `sx17_finetuned_vs_zeroshot` / Appendix "Interim fine-tuned vs. zero-shot comparison",
+explicitly labeled as not resolving E4. It shows the fine-tuned checkpoint scoring *lower* than
+zero-shot base on judge faithfulness/fluency across every edit sub-type — a caution sign, not a result.
 
 **2026-07-28 — Training stack merged from `origin/another-model` into main (docs + skill).**
 Primary base is **`dicta-il/dictalm2.0-instruct`** (not Qwen3-2B). Training data path is
