@@ -4,13 +4,30 @@
 
 \documentclass[11pt]{article}
 
-% Remove the "review" option to generate the final version.
-\usepackage[review]{ACL2023}
+% "final" (the ACL2023.sty default) drops the margin line numbers that "review" mode adds for
+% reviewer reference; not needed here since authors are named, not anonymized.
+\usepackage[final]{ACL2023}
 
 % ACL2023.sty hardcodes margin=2.5cm on every side; narrow the side margins here
 % (rather than editing the vendor style file) to widen the text column and the
 % abstract/title block, which spans the same width via \twocolumn[...].
 \geometry{left=1.8cm,right=1.8cm}
+
+% ACL2023.sty's abstract environment also insets its own 0.6cm left/right margin on top
+% of the page margins above, on the theory that abstracts look better as a narrower
+% block quote. Override with a smaller inset so the abstract uses (almost) the full
+% column width, matching how wide the rest of the text reads.
+\makeatletter
+\renewenvironment{abstract}%
+    {\centerline{\large\bf Abstract}%
+     \begin{list}{}%
+        {\setlength{\rightmargin}{0.1cm}%
+         \setlength{\leftmargin}{0.1cm}}%
+      \item[]\ignorespaces%
+      \@setsize\normalsize{12pt}\xpt\@xpt
+      }%
+    {\unskip\end{list}}
+\makeatother
 
 % Standard package includes
 \usepackage{times}
@@ -27,9 +44,22 @@
 \usepackage{microtype}
 \usepackage{inconsolata}
 
+% Uniform inter-word spacing: without this, LaTeX inserts extra stretchable space after
+% any period it guesses ends a sentence, which reads as distractingly wide gaps once text
+% is fully justified in a narrow two-column layout.
+\frenchspacing
+
 \usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage{tikz}
+
+% \texttt (monospace) disables hyphenation, so these long model identifiers are otherwise a single
+% unbreakable token -- in the narrow two-column layout that forces a line break well before the
+% token and stretches the rest of the line to fill the column (a very underfull hbox). \allowbreak
+% at each existing hyphen/slash lets LaTeX wrap the token without inserting anything extra.
+\newcommand{\dictalmtwo}{\texttt{dicta\allowbreak-il/\allowbreak dictalm2.0\allowbreak-instruct}}
+\newcommand{\dictalmthreesmall}{\texttt{DictaLM\allowbreak-3.0\allowbreak-1.7B\allowbreak-Instruct}}
+\newcommand{\qwenthreetwob}{\texttt{Qwen/\allowbreak Qwen3\allowbreak-2B}}
 
 % If the title and author information does not fit in the area allocated, uncomment the following
 %\setlength\titlebox{<dim>}
@@ -52,7 +82,7 @@ targets are unfit to train on, and that this, not model capacity, is the field's
 evidence came from two fine-tuning attempts, neither originally designed as a data audit.
 \texttt{Qwen3-2B}, fine-tuned on HeSum, learned the corpus's headline style without learning to be
 faithful to the article it summarized. Switching to the Hebrew-native
-\texttt{dicta-il/dictalm2.0-instruct} fixed fluency, but surfaced a harder problem: its zero-shot
+\dictalmtwo{} fixed fluency, but surfaced a harder problem: its zero-shot
 summaries routinely read as \emph{better} than the references they were scored against. Both failures
 pointed past the model and into the data, so we stopped fine-tuning and audited the corpus instead. We
 built a multi-stage curation pipeline and a four-dimension rubric judge (faithfulness, single-focus,
@@ -100,32 +130,37 @@ or not. If the problems are as common and as damaging as we find, the fix is not
 is cleaning the targets before training starts. That is a claim about a public dataset that any future
 HeSum user can act on, not just about the one model we happened to train.
 
+% The subsection heading below needs a couple of lines of body text to follow it before a
+% column break is allowed; without a nudge, LaTeX pushes the whole heading to the next
+% column/page rather than orphan a single line, leaving this column visibly short.
+\enlargethispage{3\baselineskip}
+
 \subsection{From a model question to a data question}
 \label{sec:pivot}
 
-The project began as a conventional fine-tuning study: fine-tune \texttt{Qwen/Qwen3-2B} on HeSum, compare
+The project began as a conventional fine-tuning study: fine-tune \qwenthreetwob{} on HeSum, compare
 LoRA/QLoRA/full fine-tuning regimes, and probe whether the resulting model aggregates global context or
 latches onto the article lead. Two findings redirected it.
 
-\textbf{Era 1 -- Qwen3-2B.} Across three training iterations (Appendix~\ref{app:qwen}), suppressing a
+\textbf{Era 1 -- Qwen3-2B.} Across three training iterations, suppressing a
 repetition artifact that had been inflating ROUGE exposed a model that was fundamentally undertrained,
 and once fixed, it produced fluent, correctly formatted Hebrew with \emph{wrong facts}: the LLM judge
 rated the untuned base model as more faithful (2.98) than the fine-tuned one (2.64). A model that
 reliably learns its targets' surface style without learning their content is usually telling you
 something about the targets, not just the model.
 
-\textbf{Era 2 -- DictaLM2.0.} Switching to a Hebrew-native base model
-(\texttt{dicta-il/dictalm2.0-instruct}) produced an immediate qualitative jump -- fluent Hebrew, no
-script leakage, no reasoning-block failures. But reading enough zero-shot outputs against their
-references made an uncomfortable pattern hard to unsee: the model's headline was, often, \emph{better}
-than the HeSum reference it was being scored against. That observation moved the investigation from the
-model to the data.
-
-\textbf{Era 3 -- this paper.} Reading the HeSum paper alongside the raw rows explained why. HeSum's
-summaries are professional \emph{extended subheadings} scraped from news sites, not summaries purpose-
-written for a modeling task, and that origin produces concrete defects: multi-headline digests bundled
-into one target, roundups spanning several unrelated stories, and scraped boilerplate tails. The rest of
-this paper is the audit, repair, and evaluation of that finding.
+\textbf{Era 2 -- DictaLM2.0 and the pivot to data.} Switching to a Hebrew-native base model
+(\dictalmtwo{}) produced an immediate qualitative jump -- fluent Hebrew, no
+script leakage, no reasoning-block failures -- the expected payoff of a tokenizer and pretraining corpus
+built for the language rather than adapted to it, and not itself a new finding. What was new came from
+reading enough zero-shot outputs against their references: an uncomfortable pattern was hard to unsee,
+the model's headline was, often, \emph{better} than the HeSum reference it was being scored against.
+Reading the HeSum paper alongside the raw rows explained why. HeSum's summaries are professional
+\emph{extended subheadings} scraped from news sites, not summaries purpose-written for a modeling task,
+and that origin produces concrete defects: multi-headline digests bundled into one target, roundups
+spanning several unrelated stories, and scraped boilerplate tails. That observation moved the
+investigation from the model to the data -- the rest of this paper is the audit, repair, and evaluation
+of that finding.
 
 \subsection{Research questions}
 
@@ -160,31 +195,32 @@ exact form the missing comparison will take.
 \label{sec:data}
 
 \subsection{Source corpus}
-HeSum \citep{paz-argaman2024hesum} provides $10{,}000$ Hebrew news article--headline pairs
-$\{\mathit{text}, \mathit{headline}\}$, scraped from news outlets. We treat the published headline as
-the summarization target, matching how the corpus is used for headline-generation fine-tuning.
+HeSum \citep{paz-argaman2024hesum} is a real-world, not synthetic, corpus of $10{,}000$ Hebrew news
+article--headline pairs $\{\mathit{text}, \mathit{headline}\}$ scraped from Hebrew news outlets. We use
+the published headline as the summarization target, the same target the corpus is standardly
+fine-tuned on.
 
 \subsection{Curation pipeline}
-We built a multi-stage pipeline (Figure~\ref{fig:funnel}) that separates two independent deterministic
-filters from a subsequent LLM labeling pass, so that filtering decisions do not depend on the model
-that later labels the survivors:
+We built a multi-stage pipeline (Figure~\ref{fig:funnel}): two deterministic filters run first and
+independently of the LLM labeling pass that follows, so no filtering decision depends on the model that
+later labels the survivors.
 
 \begin{enumerate}
-  \item \textbf{Tail-boilerplate trimming.} $722$ rows had a repeated scraped tail (byline, related-links
-  block) stripped from the article text.
-  \item \textbf{Token-budget filter.} Rows where $\mathrm{tokens}(\mathit{text}) + \mathrm{tokens}
-  (\mathit{headline}) > 4{,}000$ (DictaLM tokenizer) are removed: $2{,}659$ rows ($26.6\%$).
-  \item \textbf{Multi-pipe headline filter.} Rows whose headline contains two or more \texttt{|}
-  characters (three or more bundled segments) are removed: $2{,}412$ rows ($24.1\%$).
-  \item \textbf{Intersection.} The two filters are independent and only combined here, leaving
-  $6{,}486$ rows ($35.1\%$ removed before any model saw a row).
-  \item \textbf{Source-usability labeling.} An LLM (\texttt{gpt-5.6-luna}) labels each of the $6{,}486$
-  rows as usable or one of five unusable categories (Section~\ref{sec:taxonomy}): $5{,}854$ usable,
-  $632$ unusable.
-  \item \textbf{Headline curation.} The same model decides, for each of the $5{,}854$ usable rows,
-  whether to keep the original headline or replace it: $2{,}785$ kept, $\mathbf{3{,}069}$
-  \textbf{rewritten} ($52.4\%$ of survivors).
-  \item \textbf{Final assembly.} $5{,}854$ records, a $41.5\%$ net reduction from the raw corpus.
+  \item \textbf{Tail-boilerplate trimming.} Strips a repeated scraped tail (byline, related-links
+  block) from $722$ rows' article text.
+  \item \textbf{Token-budget filter.} Removes rows where $\mathrm{tokens}(\mathit{text}) +
+  \mathrm{tokens}(\mathit{headline}) > 4{,}000$ (DictaLM tokenizer): $2{,}659$ rows ($26.6\%$).
+  \item \textbf{Multi-pipe headline filter.} Removes rows whose headline contains two or more
+  \texttt{|} characters (three or more bundled segments): $2{,}412$ rows ($24.1\%$).
+  \item \textbf{Intersection.} Combining the two independent filters leaves $6{,}486$ rows ($35.1\%$
+  removed before any model saw a row).
+  \item \textbf{Source-usability labeling.} An LLM (\texttt{gpt-5.6-luna}) labels all $6{,}486$ rows as
+  usable or one of five unusable categories (Section~\ref{sec:taxonomy}): $5{,}854$ usable, $632$
+  unusable.
+  \item \textbf{Headline curation.} The same model decides, per usable row, whether to keep the
+  original headline or replace it: $2{,}785$ kept, $\mathbf{3{,}069}$ \textbf{rewritten} ($52.4\%$ of
+  survivors).
+  \item \textbf{Final assembly.} $5{,}854$ records -- a $41.5\%$ net reduction from the raw corpus.
 \end{enumerate}
 
 \begin{figure}[t]
@@ -197,11 +233,11 @@ that later labels the survivors:
 
 \subsection{Defect taxonomy and analysis strata}
 \label{sec:taxonomy}
-The source-usability label defines six mutually exclusive categories with explicit negative guards; one
-(\emph{other}) attracted zero rows across $6{,}486$ attempts, evidence the five substantive categories
-are close to exhaustive on this corpus. We derive five \textbf{analysis strata} for the experiments in
-Section~\ref{sec:methods}, overlapping by design since a row can carry more than one defect
-(Table~\ref{tab:strata}, Figure~\ref{fig:prevalence}).
+The source-usability label has six mutually exclusive categories with explicit negative guards; one
+(\emph{other}) attracted zero of $6{,}486$ rows, evidence the remaining five are close to exhaustive on
+this corpus. From these we derive five \textbf{analysis strata} for Section~\ref{sec:methods}'s
+experiments; strata overlap by design, since a row can carry more than one defect
+(Table~\ref{tab:strata}).
 
 \begin{table}[t]
   \centering
@@ -218,38 +254,45 @@ Section~\ref{sec:methods}, overlapping by design since a row can carry more than
     \bottomrule
   \end{tabular}
   \caption{Analysis strata. S0 is the reference group for E1; S5 supports prevalence claims only (too
-  small for a distributional test). Numbering skips S1 deliberately (see below).}
+  small for a distributional test). Numbering skips S1 deliberately: the excluded
+  \emph{over-token-budget} stratum shares no common support with S0 in article length, so it cannot
+  support a distributional comparison.}
   \label{tab:strata}
 \end{table}
 
-\begin{figure}[t]
-  \centering
-  \includegraphics[width=\columnwidth]{figures/f2_defect_prevalence.png}
-  \caption{Defect prevalence across the corpus, with \emph{other unusable} broken into its three
-  constituent labels.}
-  \label{fig:prevalence}
-\end{figure}
-
-\paragraph{Why article length is a covariate, not a stratum.} The obvious fifth stratum,
-\emph{over-token-budget} ($2{,}659$ rows), cannot serve as one: the filter is a hard cut at $4{,}000$
-tokens, so every clean row lies below the threshold and every filtered row lies above it. The two
-groups share no common support in article length, so any comparison collapses onto a length effect and
-regression can only extrapolate across the cut rather than identify anything from data. We instead model
-article length continuously across all $10{,}000$ rows (Section~\ref{sec:results}, Figure~\ref{fig:f5}),
-which recovers the project's original lead-bias question in a strictly stronger form.
+\paragraph{Article length as a covariate.} We instead model article length continuously across all
+$10{,}000$ rows (Section~\ref{sec:results}, Figure~\ref{fig:f5}), which revisits the project's original
+lead-bias question in a stronger, threshold-free form.
 
 \subsection{Train/test boundary}
-Fine-tuning is owned externally; we produce and freeze the evaluation split so that arms trained
-independently remain comparable. \textbf{Arm A} trains on the identical article ids as \textbf{Arm B},
-paired with their \emph{original} pre-curation headlines instead of the curated ones -- removing the
-"which articles were sampled" confound entirely, so a B-over-A difference is attributable to headline
-repair specifically rather than to differing training populations. \textbf{Arm C} (raw HeSum, full,
-unmatched size) is an optional naive baseline. A frozen split of held-out ids, produced once on our side
-and never re-created per arm, is the single mechanism that keeps the arms comparable
-(Section~\ref{sec:methods}).
+Fine-tuning runs externally; we produce and freeze the evaluation split so arms trained independently
+stay comparable. \textbf{Arm A} trains on the same article ids as \textbf{Arm B}, but with their
+\emph{original}, pre-curation headlines -- removing the "which articles were sampled" confound, so any
+B-over-A gap is attributable to headline repair alone. \textbf{Arm C} (raw HeSum, unmatched size) is an
+optional naive baseline. One frozen split of held-out ids, produced once and never re-created per arm,
+is what keeps the arms comparable (Section~\ref{sec:methods}).
 
 \section{Methods}
 \label{sec:methods}
+
+\subsection{Model and fine-tuning setup}
+\label{sec:model-setup}
+E4 (below) fine-tunes \dictalmtwo{}, a Hebrew-native, instruction-tuned
+decoder-only transformer (Mistral-7B architecture) chosen over the project's original Qwen3-2B base for
+its Hebrew-specific tokenizer and reported fluency (Section~\ref{sec:pivot}). We fine-tune with LoRA
+\citep{hu2022lora} (rank $32$, $\alpha{=}64$, dropout $0.05$) on both the attention projections
+($q,k,v,o$) and the MLP gate/up/down projections; restricting adapters to attention alone left too
+little capacity for abstractive generation and degenerated into lead-copying and repetition loops --
+the same shortcut this project's lead-bias question is about. The loss is standard causal-language-model
+cross-entropy, masked to the completion (headline) tokens only (\texttt{completion\_only\_loss} in
+TRL's \texttt{SFTTrainer}), so the model is never credited for reproducing the much longer input
+article. Both arms train for one epoch (effective batch size $16$: micro-batch $1$, $16$-step gradient
+accumulation) with a cosine learning-rate schedule (peak $2\times10^{-4}$, $5\%$ warmup) in bf16
+precision, on a single A10G GPU. Both use the same instruction prompt, wrapped in the base model's chat
+template, with a $4{,}096$-token sequence budget (article truncated to leave room for the target and
+decode budget). At inference, both arms decode greedily (no sampling) with a $128$-token budget matched
+to the median reference length, plus a Hebrew-script decode constraint that bans any token whose surface
+form is not Hebrew script, so the model cannot satisfy the objective by switching languages.
 
 \subsection{Why a rubric judge instead of a metric}
 Reference quality cannot be assessed with a string-similarity metric, because that needs two headlines
@@ -303,10 +346,9 @@ headline result is what makes the real number credible rather than merely assert
 
 \subsection{E4: Does training on curated headlines help?}
 \label{sec:e4-methods}
-Both arms fine-tune \texttt{dicta-il/dictalm2.0-instruct} with identical hyperparameters (LoRA
-$r{=}32$, $\alpha{=}64$, extended target modules), identical decode configuration, and the same frozen
-test split, differing only in whether the training headline is Arm A's original or Arm B's curated
-target. Once predictions are available on the frozen test set we (i) rubric-score both arms' outputs on
+Both arms share the fine-tuning setup above (Section~\ref{sec:model-setup}) and the same frozen test
+split, differing only in whether the training headline is Arm A's original or Arm B's curated target.
+Once predictions are available on the frozen test set we (i) rubric-score both arms' outputs on
 the identical four-dimension axis as E1, so dataset quality and model quality are directly comparable,
 and (ii) run the same blind pairwise design as E3, arm output against arm output, under the same
 placebo treatment. We do \emph{not} score each arm against its own reference style, since that
@@ -315,17 +357,17 @@ carries no information about which arm is actually better.
 
 \subsection{Baselines and triangulation}
 As a complementary, model-driven check that does not require any fine-tuning, we run zero-shot
-\texttt{dicta-il/dictalm2.0-instruct} over an $800$-row sample stratified across S0/S2/S3/S4 and score
+\dictalmtwo{} over an $800$-row sample stratified across S0/S2/S3/S4 and score
 its outputs on the same rubric as E1 (\textbf{F9}), asking whether an off-the-shelf summarizer is already
 more single-focus than a defective reference on the dimension that defect targets. A separate, smaller
-zero-shot probe (\texttt{DictaLM-3.0-1.7B-Instruct}) scores one prediction per article twice --once
+zero-shot probe (\dictalmthreesmall{}) scores one prediction per article twice --once
 against the original headline, once against the curated one-- as a paired ROUGE/BERTScore triangulation;
 because the prediction never changes, any score gap is attributable only to which reference was used.
 This probe is reported in Appendix~\ref{app:probe} as supporting evidence only: ROUGE correlates weakly
 with the rubric judge on this corpus and is not treated as a primary result. ROUGE-1/2/L and AlephBERT
-BERTScore \citep{seker2022alephbert} are likewise demoted to an appendix comparability table
-(Appendix~\ref{app:qwen}) rather than a claim-carrying metric, following HeSum's own reported
-$-0.16$ correlation between ROUGE and human judgment.
+BERTScore \citep{seker2022alephbert} are likewise demoted to a supporting role rather than a
+claim-carrying metric, following HeSum's own reported $-0.16$ correlation between ROUGE and human
+judgment.
 
 \section{Results}
 \label{sec:results}
@@ -518,29 +560,6 @@ Headline curation & 5{,}854 & 5{,}854 & 3{,}069 rewritten \\
 
 \appendix
 
-\section{Qwen3-2B fine-tuning history}
-\label{app:qwen}
-Retained for the record; superseded by the dataset review in the main paper. Three training iterations,
-each fixing the previous one's diagnosis (Section~\ref{sec:pivot}):
-
-\begin{table}[h]
-\centering
-\small
-\begin{tabular}{lrrrr}
-\toprule
-\textbf{Version} & \textbf{R-1} & \textbf{R-2} & \textbf{R-L} & \textbf{BERTScore F1} \\
-\midrule
-v1 (1ep, attn-only LoRA) & 11.4 & 4.5 & 9.2 & 0.449 \\
-v2 (v1 adapter, new decode) & 4.7 & 0.2 & 3.7 & 0.383 \\
-v3 (3ep, full LoRA) & 5.1 & 0.3 & 4.0 & 0.390 \\
-\bottomrule
-\end{tabular}
-\caption{Qwen3-2B ROUGE and AlephBERT BERTScore F1 across three fixes. The v1$\to$v2 drop is a
-repetition artifact being suppressed, not a real regression; v3's judge-rated faithfulness (2.64)
-remained below the untuned base model's (2.98), the finding that ended this era.}
-\label{tab:qwen}
-\end{table}
-
 \section{Rubric instrument validation}
 \label{app:pilot}
 Figure~\ref{fig:kappa} shows test--retest quadratically weighted Cohen's $\kappa$ per dimension from the
@@ -578,7 +597,7 @@ E3 win-rate split by sub-type (Section~\ref{sec:results}) shows the repair's ben
 
 \section{Dual-reference zero-shot probe}
 \label{app:probe}
-As a metric-based triangulation independent of the rubric judge, \texttt{DictaLM-3.0-1.7B-Instruct}
+As a metric-based triangulation independent of the rubric judge, \dictalmthreesmall{}
 generates one zero-shot prediction per article ($n=1{,}427$, stratified subsample) and that same
 prediction is scored twice: once against the original headline, once against the curated one. Because
 the prediction never changes, any ROUGE/BERTScore gap is attributable only to which reference was used.
@@ -606,7 +625,7 @@ and confirming it moved almost entirely toward higher scores rather than lower o
 \label{app:finetuned-interim}
 While Arm A training had not yet started at submission time (Section~\ref{sec:e4-results}), inference on
 the partially-trained Arm B checkpoint reached $580$ of $586$ frozen-test-split predictions, enough for
-an early look --against zero-shot \texttt{dicta-il/dictalm2.0-instruct} (the same base model as
+an early look --against zero-shot \dictalmtwo{} (the same base model as
 Figure~\ref{fig:f9}), \emph{not} against Arm A. This is not the paper's E4 design: without Arm A, nothing
 about curation follows from it (Section~\ref{sec:e4-methods}), and Arm B was fine-tuned for only $275$ of
 $293$ steps before an infrastructure error interrupted it. We report it anyway as a caution sign.

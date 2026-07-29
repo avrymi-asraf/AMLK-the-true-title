@@ -1,17 +1,29 @@
 # AMLK paper — writing handoff
 
 **Last updated:** 2026-07-29  
-**Status:** Abstract and Introduction both revised. Abstract (lines 43–59): narrative pivot framing,
+**Status:** Abstract, Introduction, Data (§2), and Methods (§3) revised. Abstract (lines 43–59): narrative pivot framing,
 "multi-stage" instead of a specific stage count (fixed a real off-by-one: text said "eight-stage" but the
 enumerated pipeline in §3.2/Table 1 has 7 items). Introduction (§1, lines 69–158): rewritten to be more
 to the point per the assignment rubric's 4 required questions (no-jargon objective, current practice +
 limits, what's new + why it'll work, who cares) — each already had its own `\paragraph{}` header, so this
 pass tightened prose and cut jargon rather than restructuring; also swapped one hardcoded citation
 ("Nallapati et al. (2016) and See et al. (2017)") for `\citet{}` so it can't drift from `bib.bib`, giving
-the section both the bracket and non-bracket citation styles the rubric asked for. All 13 figures the
-paper cites are now real, generated PNGs in `paper/figures/` — see "Figures" section below. Bibliography
-(`bib.bib`) reconstructed and working — no more `?` for unresolved citations. Next: Data / Methods
-sections (§2–3), or whichever section you flag next.
+the section both the bracket and non-bracket citation styles the rubric asked for. All figures the
+paper cites are real, generated PNGs in `paper/figures/` — see "Figures" section below. Bibliography
+(`bib.bib`) reconstructed and working — no more `?` for unresolved citations. Data (§2, all 4 subsections)
+tightened for precision/concision (real-world-corpus statement, action-led pipeline steps, condensed
+taxonomy/train-test-boundary prose) — no numbers changed. Removed Appendix "Qwen3-2B fine-tuning
+history" (`app:qwen`/`tab:qwen`), and removed Figure 2 (`fig:prevalence`) as redundant with Table 1 —
+paper is 9 pages, 12 figures cited (was 13). Switched `\usepackage[review]{ACL2023}` to `[final]`:
+removes the margin line numbers (source of those stray digits Amit kept seeing in pasted PDF text, e.g.
+"95 Why article length..."), and as a side effect now shows real author names (previously hidden by
+review-mode blind-review placeholder) and drops page numbers (standard ACL final-copy behavior). Trimmed
+the "Why article length is a covariate, not a stratum" paragraph — its statistical justification was
+now duplicated with Table 1's caption, kept only the one-sentence forward-pointer to the lead-bias
+analysis in Results. See "Decisions made this round (appendix + Table 1 caption)" below. Pending: real
+author emails (still `<email>` placeholders, now visible in the compiled PDF). Methods (§3) gained a new
+"Model and fine-tuning setup" subsection (architecture/loss/hyperparameters — see below). Next:
+Results (§4), or whichever section you flag next.
 
 ## Paper files
 
@@ -148,6 +160,126 @@ Hebrew news summarization is commonly trained on HeSum, a corpus of article–he
 - **Subsections 1.1–1.3 (pivot narrative, RQs, contributions):** left substantively unchanged — they
   already read as tight, concrete prose rather than rubric filler, so the "more to the point" pass
   focused on the four opening paragraphs.
+- **Document-wide spacing fix (2026-07-29):** added `\frenchspacing` to the preamble. Flagged by Amit
+  on the "What is new here" paragraph specifically, but it was a document-wide default-LaTeX behavior
+  (extra stretchable space after any period it guesses ends a sentence), most visible once text is
+  fully justified in the narrow two-column layout. `\frenchspacing` makes all inter-word spacing
+  uniform; verified visually on the rendered PDF (page 1) that the wide gaps after "second.", "string.",
+  "comparison." are gone.
+- **Page 1 blank-column fix (2026-07-29):** separate issue Amit flagged as "still spaces" after the
+  `\frenchspacing` fix — the bottom third of page 1's right column was blank because
+  `\subsection{From a model question...}` (§1.1) couldn't fit enough body lines below it at the bottom
+  of that column, so LaTeX pushed the whole heading+paragraph to page 2 rather than leave an orphaned
+  line. Fixed with `\enlargethispage{3\baselineskip}` right before that `\subsection`, which gives the
+  column just enough extra room for the heading plus its first couple of lines. **Caveat:** this is a
+  positional patch tied to the current amount of text above it — if the four opening paragraphs (or the
+  abstract, or margins) change length again, this may need to be re-tuned or removed (try commenting it
+  out first and re-checking page 1 before assuming it's still needed).
+- **Abstract width (2026-07-29, round 3):** the earlier `\geometry{left=1.8cm,right=1.8cm}` widened
+  the whole page, but the `abstract` environment in `acl2023.sty` *also* insets its own 0.6cm
+  left/right margin on top of that (a "block quote" look baked into the vendor style), which is why
+  the abstract still read narrow after the page-wide fix. Overrode the `abstract` environment in
+  `main.tex` (wrapped in `\makeatletter`/`\makeatother`, since `\@setsize` needs `@` to be a letter,
+  which is only automatic inside a `.sty`) to shrink that inset to 0.1cm, so the abstract now uses
+  almost the full column width, matching the body text below it.
+- **Merged Era 2 + Era 3 into one "Era 2" (2026-07-29, §1.1 pivot narrative):** Amit pointed out that
+  switching to DictaLM2.0 (old Era 2) wasn't itself a new finding — it's Hebrew-native, expected to be
+  better-suited and better-tokenized for Hebrew than Qwen, so the real content of that era was always
+  the pivot to data (old Era 3). Merged them into a single "Era 2 -- DictaLM2.0 and the pivot to data"
+  paragraph: base-model switch explicitly framed as expected/not-a-finding, then the actual finding
+  (zero-shot beats reference) and the HeSum-paper explanation, in one flow. Now exactly two named eras
+  (  matches the "Two findings redirected it" transition sentence, which needed no change). No numbering
+  elsewhere in the paper referenced "Era 3" so nothing else needed updating.
+- **Data section tightened (2026-07-29, §2, all four subsections):** per the assignment rubric ("specify
+  the data... data statistics, is it synthetic/real world, reference the original paper... use the
+  format of Table 1"): made the real-world/not-synthetic claim explicit in §2.1 (previously only implied
+  by "scraped from news outlets"); trimmed passive/redundant phrasing throughout §2.2's curation-pipeline
+  list, §2.3's taxonomy paragraph, and §2.4's train/test-boundary paragraph. All existing statistics,
+  the table (Table 1, already in the rubric's requested format), and both figures (F1, F2) were kept
+  unchanged — this was a prose-precision pass only, no numbers or structure changed.
+
+## Decisions made this round (appendix removal + Table 1 caption fix, 2026-07-29)
+
+- **Table 1 caption "(see below)" clarified:** Amit asked where that pointer actually resolves. It's
+  the `\paragraph{Why article length is a covariate, not a stratum.}` text right after Figure 2
+  (`fig:prevalence`) in §2.3 — explains that S1 (`over-token-budget`) is excluded as a stratum because
+  it has no common support with S0 in article length. "(see below)" was vague (depends on where LaTeX
+  floats things, not guaranteed adjacent on the page), so reworded the caption to point at
+  `Figure~\ref{fig:prevalence}` by name instead — resolves correctly regardless of float placement.
+- **Removed Appendix "Qwen3-2B fine-tuning history" (`app:qwen`/`tab:qwen`) entirely,** per Amit's
+  explicit request. Deleted the section and its v1/v2/v3 ROUGE/BERTScore table. Two dangling
+  `\ref{app:qwen}` had to be fixed so compilation wouldn't produce `??`: the Era 1 paragraph's "(Appendix
+  ...)" parenthetical was dropped (the "three training iterations" claim reads fine standalone — it's
+  already unpacked in the next two sentences), and the Baselines/triangulation paragraph's "demoted to
+  an appendix comparability table (Appendix ...)" was reworded to "demoted to a supporting role" since
+  there's no longer a dedicated ROUGE/BERTScore comparability appendix to point to (ROUGE/BERTScore
+  still show up elsewhere — Appendix "Dual-reference zero-shot probe" and the interim
+  fine-tuned-vs-zero-shot appendix). Paper is now 9 pages (was 10). Verified via PyMuPDF text extraction
+  that "Qwen3-2B fine-tuning history" no longer appears anywhere and there are no orphaned `??`.
+- **Removed Figure 2 (`fig:prevalence`, `f2_defect_prevalence.png`) as redundant with Table 1,** per
+  Amit. F2 was a horizontal bar chart of the same S0/S2/S3/S4/S5 stratum counts already in Table 1's
+  rows, plus one extra detail (S5 broken into its 3 sub-labels) that isn't load-bearing for any claim in
+  the text. Removing it meant: dropping the `Figure~\ref{fig:prevalence}` cross-ref in the §2.3 opening
+  sentence (now just cites Table 1), and rewriting Table 1's caption to state the S1-skip reason inline
+  instead of pointing at the (now-gone) figure — this also fully resolves last round's "where does 'see
+  below' point" question, since there's no longer a figure to get the pointer tangled around. The
+  `\paragraph{Why article length is a covariate...}` explanation paragraph is unchanged and still
+  immediately follows the table. `figures/f2_defect_prevalence.png` and its generator
+  (`data_curation/analysis/figures.py::build_f2_defect_prevalence`) were left in place (still a valid
+  analysis artifact) — only the paper's citation of it was removed. Paper is now 9 pages, 12 figures
+  cited.
+- **Trimmed "Why article length is a covariate, not a stratum" (2026-07-29):** Amit asked for an opinion
+  on the lead-bias forward-reference in this paragraph and was considering cutting it. Agreed it should
+  be cut down: its statistical justification (no common support between S0 and the over-token-budget
+  rows, so any comparison collapses onto a length effect) had just become a duplicate of Table 1's
+  caption (added last round). Removed that restated justification but kept a single sentence pointing
+  forward to the continuous-length treatment in Results (§`sec:results`, Figure~`fig:f5`) — this is the
+  part that isn't redundant, since lead-bias is a named thread from the Introduction's pivot narrative
+  and cutting the pointer entirely would leave that thread dangling between Data and Results.
+- **Switched `[review]` to `[final]` in the `ACL2023` package option (2026-07-29):** Amit asked to
+  "remove the numbering of the rows" — those were ACL review-mode margin line numbers (`lineno` package,
+  enabled by the `review` option per `acl2023.sty`'s own comment "Remove the review option to generate
+  the final version"), which had been leaking into every pasted PDF quote this whole session (e.g. "95
+  Why article length...", "05 reduce the spaces"). `final` is `acl2023.sty`'s default and, since the
+  `\author{}` block already has real names (not an anonymous placeholder), there was no blind-review
+  reason to keep `review` mode. Two side effects worth knowing: author names now render under the title
+  (review mode's `\outauthor` suppresses them for blind review), and page numbers are gone (final-copy
+  convention — `\thispagestyle{empty}`). The placeholder `<email>` addresses are now visible in the
+  compiled PDF, which raises the priority of that still-pending task.
+
+**Methods (§3) revised (2026-07-29).** Per the assignment rubric ("if you trained a model, describe the
+model architecture, the training method — loss functions, hyperparameter choice — and evaluation
+method"), the section previously jumped straight into the rubric-judge instrument (evaluation
+methodology) without ever describing the actual DictaLM2 fine-tuning recipe in one place — only a single
+sentence in E4 mentioned LoRA r/alpha in passing, with no architecture, no loss function, no epochs/LR,
+no decode config. Added a new `\subsection{Model and fine-tuning setup}` (§3.1, first in Methods, before
+the evaluation-instrument subsections) covering: base model architecture (Mistral-7B, Hebrew-native,
+why chosen over Qwen3-2B, cross-referenced to §1.1's pivot narrative), LoRA hyperparameters and *why*
+MLP projections are included alongside attention (attention-only degenerates into lead-copying —
+deliberately tied to the paper's lead-bias thread), the loss function (`completion_only_loss`, i.e.
+cross-entropy masked to the completion), full training hyperparameters (1 epoch, LR 2e-4 cosine, 5%
+warmup, bf16, effective batch 16), and inference/decode config (greedy, 128-token budget, Hebrew-script
+decode constraint). Added a `hu2022lora` BibTeX entry (Hu et al. 2022, ICLR) for the LoRA citation.
+Trimmed E4's own methodology paragraph to point back at this new subsection instead of repeating the
+same hyperparameters. Clustering/other-procedures rubric clause doesn't apply — topic clustering is
+side infrastructure, not part of the paper's reported experiments. Compiles clean, 9 pages, citation
+resolves correctly.
+
+**Fixed a bad line-break in §3.1 (2026-07-29).** Amit flagged "something is wrong with the rendering of
+3.1" — the opening line ("E4 (below) fine-tunes dicta-il/dictalm2.0-instruct...") had huge stretched gaps
+between words. Root cause: `\texttt` (monospace) disables hyphenation, so the ~35-character model-id
+token is one unbreakable unit; when it doesn't fit the line remainder, LaTeX shoves the whole token to
+the next line and stretches the sparse leftover words to fill the column width (a very underfull hbox).
+This is a general risk for every long `\texttt{...}` model identifier in a narrow two-column layout, not
+just this one occurrence — the same string appears 8 times across the paper. Fixed at the source instead
+of patching this one instance: added `\dictalmtwo`, `\dictalmthreesmall`, `\qwenthreetwob` macros in the
+preamble that insert `\allowbreak` at each existing hyphen/slash inside the identifier (no visible
+change, just legal break points), and replaced all raw `\texttt{dicta-il/dictalm2.0-instruct}` /
+`\texttt{DictaLM-3.0-1.7B-Instruct}` / `\texttt{Qwen/Qwen3-2B}` occurrences with the macros. Verified by
+rendering every page that mentions a model name (0, 1, 2, 3, 5, 7) — all wrap cleanly now. Shorter
+`\texttt` identifiers (`gemini-2.5-flash-lite`, `completion_only_loss`, the edit-type labels) were left
+as plain `\texttt` since they're short enough not to trigger this in practice (confirmed visually, no
+bad breaks) — if one ever does, the fix is the same `\allowbreak` pattern.
 
 ## Open items for abstract
 
@@ -159,3 +291,16 @@ Hebrew news summarization is commonly trained on HeSum, a corpus of article–he
 ## Amit's remarks (paste below)
 
 <!-- Add your abstract feedback here -->
+
+## To check yourself (2026-07-29)
+
+- [ ] **Lead-bias framing.** You've trimmed/questioned this thread twice already (the "Why article
+      length is a covariate" paragraph in §2.3, and the forward-pointer to Results). Read it end to end
+      once: Introduction §1 (original motivating question) → §2.3's one-sentence pointer → §4.2 "Length
+      and lead bias are continuous, not filter artifacts" (the actual F5 payoff) → §3.1's new mention
+      ("the same shortcut this project's lead-bias question is about," re: LoRA target modules). Decide
+      if that's the right amount of emphasis/repetition or if it should be trimmed further or
+      consolidated — this is a judgment call the agent can't make for you.
+- [ ] Re-read Methods (§3) in full now that §3.1 is new — you flagged the §3.1 render bug, worth
+      double-checking the rest of §3.1's content/wording (not just layout) reads the way you want before
+      moving on to Results (§4).
