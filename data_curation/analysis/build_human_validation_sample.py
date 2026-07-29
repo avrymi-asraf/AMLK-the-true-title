@@ -28,7 +28,6 @@ WORKLIST_PATH = ARTIFACTS_DIR / "human_validation_worklist.json"
 FINAL_CLEAN_PATH = ARTIFACTS_DIR / "final_clean_hesum.json"
 # Must match evaluation.viewer.annotation_data.TEAM_ANNOTATOR_IDS
 WORKLIST_ANNOTATOR_IDS = ("amit", "avreymi", "ofek")
-FINAL_CLEAN_PATH = ARTIFACTS_DIR / "final_clean_hesum.json"
 
 
 def row_strata(row: dict) -> list[str]:

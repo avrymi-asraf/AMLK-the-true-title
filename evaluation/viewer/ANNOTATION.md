@@ -64,6 +64,19 @@ python -m data_curation.analysis.human_validation_results --check \
   --annotations data_curation/artifacts/human_annotations/ofek.jsonl
 ```
 
+## Add more pairwise A/B rows (lead or self-serve)
+
+To give one annotator extra blind original-vs-curated comparisons (pairwise only, no new rubric rows):
+
+```bash
+python -m data_curation.analysis.extend_human_validation_pairwise --annotator amit --count 20
+git add data_curation/artifacts/human_validation_worklist.json
+git commit -m "Extend F9a pairwise worklist for amit"
+git push origin main
+```
+
+Teammates `git pull` before annotating. Use **pairwise** filter in the app.
+
 ## Regenerate worklist (lead only)
 
 Requires local pipeline artifacts (`row_labels.json`, `tail_boilerplate_removed.json`, `final_clean_hesum.json`):
