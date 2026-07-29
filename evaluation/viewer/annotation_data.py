@@ -97,8 +97,11 @@ def pairwise_presentation(
     }
 
 
-def load_annotations(path: str | Path) -> list[dict]:
-    """Read all annotation records from a JSONL file (empty list if missing)."""
+def load_annotations(path: str | Path, *, dedupe: bool = True) -> list[dict]:
+    """Read annotation records from JSONL (empty list if missing).
+
+    When `dedupe` is True, keep only the latest record per (hesum_id, task) by submitted_at.
+    """
     path = Path(path)
     if not path.exists():
         return []
@@ -108,7 +111,42 @@ def load_annotations(path: str | Path) -> list[dict]:
             line = line.strip()
             if line:
                 records.append(json.loads(line))
-    return records
+    return dedupe_annotations(records) if dedupe else records
+
+
+def dedupe_annotations(records: list[dict]) -> list[dict]:
+    """Keep the latest record per (hesum_id, task)."""
+    latest: dict[tuple[str, str], dict] = {}
+    for rec in records:
+        key = (rec["hesum_id"], rec["task"])
+        prev = latest.get(key)
+        if prev is None or rec.get("submitted_at", "") >= prev.get("submitted_at", ""):
+            latest[key] = rec
+    return list(latest.values())
+
+
+def save_annotations(path: str | Path, records: list[dict]) -> None:
+    """Rewrite a JSONL file from a list of records."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for rec in records:
+            f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+
+
+def upsert_annotation(path: str | Path, record: dict) -> None:
+    """Replace an existing (hesum_id, task) record or append if new."""
+    path = Path(path)
+    records = load_annotations(path, dedupe=False)
+    key = (record["hesum_id"], record["task"])
+    records = [r for r in records if (r["hesum_id"], r["task"]) != key]
+    records.append(record)
+    save_annotations(path, records)
+
+
+def annotation_lookup(annotations: list[dict]) -> dict[tuple[str, str], dict]:
+    """Map (hesum_id, task) -> record (expects deduped input)."""
+    return {(a["hesum_id"], a["task"]): a for a in annotations}
 
 
 def completed_keys(annotations: list[dict]) -> set[tuple[str, str]]:

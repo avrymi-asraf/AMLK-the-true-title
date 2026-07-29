@@ -58,9 +58,11 @@ def group_by_annotator(records: list[dict]) -> dict[str, list[dict]]:
 
 
 def rubric_scores_by_id(annotations: list[dict]) -> dict[str, dict[str, int]]:
-    """Map hesum_id -> {dimension: score} from rubric task records."""
+    """Map hesum_id -> {dimension: score} from rubric task records (latest per id)."""
+    from evaluation.viewer.annotation_data import dedupe_annotations
+
     out: dict[str, dict[str, int]] = {}
-    for rec in annotations:
+    for rec in dedupe_annotations(annotations):
         if rec.get("task") != "rubric":
             continue
         out[rec["hesum_id"]] = rec["scores"]

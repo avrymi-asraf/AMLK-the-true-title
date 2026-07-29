@@ -8,11 +8,13 @@ from evaluation.viewer.annotation_data import (
     build_rubric_record,
     completed_keys,
     default_annotations_path,
+    dedupe_annotations,
     expand_tasks,
     export_summary,
     filter_task_items,
     load_annotations,
     pairwise_presentation,
+    upsert_annotation,
 )
 
 
@@ -84,6 +86,35 @@ def test_filter_task_items_remaining():
     remaining = filter_task_items(items, completed, only_remaining=True)
     assert len(remaining) == 1
     assert remaining[0]["task"] == "pairwise"
+
+
+def test_upsert_replaces_existing_record(tmp_path):
+    path = tmp_path / "ann.jsonl"
+    rec1 = build_rubric_record("amit", "1", {
+        "faithfulness": 3, "single_focus": 3, "informativeness": 3, "cleanliness": 1,
+    })
+    upsert_annotation(path, rec1)
+    rec2 = build_rubric_record("amit", "1", {
+        "faithfulness": 3, "single_focus": 3, "informativeness": 3, "cleanliness": 4,
+    })
+    upsert_annotation(path, rec2)
+    loaded = load_annotations(path)
+    assert len(loaded) == 1
+    assert loaded[0]["scores"]["cleanliness"] == 4
+
+
+def test_dedupe_keeps_latest_submitted_at():
+    older = build_rubric_record("amit", "1", {
+        "faithfulness": 2, "single_focus": 2, "informativeness": 2, "cleanliness": 2,
+    })
+    newer = build_rubric_record("amit", "1", {
+        "faithfulness": 5, "single_focus": 5, "informativeness": 5, "cleanliness": 5,
+    })
+    newer["submitted_at"] = "2026-07-29T00:00:00+00:00"
+    older["submitted_at"] = "2026-07-28T00:00:00+00:00"
+    out = dedupe_annotations([older, newer])
+    assert len(out) == 1
+    assert out[0]["scores"]["faithfulness"] == 5
 
 
 def test_default_annotations_path_sanitizes():

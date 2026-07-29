@@ -23,6 +23,7 @@ from evaluation.viewer.annotation_data import (
     DEFAULT_WORKLIST_PATH,
     TEAM_ANNOTATOR_IDS,
     annotations_git_path,
+    annotation_lookup,
     append_annotation,
     build_pairwise_record,
     build_rubric_record,
@@ -34,6 +35,7 @@ from evaluation.viewer.annotation_data import (
     load_annotations,
     load_worklist,
     pairwise_presentation,
+    upsert_annotation,
 )
 
 
@@ -75,6 +77,7 @@ def main() -> None:
 
         annotations = load_annotations(ann_path) if annotator_id else []
         completed = completed_keys(annotations)
+        lookup = annotation_lookup(annotations)
         all_items = expand_tasks(worklist, annotator_id=annotator_id) if annotator_id else []
         summary = export_summary(annotations, worklist, annotator_id=annotator_id or None)
         if worklist.get("split_mode") == "disjoint" and annotator_id:
@@ -89,6 +92,7 @@ def main() -> None:
 
         task_filter = st.selectbox("Show tasks", ["all", "rubric", "pairwise"])
         only_remaining = st.checkbox("Only remaining", value=True)
+        allow_editing = st.checkbox("Allow editing submitted items", value=False)
         show_admin = st.checkbox("Admin: show judge scores (post-hoc)", value=False)
 
         if ann_path.exists():
@@ -154,10 +158,14 @@ def main() -> None:
     hesum_id = item["hesum_id"]
     task = item["task"]
     is_done = (hesum_id, task) in completed
+    can_edit = allow_editing or not is_done
+    existing = lookup.get((hesum_id, task))
 
     st.caption(f"Item {st.session_state.ann_pos + 1}/{len(navigable)} · id {hesum_id} · task {task}")
-    if is_done:
-        st.info("Already submitted — navigate to another item or uncheck 'Only remaining'.")
+    if is_done and not allow_editing:
+        st.info("Already submitted — enable 'Allow editing submitted items' in the sidebar to revise.")
+    elif is_done and allow_editing:
+        st.warning("Editing mode — saving will replace your previous submission for this item.")
 
     with st.expander("Article", expanded=False):
         rtl_block("Article", item.get("text", ""))
@@ -167,21 +175,25 @@ def main() -> None:
         rtl_block("Headline", item.get("original_headline", ""))
 
         scores = {}
+        existing_scores = existing.get("scores", {}) if existing and existing.get("task") == "rubric" else {}
         for dim in DIMENSIONS:
             with st.expander(f"{dim.replace('_', ' ').title()} — {DIMENSION_QUESTIONS[dim]}", expanded=False):
                 for level in sorted(RUBRIC_LEVELS[dim].keys(), reverse=True):
                     st.caption(f"{level}: {RUBRIC_LEVELS[dim][level]}")
+            prev = existing_scores.get(dim)
             scores[dim] = st.radio(
                 dim,
                 options=list(range(1, 6)),
+                index=(prev - 1) if prev in range(1, 6) else 0,
                 horizontal=True,
                 key=f"rubric_{hesum_id}_{dim}",
-                disabled=is_done,
+                disabled=not can_edit,
             )
 
-        if st.button("Submit rubric scores", disabled=is_done):
+        submit_label = "Update rubric scores" if is_done else "Submit rubric scores"
+        if st.button(submit_label, disabled=not can_edit):
             record = build_rubric_record(annotator_id, hesum_id, scores)
-            append_annotation(ann_path, record)
+            upsert_annotation(ann_path, record)
             st.success("Saved.")
             st.rerun()
 
@@ -198,11 +210,11 @@ def main() -> None:
 
         cols = st.columns(3)
         for col, label, winner in zip(cols, ["A better", "B better", "Tie"], ["a", "b", "tie"]):
-            if col.button(label, disabled=is_done, use_container_width=True):
+            if col.button(label, disabled=not can_edit, use_container_width=True):
                 record = build_pairwise_record(
                     annotator_id, hesum_id, winner, presentation["slot_map"],
                 )
-                append_annotation(ann_path, record)
+                upsert_annotation(ann_path, record)
                 st.success("Saved.")
                 st.rerun()
 

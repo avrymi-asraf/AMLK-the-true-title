@@ -32,7 +32,8 @@ uv run streamlit run evaluation/viewer/annotate_app.py
 3. The app shows only rows **assigned to you** (~50 rubric items plus pairwise tasks on your rewritten subset).
 4. Score blind — do not discuss specific rows until all three finish their shares.
 5. Progress saves to `data_curation/artifacts/human_annotations/{your_id}.jsonl` (tracked in git).
-6. When finished, **commit and push** (the app shows the exact commands when your share is complete):
+6. To **fix a mistake**, check **Allow editing submitted items** in the sidebar, uncheck **Only remaining**, filter to **rubric**, and update scores (saves replace the old record).
+7. When finished, **commit and push** (the app shows the exact commands when your share is complete):
 
 ```bash
 git pull origin main
