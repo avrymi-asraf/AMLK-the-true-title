@@ -20,8 +20,9 @@ MODEL_SLUG = "dictalm2-instruct"
 DEFAULT_EPOCHS = 1
 # Decode budget for post-train dual-arm generation (train_hf_job + infer twins).
 # 128 is enough for the short news-summary target (median ref ~157 chars) and cuts GPU
-# decode time vs the old 256 cap: smoke preds always hit 256 without EOS, so full-run
-# dual inference on ~760×2 examples was ~1.6h of a ~5.8h a10g-small job (C5).
+# decode time vs the old 256 cap: smoke preds always hit 256 without EOS, so dual inference
+# was ~1.6h of a ~5.8h a10g-small job (C5, measured on the pre-curation 6073/760 splits —
+# the curated splits are smaller, so re-measure before quoting a wall-clock).
 # Override with --max-new-tokens / MAX_NEW_TOKENS when a long-form probe needs more.
 DEFAULT_MAX_NEW_TOKENS = 128
 
@@ -105,8 +106,14 @@ class TrainingConfig:
 METHOD_PRESETS = {
     "qlora": dict(quantize=True,  use_lora=True,  per_device_train_batch_size=2,
                   gradient_accumulation_steps=8,  learning_rate=2e-4),
-    "lora":  dict(quantize=False, use_lora=True,  per_device_train_batch_size=4,
-                  gradient_accumulation_steps=4,  learning_rate=2e-4),
+    # bf16 LoRA is the cheapest regime if it fits (no 4-bit dequant per matmul), but a bf16 7B is
+    # ~14.5 GB of the A10G's 24 GB before activations, so batch is 1 — the old 4/4 was set when
+    # MAX_LENGTH was 2048. Effective batch stays 16, matching qlora.
+    # MEASURED 2026-07-26 (paired 10-step smokes, same 50 examples): 40.49 s/step vs qlora's
+    # 55.33 — 1.37x faster, and both numbers already include each regime's group_by_length
+    # effect (20% for qlora at micro-batch 2, nil for lora at micro-batch 1). Default method.
+    "lora":  dict(quantize=False, use_lora=True,  per_device_train_batch_size=1,
+                  gradient_accumulation_steps=16, learning_rate=2e-4),
     "full":  dict(quantize=False, use_lora=False, per_device_train_batch_size=1,
                   gradient_accumulation_steps=16, learning_rate=5e-5),
 }

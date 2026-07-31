@@ -217,8 +217,11 @@ def _generate_for_prompt(
                 max_new_tokens=max_new_tokens,
                 min_new_tokens=8,
                 do_sample=False,
-                no_repeat_ngram_size=3,
-                repetition_penalty=1.2,
+                # Penalties off: applied over the prompt as well, they suppress the article's own
+                # vocabulary and corrupt copied entities (docs/training-improvement-notebook.md #7).
+                # Note for re-reading past rounds: rounds 1-3 were swept WITH 1.2/3.
+                no_repeat_ngram_size=0,
+                repetition_penalty=1.0,
                 bad_words_ids=bad_words_ids,
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.pad_token_id,

@@ -1,18 +1,18 @@
 ## Project Goal
 
-* **Description:** AMLK is a Hebrew **news** summarization research project. The goal is to fine-tune `dicta-il/dictalm2.0-instruct` on Hebrew journalism datasets (HeSum, IAHLT summarization_he), evaluate with ROUGE, BERTScore, and LLM-as-judge, and produce a research paper and presentation. Design choices are informed by **English summarization literature** (lead bias, metric limits, strong baselines) without re-running English experiments. Evaluation includes an **advanced-model baseline** (e.g. Gemini API on the same test set and prompt) so metrics can be interpreted against a stronger system. A **truncation / positional-shortcut probe** trains separate models on Whole text, Lead-only, and Body-only inputs. Optional **headline-style control** varies the instruction (short headline vs longer summary). **Error analysis** labels a sampled set of predictions for failure types common in the literature. Runs locally or on HuggingFace Jobs; all scripts are command-line Python.
+* **Description:** AMLK is a Hebrew **news** summarization research project. The goal is to fine-tune `dicta-il/dictalm2.0-instruct` on **curated HeSum** (main-branch `data_curation` product: `final_clean_hesum.json`), evaluate with ROUGE, BERTScore, and LLM-as-judge, and produce a research paper and presentation. Design choices are informed by **English summarization literature** (lead bias, metric limits, strong baselines) without re-running English experiments. Evaluation includes an **advanced-model baseline** (e.g. Gemini API on the same test set and prompt) so metrics can be interpreted against a stronger system. A **truncation / positional-shortcut probe** trains separate models on Whole text, Lead-only, and Body-only inputs. Optional **headline-style control** varies the instruction (short headline vs longer summary). **Error analysis** labels a sampled set of predictions for failure types common in the literature. Runs locally or on HuggingFace Jobs; all scripts are command-line Python.
 
 ---
 
 ## Project Structure - remember to update it when you make changes
 
 * **Architecture:** The project is divided into three sequential pipelines:
-  1. **Training pipeline** — downloads Hebrew summarization datasets (IAHLT summarization_he, HeSum), loads the `dicta-il/dictalm2.0-instruct` base model, and fine-tunes it using the HuggingFace `transformers`/`trl` stack. If local GPU is insufficient, the job is submitted to HuggingFace as a remote training job.
+  1. **Training pipeline** — materializes curated HeSum (`final_clean_hesum.json` → HF Arrow splits with `prompt`/`completion`), loads the `dicta-il/dictalm2.0-instruct` base model, and fine-tunes it using the HuggingFace `transformers`/`trl` stack. If local GPU is insufficient, the job is submitted to HuggingFace as a remote training job.
   2. **Evaluation pipeline** — runs fine-tuned and baseline checkpoints on the held-out test set: ROUGE, BERTScore, LLM-as-judge (Gemini), an advanced-model baseline on the same data, and systematic error analysis on a sampled subset.
   3. **Results & reporting** — aggregated metrics feed into the final paper and presentation.
 
 * **Code Flow:**
-  1. Dataset download & preprocessing → tokenised dataset saved to disk
+  1. Curated HeSum → HuggingFace train/val/test Arrow splits saved to disk (and uploaded to Hub on train submit)
   2. Model fine-tuning → checkpoint saved to disk / HF Hub
   3. Inference on test set → predictions saved to disk
   4. Evaluation scripts consume predictions → produce metric reports
@@ -32,15 +32,17 @@
 │       └── testing/SKILL.md              # AMLK testing philosophy
 ├── data/
 │   ├── __init__.py
-│   ├── download.py                       # Pipeline step 1: downloads & normalizes IAHLT+HeSum datasets
+│   ├── download.py                       # Pipeline step 1: load curated final_clean_hesum.json → curated_records.jsonl
 │   ├── prompts.py                        # build_prompt/PROMPT_TEMPLATE + make_variant — shared prompt/probe-variant source of truth
-│   ├── clean.py                          # Always-on reference normalization: normalize_summary/is_roundup_digest/pipe_segments
-│   └── preprocess.py                     # Pipeline step 2: clean refs + hardened prompt + probe variants, 80/10/10 split
+│   ├── clean.py                          # Legacy digest helpers (style/diagnostics only — not the train path)
+│   ├── preprocess.py                     # Pipeline step 2: curated → HF Arrow train/val/test (prompt/completion), validate
+│   └── distill.py                        # Pipeline step 2 (alt targets): Gemini-teacher summaries → distilled train splits
 ├── training/
 │   ├── __init__.py
 │   ├── config.py                         # MODEL_ID, METHOD_PRESETS, LoRAConfig, TrainingConfig, wandb_* naming, repo helpers
 │   ├── train.py                          # Single trainer: --method qlora|lora|full, --variant, 1 epoch, --submit-hf
-│   └── train_hf_job.py                   # Self-contained UV script run by HF Jobs (submitted by train.py --submit-hf)
+│   ├── train_hf_job.py                   # Self-contained UV script run by HF Jobs (submitted by train.py --submit-hf)
+│   └── dpo_hf_job.py                     # Step 3b: preference optimization (DPO) on top of an SFT adapter, HF Jobs
 ├── evaluation/
 │   ├── __init__.py
 │   ├── predict.py                        # Generate the Gemini advanced-baseline summaries (API only); strip_think() tool
@@ -56,6 +58,7 @@
 │   ├── prompt_rounds.py                  # Prompt-optimization loop: the round registry (every candidate set ever tried + its hypothesis)
 │   ├── prompt_sweep_hf_job.py            # Prompt-optimization loop, remote half: sweep K prompts x N examples in ONE HF Job
 │   ├── topic_clustering.py               # Embed summaries + BERTopic cluster + Gemini-name topics + plot_clusters(); used by the Databricks notebook
+│   ├── improve_eval.py                   # Training-improvement loop: fixed judged subset, pinned judge, paired deltas
 │   ├── style_labels.py                   # Rule-based structural style labels (single/multi-sentence, pipe digest, question) — local, no GPU/API
 │   ├── stratify_by_topic.py              # Break down a predictions file's ROUGE/BERTScore/failure rates by topic_label or style_label
 │   └── viewer/                           # Predictions viewer (its own subfolder — a self-contained UI feature)
@@ -70,23 +73,27 @@
 │   └── run_nb_cell.py                    # Drive notebook cells on a Colab session via colab-cli (agent cell-by-cell runner)
 ├── tests/
 │   ├── __init__.py
-│   ├── test_download.py                  # normalize_iahlt / normalize_hesum
-│   ├── test_preprocess.py                # build_prompt / make_variant / split_dataset
+│   ├── test_download.py                  # normalize_curated_record / load_curated_json
+│   ├── test_preprocess.py                # build_prompt / make_variant / split / validate_train_dataset
 │   ├── test_clean.py                     # normalize_summary / roundup filter / repo + wandb naming helpers
 │   ├── test_evaluation.py                # ROUGE-on-Hebrew, judge-reply parsing, failure rates (live test gated)
 │   ├── test_stratify_by_topic.py         # join/grouping logic for topic and style stratification
 │   ├── test_topic_clustering.py          # BERTopic fit + Gemini naming + plot (live test gated)
 │   ├── test_style_labels.py              # rule-based style classification (pipe digest / question / sentence count)
-│   └── test_viewer.py                    # predictions-viewer load/keyword-search/discovery logic
+│   ├── test_viewer.py                    # predictions-viewer load/keyword-search/discovery logic
+│   └── test_improve_eval.py              # fixed judged subset / paired delta / distillation target filter
 ├── docs/
 │   ├── ANLP Project abstract.md          # Original submitted proposal (historical — Qwen3-2B era)
 │   ├── research-proposal.md              # Original proposal prose (historical — Qwen3-2B era)
 │   ├── research-proposal-revised.md      # Current plan of record (base model + probe design)
-│   └── prompt-arena-notebook.md          # Lab notebook for the prompt loop: guidelines, round log, why each change
+│   ├── prompt-arena-notebook.md          # Lab notebook for the prompt loop: guidelines, round log, why each change
+│   ├── training-improvement-notebook.md  # Lab notebook for the "SFT makes Faith/Flu worse" loop: instrument, arms, budget
+│   └── training-improvement-summary-he.md # Hebrew narrative report of that loop, written for a non-ML reader
 ├── outputs/
 │   ├── data/
-│   │   ├── raw/combined.jsonl            # Merged normalized dataset — 10,000 records (gitignored)
-│   │   └── processed/<variant>/          # Arrow splits train/ val/ test/ per probe variant (gitignored)
+│   │   ├── curated/final_clean_hesum.json # Curated HeSum product (main-branch data_curation; gitignored)
+│   │   ├── curated/curated_records.jsonl  # Normalized {text,summary,source,hesum_id} export (gitignored)
+│   │   └── processed/<variant>/          # HF Arrow splits train/val/test — train contract (gitignored)
 │   ├── checkpoints/                      # LoRA adapter / full model checkpoints (gitignored)
 │   ├── results/                          # predictions.jsonl + evaluation/error-analysis reports (gitignored)
 │   └── manual-dwonloaded/                # Manually downloaded predictions directory (gitignored)
@@ -103,13 +110,16 @@
 └── TODO.md                               # Milestone tracker
 ```
 
-* `data/download.py`: Downloads Hebrew summarization datasets (biunlp/HeSum; IAHLT/summarization_he inaccessible with current credentials), normalises to `{text, summary, source}`, writes `outputs/data/raw/combined.jsonl`.
+* `data/download.py`: **Only training-data source path (step 1).** Loads curated HeSum `final_clean_hesum.json` (`{hesum_id, text, headline}` from main-branch `data_curation`), normalizes to `{text, summary, source=hesum-curated, hesum_id}`, writes `outputs/data/curated/curated_records.jsonl`. Does not re-run model curation or download raw biunlp/HeSum/IAHLT.
 * `data/prompts.py`: Single hardened `PROMPT_TEMPLATE`, `build_prompt(text)`, `make_variant` (whole|lead|body), plus `format_chat_prompt` / `prepare_tokenizer_for_templated_prompts` — the single source of truth for wrapping instructions in the model's chat template (train + both inference arms). No Qwen-era think-switch injection. Reused by preprocess, train, and evaluation.
-* `data/clean.py`: Always-on reference cleaning. `normalize_summary` rewrites HeSum's `"headline | headline"` pipe/bullet digests into natural prose; `is_roundup_digest`/`pipe_segments` flag 3+-segment media roundups for removal. Pure regex, no GPU/API.
-* `data/preprocess.py`: Reads `combined.jsonl`, drops roundup digests, normalizes remaining references, builds raw `(prompt, completion)` pairs with the hardened prompt (chat wrap happens at train/infer time so multi-model baselines keep their own templates), applies `--variant whole|lead|body`, truncates each article to `MAX_LENGTH-256` tokens so the summary always survives, splits 80/10/10, saves Arrow splits to `outputs/data/processed/<variant>/`.
+* `data/clean.py`: Legacy pure-regex digest helpers (`normalize_summary`, `is_roundup_digest`, `pipe_segments`). **Not used by the train path** (curation already cleaned headlines); kept for style/diagnostics and tests.
+* `data/preprocess.py`: **Only training-data path (step 2).** Reads curated JSON/JSONL, builds raw `(prompt, completion)` pairs with the hardened prompt (chat wrap happens at train/infer time), applies `--variant whole|lead|body`, truncates each article to `MAX_LENGTH-256` tokens, splits 80/10/10, **validates the train contract** (`validate_train_dataset`), saves HuggingFace Arrow splits to `outputs/data/processed/<variant>/`. Train `--submit-hf` uploads those splits to `{hf_user}/amlk-training-data`.
+* `data/distill.py`: **Alternative-target path for step 2** (training-improvement loop). Feeds the same curated articles' `prompt` column to the Gemini teacher, keeps only targets passing the format filter (`prompt_arena.compliance_metrics`) and carrying no script the Hebrew decode constraint bans, and writes distilled `prompt`/`completion` Arrow splits (`--push` to a **new** dataset repo, never `amlk-training-data`). The `test` split is copied through untouched so every arm is judged on the same articles. Local, API + CPU only.
+* `evaluation/improve_eval.py`: The measurement instrument for the training-improvement loop. One fixed 120-example test subset (`subset_indices`, seed 1234) shared by every arm, a temperature-0 Gemini judge (`judge_file`), and `paired_delta` (mean arm−control with SE/CI) — the only statistic allowed to declare a training change an improvement. Local, API + CPU only. See `docs/training-improvement-notebook.md`.
 * `training/config.py`: Shared constants: `MODEL_ID="dicta-il/dictalm2.0-instruct"`, `MODEL_SLUG="dictalm2-instruct"`, `MAX_LENGTH=4096` (source of truth for train/gen seq budget; preprocess uses `MAX_LENGTH-256=3840` article tokens), `DEFAULT_EPOCHS=1`, `METHOD_PRESETS`, `LoRAConfig`, `TrainingConfig`, `wandb_project`/`wandb_run_name` (date + model + method + variant + epochs), and `dataset_repo`/`model_repo`/`processed_profile_name` Hub-id helpers (adapter repos are `amlk-{MODEL_SLUG}-sft[-variant]`). Self-contained job scripts keep twin fallbacks of `max_length` (must stay in sync).
-* `training/train.py`: One trainer for all three regimes (`--method qlora|lora|full`). Trains with `completion_only_loss=True`, 1 epoch by default, logs to a model-specific wandb project with informative run names, saves the adapter; `--push-to-hub` or `--submit-hf` push to the Hub. Serializes resolved `TRAIN_CONFIG`/`LORA_CONFIG` JSON into the remote job env (so METHOD_PRESETS cannot be ignored). Full-run default timeout 8h. Chat-wraps prompts before SFT. Mid-run stability: creates the model repo before the job starts so `hub_strategy=every_save` can commit checkpoints while training. Inference is NOT here.
+* `training/train.py`: One trainer for all three regimes (`--method qlora|lora|full`). Trains with `completion_only_loss=True`, 1 epoch by default, logs to a model-specific wandb project with informative run names, saves the adapter; `--push-to-hub` or `--submit-hf` push to the Hub. Serializes resolved `TRAIN_CONFIG`/`LORA_CONFIG` JSON into the remote job env (so METHOD_PRESETS cannot be ignored). Full-run default timeout 8h. Chat-wraps prompts before SFT. Mid-run stability: creates the model repo before the job starts so `hub_strategy=every_save` can commit checkpoints while training. Improvement-loop flags keep an arm cheap and comparable: `--dataset-repo` (alternative targets; refuses to run without `--skip-data-upload` so it can't overwrite the source dataset), `--max-train` (match arms on step count), `--test-subset` (generate only the judged subset), `--skip-base-arm`, `--run-tag`, `--learning-rate`. Inference is NOT here.
 * `training/train_hf_job.py`: Self-contained PEP 723 UV script submitted inline by `train.py --submit-hf`. Reads METHOD/VARIANT/BASE_MODEL/DATASET_REPO/OUTPUT_REPO/WANDB_*/EPOCHS/`TRAIN_CONFIG`/`LORA_CONFIG` from env, trains on the cloud GPU (1 epoch default), then generates fine-tuned + zero-shot base test predictions. Chat-wraps train/val/infer for both arms; `add_special_tokens=False` on generate (no double-BOS); Hebrew-script `bad_words_ids`. Stability: `/data/output` resume, `hub_strategy=every_save`, immediate prediction uploads. Never run directly.
+* `training/dpo_hf_job.py`: **Pipeline step 3b** — preference optimization (DPO) on HF Jobs, one self-contained file that is both its own submitter (`--submit-hf --pairs … --sft-adapter … --output-repo …`) and the remote job (it detects `PAIRS_REPO` in the environment). Loads an existing SFT LoRA as the trainable policy in 4-bit (PEFT's frozen base doubles as the reference model, so no second 7B copy), trains on `{prompt, chosen, rejected}` pairs from `data/distill.py --build-pairs`, then generates test predictions with the same decode config as `train_hf_job.py`. Exists because every SFT arm plateaued at the base model's quality (`docs/training-improvement-notebook.md` #12): DPO trains on contrasts, not imitation. **Remote GPU only.**
 * `evaluation/predict.py`: Generates the Gemini advanced-baseline summaries via API (no GPU, no model load), same hardened prompt as training. Resumes from a partial file. The fine-tuned and zero-shot predictions come from the cloud training job, not here.
 * `evaluation/gemini_client.py`: Shared Gemini API helpers (`GEMINI_MODEL`, `call_with_retry`). Also defines `strip_think()` — the shared tool that drops closed `<think>…</think>` reasoning blocks (emitted by chat-capable Qwen3-family models) so metrics score the summary, not the reasoning (used by evaluate.py and error_analysis.py).
 * `evaluation/evaluate.py`: Scores a predictions file with raw + Hebrew-normalized ROUGE-1/2/L (`normalize_hebrew` strips niqqud + folds final-form letters), BERTScore (default `onlplab/alephbert-base`, the HeSum backbone; `--bertscore-model` to override), and the Gemini faithfulness/fluency judge (`--skip-llm` to skip; `--limit N` to cap for a smoke run). Applies `strip_think` before scoring. One JSON report per system.
@@ -149,24 +159,31 @@
 * **Always invoke scripts as modules** (`python -m data.preprocess`, `python -m training.train`, …)
   so package imports resolve from the repo root. This is the one supported way to run them.
 * **Never load or run a model on the local GPU** — this machine (8 GB) freezes. All model
-  training and inference run on **HuggingFace Jobs**. Local is only for: data download/preprocess
-  (CPU), `pytest`, the Gemini baseline + judge + error analysis (API), and BERTScore (pinned to CPU).
+  training and inference run on **HuggingFace Jobs**. Local is only for: curated data
+  materialize/preprocess (CPU), `pytest`, the Gemini baseline + judge + error analysis (API),
+  and BERTScore (pinned to CPU).
 
 **Running the full pipeline:**
 ```bash
 source .env && source .venv/bin/activate
 
-# 1. Download datasets  →  outputs/data/raw/combined.jsonl (10,000 records)   [local, CPU]
-python -m data.download
+# 0. Place curated product (from main-branch data_curation) once:
+#    outputs/data/curated/final_clean_hesum.json   (~5854 rows: hesum_id, text, headline)
 
-# 2. Preprocess: clean refs + hardened prompt + 80/10/10 split. --variant selects the probe input.  [local, CPU]
-python -m data.preprocess --variant whole        # also: --variant lead | body
+# 1. Materialize curated source → curated_records.jsonl   [local, CPU]
+python -m data.download --force
 
-# 3. Train on HF Jobs (cloud GPU, 1 epoch). The job also generates fine-tuned + zero-shot base test
-#    predictions and pushes predictions-finetuned.jsonl / predictions-base.jsonl to the model repo.
+# 2. Build HF training dataset: hardened prompt + 80/10/10 + validate. --variant = probe input.
+python -m data.preprocess --variant whole --force   # also: --variant lead | body
+#    → outputs/data/processed/whole/{train,val,test}  columns: text,summary,source,prompt,completion
+
+# 3. Train on HF Jobs (cloud GPU, 1 epoch). Curated whole splits are already on Hub as of
+#    2026-07-26 (avreymi/amlk-training-data); use --skip-data-upload unless you rebuilt local.
+#    The job also generates fine-tuned + zero-shot base test predictions and pushes
+#    predictions-finetuned.jsonl / predictions-base.jsonl to the model repo.
 #    Mid-run: hub_strategy=every_save commits checkpoints; /data/output survives job restarts.
-python -m training.train --submit-hf --hf-user avreymi --smoke-test   # verify first (~$0.05)
-python -m training.train --submit-hf --hf-user avreymi                # full 1-epoch run
+python -m training.train --submit-hf --hf-user avreymi --smoke-test --skip-data-upload
+python -m training.train --submit-hf --hf-user avreymi --skip-data-upload   # full 1-epoch
 
 # 4. Run the whole eval battery on HF Jobs (cheap CPU). Generates the Gemini baseline and scores
 #    all 3 systems (finetuned/base/gemini) with ROUGE + BERTScore + judge + error analysis, pushing
@@ -185,11 +202,12 @@ python -m evaluation.build_report_tables --output outputs/results/d1-tables.md
 
 **HuggingFace Jobs — submit and monitor:**
 ```bash
-# --submit-hf uploads outputs/data/processed/<variant>/ to the Hub (avreymi/amlk-training-data[-<variant>])
-# then submits train_hf_job.py inline (a10g-small, 8h, 1-epoch training by default). It prints a Job ID.
-python -m training.train --submit-hf --hf-user avreymi               # full 1-epoch run
-python -m training.train --submit-hf --hf-user avreymi --smoke-test  # 10 steps, a10g-small, ~$0.05 — verify first
-python -m training.train --submit-hf --hf-user avreymi --inference-only  # regen predictions from pushed adapter (a10g-small, 2h)
+# --submit-hf uploads local processed/<variant>/ to avreymi/amlk-training-data[-<variant>] unless
+# --skip-data-upload (Hub already has curated whole splits as of 2026-07-26). Then submits
+# train_hf_job.py inline (a10g-small, 8h, 1-epoch training by default). It prints a Job ID.
+python -m training.train --submit-hf --hf-user avreymi --skip-data-upload               # full 1-epoch
+python -m training.train --submit-hf --hf-user avreymi --smoke-test --skip-data-upload  # ~$0.05 smoke
+python -m training.train --submit-hf --hf-user avreymi --inference-only  # regen preds from adapter (2h)
 # Cost: a10g-small has the SAME 24 GB A10G GPU as a10g-large at $1.00/h vs $1.50/h.
 # dictalm2.0-instruct is Mistral-7B → default method is qlora.
 
@@ -236,6 +254,103 @@ source .venv/bin/activate && python -m pytest tests/ -v
 ---
 
 ## Status - remember to update it
+
+**2026-07-26 — GPU cost levers applied to the training job (unmeasured until smoked).**
+Motivated by measuring the curated splits' real token lengths (dictalm2 tokenizer, prompt+
+completion, n=400 of train): mean **1979**, p50 1914, p90 3244, p99 3926 — **43% of examples
+exceed 2048 tokens**, so `MAX_LENGTH` stays 4096 and shortening it is *not* a lever (3072 would
+touch only ~10% of examples for ~3%; 2048 would truncate 43% and corrupt the positional probe).
+Applied instead: (a) `train_sampling_strategy="group_by_length"` in both SFTConfig sites —
+batches are padded to their longest member, so length-grouped sampling pays ~the mean instead of
+E[max of batch]. **API note:** transformers 5 (5.14.1 here) *removed* the old `group_by_length`
+bool in favour of this enum (`Trainer._get_train_sampler` dispatches on it; default `"random"`,
+confirming the simulation's baseline). Passing the old kwarg is a hard error, not a silent
+no-op — and `LengthGroupedSampler` likewise *raises* if the prepared dataset lacks `input_ids`
+rather than quietly reverting to random order, so the smoke is a genuine gate for this.
+**Measured exactly offline** (port of HF's `get_length_grouped_indices` over the real 4683
+lengths, 5 seeds): at the qlora micro-batch of 2, padded tokens drop 11.62M → 9.29M against
+9.28M of real tokens — padding waste 20.1% → 0.1%, i.e. a **20% saving**, no effect on what is
+learned. **At micro-batch 1 the saving is exactly 0%** (a batch of one has no padding), so
+`group_by_length` and the bf16-`lora` preset below are *substitutes, not additive* — bf16 LoRA
+must beat qlora by more than 20% on raw step time to be worth switching to; (b) explicit
+`attn_implementation="sdpa"` on both
+`from_pretrained` calls so a transformers default can't silently put a 4096-seq run on eager;
+(c) val eval slice 200 → **100** (eval runs at `per_device_eval_batch_size=1` — an OOM is
+recorded at higher — so it is pure added GPU time); (d) generation batch 8 → **16 when the base
+is 4-bit** (`GEN_BATCH_SIZE`; a bf16 base is ~14.5 GB before the KV cache, so lora/full stay
+at 8). Eval/save cadence stays 100/100: `load_best_model_at_end` requires `save_steps` to be a
+multiple of `eval_steps`, and 100 still gives ~2 mid-run Hub commits over the ~293 optimizer
+steps of a 4683-example epoch. Also fixed the **`lora` preset** (`METHOD_PRESETS`) from
+`batch 4 / accum 4` — set back when `MAX_LENGTH` was 2048 and near-certain to OOM at 4096 — to
+`batch 1 / accum 16` (effective batch 16, same as qlora). Rejected as non-levers: splitting the
+zero-shot base arm into its own job (`disable_adapter()` already reuses the loaded model; a
+separate job re-pays the 7B load), `packing=True` (conflicts with `completion_only_loss`), and
+lowering the 8h timeout (HF Jobs bills real runtime, so a tight timeout only risks losing a run).
+**How each claim gets settled** (the smoke can measure some of this and not the rest):
+- *Padding / `group_by_length`* — settled **offline, exactly**, by the sampler simulation above.
+  It is a pure token-count property, and a 20% effect would never be resolvable through
+  container-start and warmup noise in a 10-step smoke. Do not try to A/B it on GPU.
+- *s/step, and therefore qlora vs bf16 lora* — now measurable. `train_hf_job.py` gained
+  `StepTimeCallback`: median seconds/optimizer-step with the first 2 steps discarded, printed
+  and mirrored into the wandb run summary (`step_time_median_s`, `projected_epoch_h`).
+  `train_runtime` cannot substitute — it folds in container start, warmup and every eval pass,
+  and scales with dataset size, so two smokes are not comparable through it. A 1.3-2x method
+  difference *is* resolvable at 10 paired steps on the identical 50-example subset.
+- *Crash gates the smoke also covers* — does `sdpa` load, and does `LengthGroupedSampler` accept
+  the `completion_only_loss` prepared dataset. Both fail loudly (`ValueError` / bad kwarg), so a
+  passing smoke is real evidence here rather than a silent fallback.
+- *OOM gate for bf16 lora* — the `--method lora` smoke is valid: peak bf16 memory is set by the
+  longest sequence in a batch, and the first 50 train examples happen to include a 3926-token one
+  (full-split p100 = 4031), with 10 steps × effective batch 16 covering all 50.
+**RESULT (2026-07-26, both smokes ran) — `lora` promoted to the default method.** Paired 10-step
+smokes on the identical first-50 train examples, a10g-small:
+
+| method | micro-batch | `step_time_median_s` | projected epoch (train only) | job |
+|---|---|---|---|---|
+| qlora (4-bit) | 2 × accum 8 | **55.33** | 4.5h | `6a664ea57ef3c08464969e35` |
+| lora (bf16) | 1 × accum 16 | **40.49** | 3.3h | `6a664eb07ef3c08464969e37` |
+
+bf16 lora is **1.37x faster per optimizer step** (26.8% less), inside the predicted 1.3-2x
+4-bit-dequant range. Both completed 10 steps, generated dual-arm predictions and pushed; no OOM
+in either. `training/train.py --method` now defaults to `lora`.
+
+**The ">20% bar" written above was void and must not be reused** — it assumed qlora would be
+measured *without* `group_by_length` and then have its 20% padding saving added back. Both jobs
+in fact ran with `train_sampling_strategy="group_by_length"` set, so 55.33 already embeds qlora's
+saving and 40.49 already embeds lora's nil saving. They are as-configured production numbers and
+the correct bar is simply >0%. Requiring an extra 20% margin would double-count. If anything the
+smoke *flatters* qlora: 50 examples with sampler batch 16 gives megabatch 800 >= 50, i.e. one
+perfectly-sorted block, better grouping than the 6-megabatch real run the simulation scored at 20%.
+
+**Net saving is smaller than the 1.2h training delta**, because the levers fight here:
+`GEN_BATCH_SIZE = 16 if quantize else 8`, so a bf16 base drops dual-arm generation back to batch 8.
+Scaling the recorded gen proxy to 586 examples at `max_new_tokens=128` puts generation near 0.6h at
+batch 8, giving back ~0.2-0.45h. **Expect ~0.75-1.0h/run (~$0.75-1.00), not 1.2h.**
+
+Two caveats on this evidence: (a) **no headroom claim** — the smoke's longest example is 3926
+tokens against the full split's 4031, so that example was never executed; `StepTimeCallback` now
+also reports `peak_mem_gb` so the next run turns "did not OOM" into a number. (b) The smoke losses
+(qlora 0.567 / lora 0.607) are **not** quality evidence — 10 steps over ~3 epochs of 50 examples
+is memorization noise. Untested follow-ups worth one $0.05 job each, neither gating the full run:
+lora at micro-batch 2 / accum 8 (would stack the 20% padding saving on the bf16 speed), and
+setting lora back to `"random"` sampling (grouping buys micro-batch 1 nothing but still sorts).
+
+**2026-07-26 — Curated HeSum is the only training-data path; Hub dataset updated.**
+Replaced the old `data.download` (IAHLT + raw biunlp/HeSum → `combined.jsonl`) + in-repo
+roundup-drop preprocess. New path: main-branch `data_curation` product
+`final_clean_hesum.json` → `python -m data.download` → `python -m data.preprocess --variant
+whole --force` → `outputs/data/processed/whole` with columns
+`text, summary, source, prompt, completion`. Built and validated locally: **5854** curated
+rows → train/val/test **4683 / 585 / 586**, `source=hesum-curated`, `completion==summary`,
+no split leak, prompt carries article + Hebrew hardened instruction. `validate_train_dataset`
+runs inside preprocess; unit tests cover normalize/load/build/validate.
+
+**Hub (2026-07-26):** private dataset
+[`avreymi/amlk-training-data`](https://huggingface.co/datasets/avreymi/amlk-training-data)
+replaced with the curated Arrow splits (`train/`/`val/`/`test/`). Verified by re-downloading
+train from the Hub (n=4683, columns match, `source=hesum-curated`). Train jobs can use
+`--skip-data-upload` if local processed dir is unchanged, or a normal `--submit-hf` re-upload.
+Docs/skills/TODO updated for the curated-only path.
 
 **2026-07-11 — Prompt-optimization loop: all 3 rounds complete, guideline recorded, winner
 promoted.** Full loop details/tables in `docs/prompt-arena-notebook.md`. Round 1
@@ -333,11 +448,13 @@ re-uploaded to `avreymi/amlk-training-data`. wandb project `amlk-dictalm2-instru
 `avreymi/amlk-dictalm2-instruct-smoke`. That smoke predates the C0–C5 chat-template fix — re-smoke
 before a full 1-epoch run.
 
-**Pre-training stage as of 2026-07-11.** Pipeline mechanics validated (clean path); full 1-epoch
-run pending. Stack: trl 1.6.0, transformers 5.11, peft 0.19, wandb 0.27–0.28.
-- Hub: dataset `avreymi/amlk-training-data` (clean splits as of 2026-07-11). Smoke model:
-  `avreymi/amlk-dictalm2-instruct-smoke`. Real adapter repo: `avreymi/amlk-dictalm2-instruct-sft`.
-  wandb: `amlk-dictalm2-instruct`. Judge/baseline: Gemini `gemini-2.5-flash-lite`.
+**Pre-training stage as of 2026-07-26.** Data path is **curated HeSum only** (see status above);
+full 1-epoch QLoRA on the new splits is still pending. Stack: trl 1.6.0, transformers 5.x,
+peft 0.19, wandb 0.27–0.28.
+- Hub dataset: `avreymi/amlk-training-data` (**curated**, 2026-07-26: 4683/585/586,
+  `source=hesum-curated`, private). Smoke model: `avreymi/amlk-dictalm2-instruct-smoke`.
+  Real adapter repo: `avreymi/amlk-dictalm2-instruct-sft`. wandb: `amlk-dictalm2-instruct`.
+  Judge/baseline: Gemini `gemini-2.5-flash-lite`.
 - Note: QLoRA `push_to_hub` saves the LoRA adapter only (not merged).
 - Note: the Gemini LLM-judge and the Gemini advanced baseline are the same model family — flag
   self-preference bias in the paper.
@@ -398,10 +515,11 @@ same day's infra-restart diagnosis above.
 **2026-07-04 — Predictions viewer added.** `evaluation/viewer/` (`data.py` + `app.py`, its own subfolder): a local Streamlit app (`streamlit run evaluation/viewer/app.py`) for browsing `outputs/results/*.jsonl` — RTL Hebrew rendering, keyword search, side-by-side comparison across systems. Read-only, CPU-only, no GPU/API. Verified end-to-end against the real `predictions-finetuned.jsonl`/`predictions-base.jsonl` files with `streamlit.testing.v1.AppTest` (file discovery, multi-file compare, keyword filtering, navigation — no exceptions).
 
 **Next steps:**
-1. **4096 smoke then full 1-epoch QLoRA** on `dicta-il/dictalm2.0-instruct` (local data already
-   re-preprocessed at `MAX_LENGTH=4096`). Smoke first with Hub re-upload:
-   `python -m training.train --submit-hf --hf-user avreymi --method qlora --smoke-test --output-repo avreymi/amlk-dictalm2-instruct-smoke`
-   then full: `python -m training.train --submit-hf --hf-user avreymi --method qlora`.
+1. **Smoke then full 1-epoch QLoRA** on `dicta-il/dictalm2.0-instruct` against the **curated**
+   Hub dataset (`avreymi/amlk-training-data`, already pushed 2026-07-26). Smoke first
+   (`--skip-data-upload` OK if Hub is current):
+   `python -m training.train --submit-hf --hf-user avreymi --method qlora --smoke-test --skip-data-upload --output-repo avreymi/amlk-dictalm2-instruct-smoke`
+   then full: `python -m training.train --submit-hf --hf-user avreymi --method qlora --skip-data-upload`.
 2. **D.1 — full eval battery** on the trained adapter (`evaluation.eval_hf_job --submit-hf`),
    scoring finetuned / zero-shot base / Gemini advanced baseline with ROUGE + BERTScore + judge +
    error analysis, assembled via `evaluation.build_report_tables`.

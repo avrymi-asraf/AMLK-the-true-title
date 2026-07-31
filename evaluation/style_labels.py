@@ -12,8 +12,8 @@ Unlike topic clustering, this is rule-based (regex) and fully local — no embed
 API calls — so it never needs Databricks; it also has no import-time dependency on `datasets`,
 so it runs even in an environment where that import is broken (see AGENTS.md lzma note).
 
-Run: python -m evaluation.style_labels --input outputs/data/raw/combined.jsonl \
-    --output outputs/data/raw/style_labels.jsonl
+Run: python -m evaluation.style_labels --input outputs/data/curated/curated_records.jsonl \
+    --output outputs/data/curated/style_labels.jsonl
 Execution environment: local machine, CPU only, standard library only.
 """
 import argparse
@@ -88,8 +88,8 @@ def write_style_labels(rows: list[dict], output_path: Path) -> None:
 
 def main():
     parser = argparse.ArgumentParser(description="Label each summary's structural style (rule-based, local)")
-    parser.add_argument("--input", default="outputs/data/raw/combined.jsonl")
-    parser.add_argument("--output", default="outputs/data/raw/style_labels.jsonl")
+    parser.add_argument("--input", default="outputs/data/curated/curated_records.jsonl")
+    parser.add_argument("--output", default="outputs/data/curated/style_labels.jsonl")
     args = parser.parse_args()
 
     with open(args.input, encoding="utf-8") as f:

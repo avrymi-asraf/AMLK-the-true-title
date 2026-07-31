@@ -129,6 +129,8 @@ def build_input_text(tokenizer, prompt: str) -> str:
 
 def generate_summaries(
     model, tokenizer, dataset, variant: str, device,
+    # batch_size stays 8 on purpose: train_hf_job.py raises its twin to 16 under a 4-bit base as a
+    # billed-GPU cost lever, but this path runs on a Colab T4 (16 GB) where 16 would not fit.
     batch_size: int = 8, max_new_tokens: int = DEFAULT_MAX_NEW_TOKENS,
     label: str = "finetuned",
 ) -> list[dict]:
@@ -157,11 +159,15 @@ def generate_summaries(
         ).to(device)
         with torch.no_grad():
             outs = model.generate(
-                # no_repeat_ngram_size + repetition_penalty kill greedy degeneration loops;
+                # No repetition penalty: HF applies it over the whole sequence, prompt included,
+                # so at 1.2 with a ~3.8k-token article every word in the article is suppressed and
+                # the model emits near-miss tokens (misspelled entities). Measured cost of the
+                # 1.2/n-gram-3 pair: ~1.5 faithfulness and ~0.8 fluency judge points on both the
+                # base and a fine-tuned adapter — see docs/training-improvement-notebook.md #7.
                 # min_new_tokens + explicit eos let the model stop instead of running to the cap.
                 **inputs, max_new_tokens=max_new_tokens,
                 min_new_tokens=min(16, max_new_tokens), do_sample=False,
-                no_repeat_ngram_size=3, repetition_penalty=1.2,
+                no_repeat_ngram_size=0, repetition_penalty=1.0,
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.pad_token_id,
                 bad_words_ids=bad_words_ids,

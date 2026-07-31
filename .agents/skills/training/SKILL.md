@@ -10,13 +10,24 @@ One script trains all three regimes the paper compares: `training/train.py`, sel
 `training/config.py`. The self-contained `training/train_hf_job.py` is the same logic packaged
 for HuggingFace Jobs.
 
-**One path only:** clean references + hardened prompt + Hebrew decode constraint. No raw/clean
-dual profile. Default **1 epoch** per run.
+**One data path only:** curated HeSum → HuggingFace Arrow training splits. Place
+`final_clean_hesum.json` (main-branch `data_curation` product) at
+`outputs/data/curated/final_clean_hesum.json`, then:
+
+```bash
+python -m data.download                 # → curated_records.jsonl
+python -m data.preprocess --variant whole --force   # → processed/whole/{train,val,test}
+```
+
+Preprocess builds columns `text, summary, source, prompt, completion` (raw instruction
+prompts; chat-wrap later), truncates articles to `MAX_LENGTH-256`, splits 80/10/10, and
+runs `validate_train_dataset` before save. Default **1 epoch** per train run. Hebrew decode
+constraint is always on at generation.
 
 ## How a run is wired
 
 1. Load the processed Arrow splits from `outputs/data/processed/<variant>/{train,val}`
-   (built by `data/preprocess.py` — always clean; stores **raw** instruction prompts).
+   (built by `data/preprocess.py` from curated HeSum — stores **raw** instruction prompts).
 2. Load the base model (`dicta-il/dictalm2.0-instruct` by default): 4-bit NF4 (`qlora`) or
    bf16 (`lora`, `full`).
 3. **Chat-wrap** train/val prompts with `format_chat_prompt` so instruct models see
@@ -39,20 +50,45 @@ dual profile. Default **1 epoch** per run.
 ```bash
 source .env && source .venv/bin/activate
 
-python -m data.preprocess --variant whole   # clean refs + hardened prompt (required once;
-                                            # re-run after changing MAX_LENGTH — Arrow already truncated)
+# Data (curated only — no IAHLT/raw HeSum download in this repo)
+python -m data.download
+python -m data.preprocess --variant whole --force
 
-# After MAX_LENGTH / preprocess changes: re-upload Hub data (omit --skip-data-upload).
+# Hub already has curated whole data (2026-07-26). Re-upload only after rebuild:
+# omit --skip-data-upload (or after MAX_LENGTH / preprocess changes).
 python -m training.train --submit-hf --hf-user avreymi --method qlora --smoke-test \
-  --output-repo avreymi/amlk-dictalm2-instruct-smoke
+  --skip-data-upload --output-repo avreymi/amlk-dictalm2-instruct-smoke
 
-python -m training.train --submit-hf --hf-user avreymi --method qlora   # full 1-epoch
+python -m training.train --submit-hf --hf-user avreymi --method qlora --skip-data-upload
 python -m training.train --submit-hf --hf-user avreymi --inference-only
+
+# Cross-job resume (full Trainer ckpt with optimizer — not adapter-only Hub root):
+# 1) Upload a killed job's checkpoint-N (from bucket or local) to OUTPUT_REPO:
+python -m training.train --push-resume-checkpoint /path/to/checkpoint-200 \
+  --output-repo avreymi/amlk-dictalm2-instruct-sft
+# 2) Finish remaining steps + dual-arm generation:
+python -m training.train --submit-hf --hf-user avreymi --method lora --skip-data-upload \
+  --resume-from checkpoint-200
+#    --resume-from auto  → highest full checkpoint-* on OUTPUT_REPO
 ```
 
 > **Cost note:** `dictalm2.0-instruct` is Mistral-7B → prefer **qlora** on a10g-small (same 24 GB
 > GPU as a10g-large, $1.00/h vs $1.50/h). Seq budget is `MAX_LENGTH=4096` (config source of truth;
 > twin fallbacks in `train_hf_job.py` + gen sites). LoRA bf16 on 7B is tight on 24 GB at long seq.
+
+## Train-data contract (do not break)
+
+- Local: `outputs/data/processed/<variant>/{train,val,test}` Arrow dirs from `datasets.save_to_disk`.
+- Columns: `text`, `summary`, `source`, `prompt`, `completion` (all non-empty strings).
+- `completion == summary`; `prompt` contains `text` (hardened Hebrew instruction + article).
+- `source` is `hesum-curated`.
+- Hub: private `{hf_user}/amlk-training-data` (or `-lead`/`-body`). **As of 2026-07-26**,
+  `avreymi/amlk-training-data` holds curated whole splits (4683/585/586, `hesum-curated`).
+  Upload via `train.py --submit-hf` or a one-shot `HfApi.upload_folder` of
+  `outputs/data/processed/<variant>/`.
+- `completion_only_loss=True` requires `prompt`/`completion` columns.
+- Curated input: `outputs/data/curated/final_clean_hesum.json` rows
+  `{hesum_id, text, headline}` (headline becomes `summary`/`completion`).
 
 ## trl 1.6.0 / transformers 5.x API (verified — do not regress)
 
@@ -91,15 +127,20 @@ wandb: project `amlk-dictalm2-instruct` (see `training.config.wandb_project`).
   gen truncation (`infer.py` / `predict_base_hf_job.py`), then re-preprocess + Hub re-upload.
 - Hub adapter is LoRA only (not merged).
 - Cloud-job crash economics: mid-run Hub commits + immediate prediction pushes are non-negotiable.
+- Training data is **curated HeSum only** — do not reintroduce raw biunlp/HeSum + IAHLT merge
+  or in-repo roundup-drop as the train path (that work lives in main-branch `data_curation`).
 - For wandb axis alignment, see the global `wandb-for-trl` skill.
 
 ## Completed runs
 
 - 2026-07-11 **post clean-only** smoke (qlora, `dicta-il/dictalm2.0-instruct`, 10 steps):
   HF job `6a524384effc02a91cbd98c6` COMPLETED (~11 min, a10g-small). Clean Hub data
-  (7592 refs after drop-roundups), wandb project `amlk-dictalm2-instruct`, run
-  `2026-07-11_dictalm2-instruct_qlora_whole_1ep_smoke`. Finite loss 1.04→0.52 (avg 0.779),
+  (7592 refs after drop-roundups — **pre-curated-path**), wandb project `amlk-dictalm2-instruct`,
+  run `2026-07-11_dictalm2-instruct_qlora_whole_1ep_smoke`. Finite loss 1.04→0.52 (avg 0.779),
   eval ~1.18–1.30, Hebrew constraint 27848 tokens, adapter + 5+5 preds pushed to
   `avreymi/amlk-dictalm2-instruct-smoke`.
-- 2026-07-11 earlier smoke (pre cleanup): `6a52383ae4a4e82c0b58d9af` — also COMPLETED;
-  used old wandb project name / non-clean env.
+- 2026-07-26 **curated HeSum training data** built locally and **pushed to Hub**: 5854 records →
+  train/val/test = 4683/585/586, columns validated for SFT; re-download of Hub train verified.
+  Local: `outputs/data/curated/final_clean_hesum.json` → `outputs/data/processed/whole`.
+  Hub: private `avreymi/amlk-training-data` (replaces pre-curated clean splits). Replaces the
+  old IAHLT+raw-HeSum path entirely.

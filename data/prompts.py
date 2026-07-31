@@ -9,15 +9,20 @@ Execution environment: imported locally by preprocess, train, and evaluation hel
 """
 import re
 
-# Prompt-arena round-3 winner (full experiment log: docs/prompt-arena-notebook.md). A numeric
-# word cap alone bound length only weakly across 3 rounds; adding an explicit stop cue ("write
-# one sentence only and stop right after it") beat every other candidate tested, including
-# worked examples (which hallucinated content). Still short of the loop's 0.9 compliance / 4.0
-# faithfulness target — re-run the loop if a stronger prompt is needed.
+# Prompt-arena round-3 found the winning stop cue ("write N sentences only and stop right after
+# them") at a 15-word/1-sentence budget (docs/prompt-arena-notebook.md) — but that budget was
+# tuned for a *zero-shot* model. The training-improvement loop found a fine-tuned student at
+# 15 words compresses out the identifying specifics the judge needs (notebook entry #5,
+# faithfulness 2.56), while widening to 35 words/2 sentences — same stop cue, plus an explicit
+# ask for who/what/where — closed most of that gap (entry #8, faithfulness 4.52, parity with a
+# correctly-decoded base). 60 words added nothing further (entry #9) — 35 is the sweet spot
+# found so far. Kept in sync with `data.distill.build_template(35, 2)`, which generated this
+# exact text for the A4 teacher targets.
 PROMPT_TEMPLATE = (
-    "סכם את כתבת החדשות הבאה בעברית במשפט קצר אחד, לא יותר מ-15 מילים. "
-    "כתוב משפט אחד בלבד ועצור מיד בסופו.\n\n"
-    "{text}\n\nתקציר (משפט אחד, עד 15 מילים):"
+    "סכם את כתבת החדשות הבאה בעברית ב-2 משפטים קצרים, לא יותר מ-35 מילים. "
+    "כלול את הפרטים המזהים המרכזיים: מי, מה והיכן. "
+    "כתוב 2 משפטים בלבד ועצור מיד בסופם.\n\n"
+    "{text}\n\nתקציר (עד 2 משפטים, עד 35 מילים):"
 )
 
 

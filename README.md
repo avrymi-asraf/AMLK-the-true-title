@@ -1,24 +1,29 @@
 # AMLK — Hebrew news summarization
 
-Fine-tune **`dicta-il/dictalm2.0-instruct`** on Hebrew journalism data (HeSum), evaluate with
-ROUGE / BERTScore / LLM-as-judge, and probe lead bias. Full project docs live in
-**[AGENTS.md](AGENTS.md)** (architecture, file map, runbook, status). Plan of record:
+Fine-tune **`dicta-il/dictalm2.0-instruct`** on curated Hebrew journalism data (HeSum),
+evaluate with ROUGE / BERTScore / LLM-as-judge, and probe lead bias. Full project docs live
+in **[AGENTS.md](AGENTS.md)** (architecture, file map, runbook, status). Plan of record:
 [`docs/research-proposal-revised.md`](docs/research-proposal-revised.md).
 
 ## Pipeline (one path)
 
-1. **Preprocess (always clean)** — drop multi-headline roundups, normalize pipe digests to prose,
-   hardened summarization prompt → `outputs/data/processed/<variant>/`
-2. **Train (1 epoch default)** — QLoRA / LoRA / full on HF Jobs; wandb project
-   `amlk-dictalm2-instruct`; run names `{date}_{model}_{method}_{variant}_{N}ep[_tag]`
+1. **Curated source → HF training dataset** — place `final_clean_hesum.json` under
+   `outputs/data/curated/`, then `data.download` + `data.preprocess` build Arrow
+   splits `{text, summary, source, prompt, completion}` at
+   `outputs/data/processed/<variant>/` (the only train contract). Hub copy (private):
+   [`avreymi/amlk-training-data`](https://huggingface.co/datasets/avreymi/amlk-training-data)
+   (curated whole: 4683/585/586 as of 2026-07-26)
+2. **Train (1 epoch default)** — QLoRA / LoRA / full on HF Jobs; can reuse Hub data with
+   `--skip-data-upload`; wandb project `amlk-dictalm2-instruct`
 3. **Stability** — checkpoints on `/data/output` (resume after infra restart);
    `hub_strategy=every_save` commits adapters mid-run; predictions upload as soon as generated
 4. **Evaluate** — finetuned / zero-shot base / Gemini baseline
 
 ```bash
 source .env && source .venv/bin/activate
+# Requires outputs/data/curated/final_clean_hesum.json (main-branch data_curation product)
 python -m data.download
-python -m data.preprocess --variant whole
+python -m data.preprocess --variant whole --force
 python -m training.train --submit-hf --hf-user avreymi --smoke-test   # verify
 python -m training.train --submit-hf --hf-user avreymi                # 1-epoch full
 python -m evaluation.eval_hf_job --submit-hf --hf-user avreymi

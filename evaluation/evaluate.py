@@ -17,7 +17,13 @@ import re
 import sys
 from pathlib import Path
 
-from evaluation.gemini_client import GEMINI_MODEL, GEMINI_TIMEOUT, call_with_retry, strip_think
+from evaluation.gemini_client import (
+    GEMINI_MODEL,
+    GEMINI_TIMEOUT,
+    JUDGE_GENERATION_CONFIG,
+    call_with_retry,
+    strip_think,
+)
 
 JUDGE_PROMPT = """You are a strict evaluator of Hebrew text summaries.
 Read the ARTICLE and the candidate SUMMARY, then rate the summary:
@@ -148,7 +154,8 @@ def _judge_scores(provider: str, model_id: str, hf_provider: str | None, predict
             genai.configure(api_key=os.environ["GEMINI_API_KEY"])
             gemini = genai.GenerativeModel(model_id)
             raw = call_with_retry(lambda: gemini.generate_content(
-                prompt, request_options={"timeout": GEMINI_TIMEOUT}).text)
+                prompt, generation_config=JUDGE_GENERATION_CONFIG,
+                request_options={"timeout": GEMINI_TIMEOUT}).text)
 
         scores = _parse_json(raw)
         f, l = scores.get("faithfulness"), scores.get("fluency")
@@ -173,7 +180,9 @@ def _judge_scores(provider: str, model_id: str, hf_provider: str | None, predict
 def gemini_json(model, prompt: str) -> dict:
     """Call a Gemini model and parse its reply as JSON (used by error_analysis.py)."""
     return _parse_json(call_with_retry(
-        lambda: model.generate_content(prompt, request_options={"timeout": GEMINI_TIMEOUT}).text))
+        lambda: model.generate_content(
+            prompt, generation_config=JUDGE_GENERATION_CONFIG,
+            request_options={"timeout": GEMINI_TIMEOUT}).text))
 
 
 def judge_with_llm(predictions: list[dict]) -> dict:
@@ -193,7 +202,8 @@ def main():
     parser.add_argument("--skip-rouge", action="store_true", help="Skip ROUGE (reuse existing report with --judge-only)")
     parser.add_argument("--skip-bertscore", action="store_true", help="Skip BERTScore")
     parser.add_argument("--judge-only", action="store_true", help="Merge judge scores into an existing report at --output")
-    parser.add_argument("--judge-provider", choices=("hf", "gemini"), default="hf")
+    # Project default is Gemini (GEMINI_API_KEY); HF Inference Providers need an enabled model.
+    parser.add_argument("--judge-provider", choices=("hf", "gemini"), default="gemini")
     parser.add_argument("--judge-model", default="", help="Judge model id (HF repo id or Gemini model name)")
     parser.add_argument("--judge-limit", type=int, default=0, help="Judge a random subset of N examples (0 = all)")
     parser.add_argument("--judge-seed", type=int, default=42)

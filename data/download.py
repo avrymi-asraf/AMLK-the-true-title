@@ -1,96 +1,125 @@
 """
-Pipeline step 1 of 3: dataset acquisition.
-Downloads Hebrew summarization datasets from HuggingFace Hub (IAHLT/summarization_he
-and biunlp/HeSum), normalises their schemas to {text, summary, source}, and writes
-the merged dataset to outputs/data/raw/combined.jsonl.
+Pipeline step 1 of 2: materialize the curated HeSum source for training.
 
-Run: python -m data.download
-Execution environment: local development machine with HF_TOKEN in environment.
+The only training corpus is the main-branch data_curation product
+(`final_clean_hesum.json`: rows of {hesum_id, text, headline}). This module
+loads that JSON, normalizes each row to the pipeline contract
+{text, summary, source, hesum_id}, and writes
+`outputs/data/curated/curated_records.jsonl` for inspectability and side tools.
+
+Curation itself (source filter + headline target rewrite) is NOT re-run here —
+those artifacts live on the main worktree / were supplied offline. This repo
+only consumes the clean result and turns it into a HuggingFace training dataset
+via `data.preprocess`.
+
+Run: python -m data.download [--input path/to/final_clean_hesum.json]
+Execution environment: local development machine, CPU only.
 """
+from __future__ import annotations
+
+import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
-import datasets
+DEFAULT_INPUT = Path("outputs/data/curated/final_clean_hesum.json")
+OUTPUT_PATH = Path("outputs/data/curated/curated_records.jsonl")
+SOURCE_LABEL = "hesum-curated"
 
 
-OUTPUT_PATH = Path("outputs/data/raw/combined.jsonl")
+def normalize_curated_record(record: dict) -> dict | None:
+    """Map one curated row {hesum_id, text, headline} → train-facing fields.
 
-
-def normalize_iahlt(record: dict) -> dict | None:
-    """Return {text, summary, source='iahlt'} from an IAHLT JSONL record, or None to skip."""
-    text = record.get("text_raw", "").strip()
-    summary = record.get("summary", "").strip()
-    if not text or not summary:
+    Returns None when text or headline is empty after strip (skip bad rows).
+    """
+    text = (record.get("text") or "").strip()
+    headline = (record.get("headline") or "").strip()
+    if not text or not headline:
         return None
-    return {"text": text, "summary": summary, "source": "iahlt"}
+    hesum_id = str(record.get("hesum_id") or "").strip()
+    return {
+        "text": text,
+        "summary": headline,
+        "source": SOURCE_LABEL,
+        "hesum_id": hesum_id,
+    }
 
 
-def normalize_hesum(record: dict) -> dict | None:
-    """Return {text, summary, source='hesum'} from a HeSum HF row, or None to skip."""
-    text = record.get("article", "").strip()
-    summary = record.get("summary", "").strip()
-    if not text or not summary:
-        return None
-    return {"text": text, "summary": summary, "source": "hesum"}
-
-
-def _load_iahlt(hf_token: str) -> list[dict]:
-    print("Loading IAHLT/summarization_he from HuggingFace Hub...")
-    try:
-        ds = datasets.load_dataset("IAHLT/summarization_he", token=hf_token)
-    except Exception as e:
-        print(
-            f"  WARNING: Could not load IAHLT/summarization_he ({e}). "
-            "Skipping — dataset may require special access or gating approval.",
-            file=sys.stderr,
+def load_curated_json(path: Path) -> list[dict]:
+    """Load final_clean_hesum.json (a JSON list) and normalize every usable row."""
+    if not path.exists():
+        raise FileNotFoundError(
+            f"{path} not found. Copy final_clean_hesum.json from the main-branch "
+            "data_curation artifacts (or place it at outputs/data/curated/)."
         )
-        return []
-    records = []
-    for split in ds.values():
-        for row in split:
-            norm = normalize_iahlt(row)
-            if norm:
-                records.append(norm)
-    print(f"  IAHLT: {len(records)} usable records")
+    with open(path, encoding="utf-8") as f:
+        raw = json.load(f)
+    if not isinstance(raw, list):
+        raise ValueError(f"{path} must be a JSON list of records, got {type(raw).__name__}")
+
+    records: list[dict] = []
+    skipped = 0
+    for row in raw:
+        if not isinstance(row, dict):
+            skipped += 1
+            continue
+        norm = normalize_curated_record(row)
+        if norm is None:
+            skipped += 1
+            continue
+        records.append(norm)
+    if skipped:
+        print(f"  Skipped {skipped} empty/invalid rows")
     return records
 
 
-def _load_hesum() -> list[dict]:
-    print("Loading biunlp/HeSum from HuggingFace Hub...")
-    ds = datasets.load_dataset("biunlp/HeSum")
-    records = []
-    for split in ds.values():
-        for row in split:
-            norm = normalize_hesum(row)
-            if norm:
-                records.append(norm)
-    print(f"  HeSum: {len(records)} usable records")
-    return records
-
-
-def main():
-    if OUTPUT_PATH.exists():
-        print(f"Output already exists at {OUTPUT_PATH}. Delete it to re-download.")
-        sys.exit(0)
-
-    hf_token = os.environ.get("HF_TOKEN", "")
-    if not hf_token:
-        print("ERROR: HF_TOKEN not set. Run: source .env", file=sys.stderr)
-        sys.exit(1)
-
-    OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-    records = _load_iahlt(hf_token) + _load_hesum()
-    print(f"Total: {len(records)} records")
-
-    with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
+def write_records_jsonl(records: list[dict], path: Path) -> None:
+    """Write normalized records as JSONL (one object per line, UTF-8)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
         for record in records:
             f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-    print(f"Saved to {OUTPUT_PATH}")
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Load curated HeSum JSON and write normalized curated_records.jsonl",
+    )
+    parser.add_argument(
+        "--input",
+        type=Path,
+        default=DEFAULT_INPUT,
+        help=f"Path to final_clean_hesum.json (default: {DEFAULT_INPUT})",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=OUTPUT_PATH,
+        help=f"Normalized JSONL path (default: {OUTPUT_PATH})",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite output if it already exists",
+    )
+    args = parser.parse_args(argv)
+
+    if args.output.exists() and not args.force:
+        print(f"Output already exists at {args.output}. Pass --force to rebuild.")
+        return 0
+
+    print(f"Loading curated source from {args.input}...")
+    try:
+        records = load_curated_json(args.input)
+    except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+
+    print(f"  Usable records: {len(records)}")
+    write_records_jsonl(records, args.output)
+    print(f"Saved to {args.output}")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

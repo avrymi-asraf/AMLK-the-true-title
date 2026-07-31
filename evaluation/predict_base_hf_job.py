@@ -281,8 +281,11 @@ def _generate_causal(
                 max_new_tokens=max_new_tokens,
                 min_new_tokens=min(16, max_new_tokens),
                 do_sample=False,
-                no_repeat_ngram_size=3,
-                repetition_penalty=1.2,
+                # No repetition penalty / n-gram block: applied over the prompt too, they
+                # suppress the article's own words and cost ~1.5 faithfulness judge points
+                # (docs/training-improvement-notebook.md #7).
+                no_repeat_ngram_size=0,
+                repetition_penalty=1.0,
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.pad_token_id,
                 use_cache=True,
@@ -348,8 +351,9 @@ def _generate_multimodal(
             max_new_tokens=max_new_tokens,
             min_new_tokens=min(16, max_new_tokens),
             do_sample=False,
-            no_repeat_ngram_size=3,
-            repetition_penalty=1.2,
+            # See above / notebook #7: 1.2 over a long prompt corrupts copied entities.
+            no_repeat_ngram_size=0,
+            repetition_penalty=1.0,
         )
         eos = getattr(tokenizer, "eos_token_id", None)
         pad = getattr(tokenizer, "pad_token_id", None) or eos

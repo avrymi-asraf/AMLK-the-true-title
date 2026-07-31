@@ -1,13 +1,13 @@
 """
-Reference-summary cleaning used by every preprocess run (data/preprocess.py).
-HeSum references are frequently "headline | headline | headline" media digests with
-pipes and bullets; error analysis traced much of the fine-tuned model's hallucination
-and over-long, split outputs to it learning that format. This module rewrites those
-digests into natural prose (normalize_summary) and flags the worst multi-headline
-roundups for removal (is_roundup_digest).
+Pure-regex helpers for pipe/bullet digest detection and rewrite.
 
-Kept import-light (standard library only, no `datasets`/`transformers`) so it can be
-imported anywhere in the pipeline. Execution environment: local machine, CPU only.
+Training no longer applies these on the main path: curated HeSum
+(`final_clean_hesum.json` via data.download + data.preprocess) already has
+model-rewritten headlines and filtered bad sources. This module remains for
+style_labels / error-analysis diagnostics and unit tests that still reason
+about legacy digest formats.
+
+Kept import-light (standard library only). Execution environment: local CPU.
 """
 import re
 
