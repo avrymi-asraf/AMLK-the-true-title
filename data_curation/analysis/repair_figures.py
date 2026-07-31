@@ -122,12 +122,12 @@ def build_f6_transition_heatmap(e2_summary: dict) -> go.Figure:
 
 
 def build_f7_win_rate(e3_summary: dict) -> go.Figure:
-    """F7 — stacked horizontal win-rate bar (curated-wins / tie / original-wins), with the
-    null-calibration placebo drawn in the same figure so the headline number is credible rather
-    than merely asserted (main.tex, Section: E3: Was the repair preferred head to head?).
+    """F7 — stacked horizontal win-rate bar (curated-wins / tie / original-wins) for the rewritten
+    cohort only (main.tex, Section: E3: Was the repair preferred head to head?). The placebo
+    (unchanged-text) cohort is reported as a number in the prose but omitted from this figure to
+    keep it to a single, focused bar.
     """
-    cohorts = [("rewritten", "Rewritten (n={})".format(e3_summary["rewritten"]["n"])),
-               ("placebo", "Placebo -- kept, unchanged (n={})".format(e3_summary["placebo"]["n"]))]
+    cohorts = [("rewritten", "Rewritten (n={})".format(e3_summary["rewritten"]["n"]))]
 
     fig = go.Figure()
     outcomes = [("curated_pct", "Curated wins", CATEGORICAL_PALETTE[0]),
@@ -143,25 +143,18 @@ def build_f7_win_rate(e3_summary: dict) -> go.Figure:
             textposition="inside",
         ))
 
-    ci = e3_summary["rewritten"]["curated_win_rate_ci95"]
-    fig.add_annotation(
-        x=50, y=1.4, xref="x", yref="paper",
-        text=f"Curated win rate 95% CI: [{ci[0]:.1f}%, {ci[1]:.1f}%]",
-        showarrow=False, font=dict(size=12, color="#6b6b6b"),
-    )
-
     fig.update_layout(barmode="stack")
     apply_house_style(
         fig,
         "Blind pairwise preference: curated vs. original headline (E3)",
-        subtitle="Placebo (identical original/curated text) near-perfectly ties, validating the pairwise judge",
+        subtitle="Blind judge picks the curated headline over the original in the large majority of rewritten pairs",
         xaxis_title="share of judgments",
         source_note="Source: E3 blind pairwise judge, outputs/results/e3_pairwise_summary.json",
         width=1000,
-        height=350,
+        height=320,
     )
     fig.update_xaxes(range=[0, 100], ticksuffix="%")
-    fig.update_layout(margin=dict(l=260))
+    fig.update_layout(margin=dict(l=260, b=90))
     return fig
 
 

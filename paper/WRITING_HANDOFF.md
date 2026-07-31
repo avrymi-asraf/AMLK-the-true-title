@@ -1,44 +1,220 @@
 # AMLK paper — writing handoff
 
-**Last updated:** 2026-07-29  
-**Status:** Abstract, Introduction, Data (§2), and Methods (§3) revised. Abstract (lines 43–59): narrative pivot framing,
-"multi-stage" instead of a specific stage count (fixed a real off-by-one: text said "eight-stage" but the
-enumerated pipeline in §3.2/Table 1 has 7 items). Introduction (§1, lines 69–158): rewritten to be more
-to the point per the assignment rubric's 4 required questions (no-jargon objective, current practice +
-limits, what's new + why it'll work, who cares) — each already had its own `\paragraph{}` header, so this
-pass tightened prose and cut jargon rather than restructuring; also swapped one hardcoded citation
-("Nallapati et al. (2016) and See et al. (2017)") for `\citet{}` so it can't drift from `bib.bib`, giving
-the section both the bracket and non-bracket citation styles the rubric asked for. All figures the
-paper cites are real, generated PNGs in `paper/figures/` — see "Figures" section below. Bibliography
-(`bib.bib`) reconstructed and working — no more `?` for unresolved citations. Data (§2, all 4 subsections)
-tightened for precision/concision (real-world-corpus statement, action-led pipeline steps, condensed
-taxonomy/train-test-boundary prose) — no numbers changed. Removed Appendix "Qwen3-2B fine-tuning
-history" (`app:qwen`/`tab:qwen`), and removed Figure 2 (`fig:prevalence`) as redundant with Table 1 —
-paper is 9 pages, 12 figures cited (was 13). Switched `\usepackage[review]{ACL2023}` to `[final]`:
-removes the margin line numbers (source of those stray digits Amit kept seeing in pasted PDF text, e.g.
-"95 Why article length..."), and as a side effect now shows real author names (previously hidden by
-review-mode blind-review placeholder) and drops page numbers (standard ACL final-copy behavior). Trimmed
-the "Why article length is a covariate, not a stratum" paragraph — its statistical justification was
-now duplicated with Table 1's caption, kept only the one-sentence forward-pointer to the lead-bias
-analysis in Results. See "Decisions made this round (appendix + Table 1 caption)" below. Pending: real
-author emails (still `<email>` placeholders, now visible in the compiled PDF). Methods (§3) gained a new
-"Model and fine-tuning setup" subsection (architecture/loss/hyperparameters — see below). Next:
-Results (§4), or whichever section you flag next.
+**Last updated:** 2026-07-31
+**Status:** Massive three-page rewrite complete, plus a Figure 4/5 fix-up round and a figure-gallery
+follow-up that added Figure 3 (E1 rubric score distributions) back in. The assignment was clarified to
+require three pages of text while allowing unrestricted figure pages. `main.tex` is now a coherent
+audit-first paper: pages 1--3 contain the abstract and complete main narrative; page 4 begins Appendix A
+(figures/tables); pages 4--6 contain seven claim-carrying visuals plus Table 1, with Appendix B
+(lead-bias check) and the full References list packed onto the last of those pages. All appendix
+figures/table use `[H]` (`float` package) rather than `[!htb]` so LaTeX packs them tightly without
+reordering text ahead of delayed floats. Qwen history, the chronological "eras," duplicate
+RQ/contribution lists, zero-shot side probes, interim Arm-B output, and prose appendices were removed. E4
+remains as a compact, replaceable Methods paragraph plus a reserved Results paragraph until both arms
+finish. Lead bias is no longer a second body narrative: S1 gets one sentence explaining why length is
+treated continuously, and the F5 graph appears alone in Appendix B. The body uses the ACL template's
+standard margins; the earlier 1.8 cm margin override was removed because it compressed the rewritten body
+to only two pages. Figure 4 (E3 blind preference) was simplified to drop the placebo bar (the placebo
+number stays in the prose). Figure 5 was swapped from the judge's self-consistency test-retest plot to a
+real (partial) judge-vs-human spot-check (F9a), since the old figure was not what it looked like — see
+"Figure 4/5 fix-up round" below. Figure 3 (rubric score distributions by stratum) was reviewed from a full
+gallery of 12 candidate figures and added back into Appendix A; the E2 dumbbell plot was reviewed and kept
+cut (weak visual, ceiling-compressed). `paper/main.pdf` was regenerated with Tectonic and visually
+inspected page by page — now **6 pages** total. No unresolved references or citations remain. Pending:
+insert final E4 results once both training arms finish.
 
 ## Paper files
 
 | File | Role |
 |------|------|
-| `paper/main.tex` | ACL draft (restored Jul 29) |
-| `paper/main.pdf` | Compiled PDF (stale — regenerate after any `.tex`/figure change; see Building note) |
-| `paper/figures/` | All 13 cited figures — real PNGs, built 2026-07-29 (was placeholder/missing before) |
-| `paper/bib.bib` | Bibliography — reconstructed 2026-07-29 from the 7 entries already resolved in `main.bbl` (all 7 `\citep`/`\citet` keys in `main.tex` now compile clean, no more `?` in output) |
+| `paper/main.tex` | Current three-page-text paper source |
+| `paper/main.pdf` | Current compiled PDF: 3 text pages + 5 figure/table pages + 1 reference page |
+| `paper/figures/` | Figure inventory; six figures are cited in the current compact paper |
+| `paper/bib.bib` | Working bibliography; all current citations resolve |
+
+## 2026-07-31 Figure 4/5 fix-up round
+
+- **Figure 4 (E3 blind preference, `f7_win_rate.png`) — placebo bar removed.** Amit asked to "remove the
+  placebo section" from the figure. `build_f7_win_rate()` in `data_curation/analysis/repair_figures.py`
+  previously plotted two stacked-bar rows (Rewritten, Placebo); now it plots only the Rewritten row. Also
+  dropped the redundant "Curated win rate 95% CI" annotation (it was overlapping the subtitle once the
+  figure got shorter) since the same CI is already in the caption. The placebo statistic (99.5% tie) is
+  unchanged and still lives in the Results prose and the figure caption ("the placebo cohort is reported
+  in the text") — only the visual bar was dropped, not the finding.
+- **Figure 5 replaced: judge test-retest kappa → real human spot-check (F9a).** Amit asked "is it the
+  human check we done? i dont think i got the test" — correctly: the old Figure 5 (`sx16_pilot_kappa.png`)
+  was the *judge's own* test-retest reliability (re-scoring the same 300 pilot rows at nonzero
+  temperature), not a human check at all. There is a real human validation effort, F9a
+  (`data_curation/analysis/human_validation_results.py` / `human_validation_figures.py`,
+  `data_curation/artifacts/human_annotations/`, worklist in
+  `data_curation/artifacts/human_validation_worklist.json`), but it's disjoint-split across three
+  annotators (amit/avreymi/ofek) and **only Amit ever submitted his portion** (122/122 tasks; avreymi
+  0/65, ofek 0/60 — confirmed via `python -m data_curation.analysis.human_validation_results --check`).
+  Because the split is disjoint, human-human kappa can't be computed at all, and judge-vs-Amit kappa
+  numbers (0.18-0.76) plus near-chance pairwise agreement (kappa -0.02) are the only human-anchored
+  numbers, but Amit found the existing kappa-based F9a figure/pipeline "overwhelming" and asked for
+  something simpler — so instead of reusing `human_validation_figures.py`'s kappa heatmap, wrote a new,
+  minimal script **`data_curation/analysis/human_check_figure.py`** that reports plain percentages with no
+  kappa: exact-match % and within-1-point % per rubric dimension (from Amit's 52 rubric rows vs. the E1
+  judge), plus one plain pairwise agreement % (Amit's 22 pairwise rows that overlap `e3_pairwise.jsonl`
+  vs. the E3 judge outcome). Output: `outputs/figures/f9a_human_agreement.png`, copied to
+  `paper/figures/`. Wired in as the new Figure 5 (`fig:humancheck`, was `fig:kappa`); caption is explicit
+  that this is a single-annotator spot-check, not a full validation study. Added
+  `\label{sec:limitations}` to the Limitations section and a new paragraph there stating the honest
+  numbers (within-1 mostly high, exact-match under half, pairwise ~45%) and that two of three annotators
+  never submitted — trimmed twice to keep the main narrative on 3 pages (final trim also tightened one
+  Discussion sentence and the closing Limitations sentence). The Methods paragraph that used to cite
+  `Figure~\ref{fig:kappa}` for the judge's test-retest numbers now just states the numbers inline and
+  points to `Section~\ref{sec:limitations}` for the human comparison. Deleted the now-unused
+  `paper/figures/sx16_pilot_kappa.png` (the underlying `outputs/figures/sx16_pilot_kappa.png` and its
+  generator in `supplementary_figures.py` are untouched — still a valid judge-QA artifact, just no longer
+  cited in the paper).
+- **2026-07-31 follow-up:** removed all annotator-identifying text ("Amit") from the figure subtitle and
+  source note (now "One annotator" / "Source: F9a human annotations vs. judge outputs") — the author
+  byline in `\author{}` was left alone since that's a normal credit line, not an annotation reference.
+  Also removed the "too small to serve as validation" / "Not a full human validation study" framing
+  from both the figure caption and §6, per Amit: annotator coverage is being extended (not staying this
+  small), so don't frame it as a permanent inadequacy — caption now says "annotator coverage is being
+  extended" instead. Restructured §6 into a lead summary paragraph (recaps E1/E2/E3 + the spot-check +
+  the auditing-should-precede-training takeaway) followed by one shorter limitations paragraph, instead
+  of limitations-heavy prose split with the summary tacked on at the end — merged the old closing
+  "Taken together..." sentence into the new opening paragraph to avoid saying the HeSum-defects/curation
+  finding twice. Re-verified still exactly 3 text pages after both edits.
+- **2026-07-31 second follow-up: removed Discussion section, clarified Methods experiments, filled freed
+  space.** Amit noted the assignment guide only lists Abstract/Introduction/Data/Methods/Results (no
+  Discussion), and asked that anything important in the standalone `\section{Discussion}` be folded into
+  the summary instead. Deleted the Discussion section; its two load-bearing points were merged into
+  §5 (now "Limitations and Conclusion", auto-renumbered from §6 after the deletion): the methodological
+  point ("reference quality varies systematically... which can reverse how a model score should be
+  read... article-grounded evaluation asks whether the target itself is faithful") went into the opening
+  summary paragraph, and the S4-editorial-preference nuance ("the curator rewrote many headlines the
+  independent judge already scored near the clean group") went into the second (limitations) paragraph
+  next to the existing editorial-style sentence, avoiding a duplicate sentence. Also used the page-3 room
+  freed by the Discussion cut, per Amit's ask to make Methods clearer about "what are the experiments":
+  split the old single `\paragraph{Experiments.}` (which crammed E1+E2+E3 into two paragraphs) into four
+  explicit `\paragraph{}`s, each named and phrased as the question it answers -- "E1: Are the flagged
+  strata worse than clean headlines?", "E2: Does the paired repair raise a headline's own score?", "E3: Do
+  blind readers prefer the repaired headline?", "E4: Does training on the repaired targets change model
+  quality?" -- plus one lead-in sentence naming all four before the first paragraph. Also spent a little of
+  the freed room on two Data-section rubric-compliance additions: added the `paz-argaman2024hesum` citation
+  directly in §2's opening sentence (previously only cited in the Introduction) since the assignment
+  explicitly asks the Data section to "reference the original paper," and added the actual train/val/test
+  split size for E4 ($4{,}683$/$585$/$586$, $80/10/10$) which was previously only described qualitatively
+  ("frozen test split") in Methods. Verified page 3 is now fully used (no trailing whitespace) and the main
+  text still ends exactly on page 3, page 4 starts the appendix.
+- **2026-07-31 third follow-up: compacted the appendix (fewer near-empty pages).** Amit asked for less
+  whitespace in the appendix without shrinking images too much. Root cause: each `[ht]` figure at
+  0.82-0.95`\textwidth` was tall enough that only one (sometimes two) fit per page, and there were four
+  `\clearpage`s forcing extra breaks on top of that, so Figures 2 and 3 each sat alone on their own
+  nearly-blank page. Fix: changed float placement to `[!htb]` (lets LaTeX pack more aggressively) and
+  trimmed each image's `\includegraphics` width modestly (0.95→0.78 for the funnel, 0.9→0.72 for E1 effect
+  sizes and the F9a spot-check, 0.82→0.62 for the near-square E2 transition heatmap, 0.82→0.72 for the E3
+  win-rate bar, 0.92→0.8 for the lead-bias supplementary check) plus a small `\vspace{-0.3em}` before each
+  caption -- all still comfortably readable, just not using more width than the content needs. Removed the
+  two `\clearpage`s that were forcing Table 1→Figure 2 and Figure 3→Figure 4 onto separate pages (kept the
+  `\clearpage` before Appendix B and before the bibliography, since **removing** the one before Appendix B
+  caused LaTeX to float the "B Supplementary Lead-Bias Check" heading itself onto an earlier page, ahead of
+  its own figure -- a broken-ordering regression, reverted immediately). Result: 6 figures + Table 1 now
+  pack into 2 appendix pages (was 5 pages, one page per figure); Appendix B's lead-bias figure keeps its
+  own page (nothing else fits alongside it) but the overall paper dropped from 9 pages to **7 pages**.
+  Verified the main text still ends exactly on page 3 and every figure/table/heading is still in its
+  original left-to-right, top-to-bottom source order (no more float-reordering artifacts).
+- **2026-07-31 fourth follow-up: removed the `<email>` placeholders.** Amit asked whether emails were
+  needed and whether they'd been made up — confirmed no, `<email>` was always the untouched literal
+  ACL-template placeholder, never a fabricated address. Since the assignment rubric doesn't ask for author
+  contact info, removed the `\texttt{<email>}` line under each author name in `\author{}` entirely
+  (`main.tex`) rather than inventing or leaving placeholder text — now just three names, no more
+  `<email>`-shaped loose end. Paper still compiles clean at 7 pages.
+- **If Avreymi/Ofek later submit their F9a annotations:** re-run
+  `python -m data_curation.analysis.human_check_figure` (it re-reads
+  `data_curation/artifacts/human_annotations/amit.jsonl` directly — extend it to also read
+  `avreymi.jsonl`/`ofek.jsonl` and pool, or switch to the existing
+  `human_validation_results.py`/`human_validation_figures.py` kappa pipeline once there's a
+  human-human overlap worth reporting). The `--check` flag on `human_validation_results.py` tells you
+  completion status per annotator at any time.
+- **2026-07-31 fifth follow-up: added F3 (rubric score distributions) back, kept the E2 dumbbell cut.**
+  Amit reviewed a gallery of all 12 generated candidate figures and picked `f3_rubric_distributions.png`
+  (100%-stacked bars of E1 rubric scores 1-5 per stratum per dimension) as worth adding back; agreed the
+  E2 dumbbell plot (`f6_paired_repair.png`) should stay cut since its actual chart is just two overlapping
+  dots near the ceiling by construction, with the real signal living in the side-text annotations rather
+  than the visual. Copied `f3_rubric_distributions.png` into `paper/figures/`, added it as new Figure 3
+  right after the E1 effect-size figure (`width=0.74\textwidth`, `\label{fig:rubricdist}`), and added one
+  forward-pointing sentence + citation to it at the end of the E1 paragraph in Results ("These are shape
+  shifts, not just lower averages..."). This pushed main-text length over 3 pages by ~5 lines, so trimmed
+  two nearby sentences (the "E1 and E2/E3 answer different questions" transition and the closing
+  Limitations caveat paragraph) to compensate — main text is back to exactly 3 pages. Appendix A now has 7
+  figures/tables across 3 pages (was 2); Figure 3 no longer fits alongside Figures 1/2/Table 1 on the first
+  appendix page even at a smaller width, so it starts page 2 of the appendix together with the transition
+  heatmap and win-rate bar, pushing the F9a spot-check (now Figure 6) alone onto a mostly-blank page 3 of
+  the appendix — accepted as a reasonable cost of one more figure rather than over-shrinking images.
+  Renumbered figure references throughout: Figure 6 = F9a spot-check (was 5), Figure 7 = lead-bias
+  supplementary check (was 6). Paper is now **8 pages** total (3 main + 3 Appendix A + 1 Appendix B +
+  1 references).
+- **2026-07-31 sixth follow-up: tightened Limitations and Conclusion (was repetitive).** Amit flagged that
+  the section re-listed E1/E2/E3 findings almost verbatim right after the Results section had just stated
+  them, and the two paragraphs both circled back to "reference auditing precedes fine-tuning" as a
+  bookend. Rewrote to state the implication once (quality varies systematically + repair helps, per E1/
+  E2/E3, without re-deriving each number) and moved straight to the two caveats and the closing call to
+  action, cutting the section from two dense paragraphs to a leaner pair. Main text still ends cleanly on
+  page 3 with some spare room in the last column; total page count unchanged at 8.
+- **2026-07-31 seventh follow-up: merged Figure 6 onto the same page as Appendix B (was a wasted page).**
+  Amit asked for the "B Supplementary Lead-Bias Check" heading and its figure to share a page with the
+  F9a spot-check that preceded it (Figure 6 was sitting alone on a nearly-blank page). Root cause of why
+  this hadn't been done already: simply deleting the `\clearpage` before `\section{Supplementary
+  Lead-Bias Check}` reproduces the exact broken-ordering regression noted in the third follow-up above —
+  with several `[!htb]` floats queued in Appendix A, LaTeX can delay a float (Figure 6) past the point
+  where it's declared, but the plain-text `\section` heading right after it is not a float and keeps
+  flowing normally, so it rendered on page 4, two pages before Figure 6 itself ever appeared. Tried
+  `\FloatBarrier` (`placeins` package) first — it fixes the ordering (nothing appears out of sequence
+  anymore) but doesn't merge the pages, since the barrier only guarantees floats resolve before the
+  barrier, not that the following text fits on the same physical page. Fix that actually worked: swapped
+  every appendix `[!htb]` to `[H]` (`float` package, `\usepackage{float}`) for all figures and Table 1.
+  `[H]` disables floating outright — each figure/table is placed exactly where it's written in the source
+  and only overflows to a fresh page if it truly doesn't fit, so order can never invert and pages pack as
+  tightly as the content allows. Result: Figure 6, the "B Supplementary Lead-Bias Check" heading, and
+  Figure 7 now all sit on one page, correct order preserved; total paper dropped from 8 pages back to
+  **7 pages** (3 main + 2 Appendix A + [merged] Appendix B + 1 references). If more figures get added to
+  Appendix A in the future, re-check for the same ordering bug before assuming `\clearpage` removal is
+  safe — `[H]` placements are the reason it's safe now.
+- **2026-07-31 eighth follow-up: pulled References onto the same page (was its own near-empty page).**
+  Amit asked to move the references higher too. Removed the `\clearpage` before `\bibliography{bib}` the
+  same way as the previous follow-up; the 8-entry list initially split awkwardly (4-6 entries on the
+  Appendix-B page, 2-3 spilling onto an otherwise-blank final page). Closed the gap by: shaving
+  `f5_length_lead_bias.png` from `0.8\textwidth` to `0.7\textwidth` (matches the other appendix figures'
+  width band), adding `\vspace{-0.6em}` before both the "Supplementary Lead-Bias Check" heading and the
+  bibliography, tightening `\bibsep` to `1pt`, and wrapping the bibliography in `\small`. Result: Figure 6
+  (F9a), Appendix B (heading + Figure 7), and the complete 8-entry reference list all now fit on one final
+  page with no overflow — total paper is **6 pages** (3 main + 2 Appendix A + 1 page holding Appendix B
+  and References). Verified pages 1-5 are unaffected and reference text is still comfortably legible at
+  `\small`.
+
+## 2026-07-31 three-page rewrite
+
+- **Narrative:** one audit-first story: HeSum's scraped targets require validation; deterministic and
+  model-assisted curation produces 5,854 retained rows; independent E1/E2/E3 tests show the defects are
+  real and the rewrites improve them.
+- **Main-text structure:** Abstract; Introduction; Data; Methods; Results; Discussion; Limitations and
+  Conclusion. The conclusion ends on page 3, followed by an explicit `\clearpage`.
+- **Qwen:** removed completely. It no longer appears in the abstract, Introduction, Methods, Results,
+  appendix, or bibliography.
+- **E4:** kept modular. Methods records the controlled Arm-A/Arm-B LoRA design and required
+  hyperparameters. Results contains a short reserved paragraph that currently makes no training claim.
+  Replace only that paragraph when both arms finish.
+- **Lead bias / S1:** the body says only that S1 cannot be compared directly with S0 because the hard
+  token threshold removes common support in length, then points to Appendix Figure 6. Appendix B
+  contains only F5 and a short caption.
+- **Visual package:** F1 curation funnel + Table 1; F4 E1 effect sizes; F6 transition heatmap; F7 blind
+  preference/placebo; sx16 test--retest kappa; F5 supplementary lead-bias check. Removed from the paper:
+  F3 distributions, F6 dumbbell, F9 partial zero-shot comparison, filter overlap, edit subtypes,
+  dual-reference probe prose, E4 placeholder box, and sx17 partial checkpoint comparison.
+- **Build:** `main.tex` now loads `ACL2023` with `[final,nohyperref]`; `nohyperref` avoids the known
+  Tectonic/XeTeX crash. Build from `paper/` with `tectonic main.tex`.
 
 ## Figures — how they're built (2026-07-29)
 
-`paper/` itself is **untracked in git** (not committed to any branch) — that's why figures looked
-"missing" earlier in this session; they were never on disk anywhere in this clone, not lost to a
-different branch. The obsidian notes (`docs/obsidian/Experiment Results.md`) referenced
+`paper/` and its figures are now tracked in git. Historically, the figures looked "missing" because
+the plotting code and images had not been committed. The obsidian notes
+(`docs/obsidian/Experiment Results.md`) referenced
 figure-generation scripts that didn't exist in this clone (`rubric_figures.py`, `repair_figures.py`,
 `baseline_reliability_figures.py`, `supplementary_figures.py`) — someone ran them and got results
 into the shared obsidian vault, but the code + images themselves were never committed. Rewrote all
@@ -56,10 +232,10 @@ python -m data_curation.analysis.supplementary_figures          # sx01, sx05, sx
 cp outputs/figures/{f1_curation_funnel,f2_defect_prevalence,f3_rubric_distributions,f4_effect_sizes,f5_length_lead_bias,f6_paired_repair,f6_transition_heatmap,f7_win_rate,f9_baseline_vs_reference_rubric,sx01_filter_overlap,sx05_headline_edit_subtypes,sx16_pilot_kappa}.png paper/figures/
 ```
 
-F8 (E4 training-comparison figure) stays a placeholder — genuinely blocked on the external
-fine-tuning run, not a missing-script issue like the others were.
+The old F8 placeholder was removed in the three-page rewrite. Add a real E4 figure only after both
+controlled training arms complete.
 
-## Interim fine-tuned-vs-zero-shot finding (2026-07-29, not F8)
+## Historical interim fine-tuned-vs-zero-shot artifact (removed from paper)
 
 Found a 13th artifact while chasing down "different graphs in another branch": confirmed via
 exhaustive git archaeology (all branches, `git ls-remote` on the GitHub remote, the stash, full
@@ -71,8 +247,9 @@ fine-tuned Arm B checkpoint against zero-shot base** (dicta-il/dictalm2.0-instru
 vs. Arm B, since Arm A still doesn't exist. Added as `outputs/figures/sx17_finetuned_vs_zeroshot.png`
 / `paper/figures/sx17_finetuned_vs_zeroshot.png` (script:
 `data_curation/analysis/finetuned_baseline_figures.py`), wired into a new appendix section
-"Interim fine-tuned vs. zero-shot comparison" (`app:finetuned-interim`), explicitly labeled as not
-resolving E4. The finding itself: fine-tuned scores *lower* than zero-shot base on judge
+"Interim fine-tuned vs. zero-shot comparison" (`app:finetuned-interim`). The 2026-07-31 rewrite removed
+this appendix because it is not the controlled E4 comparison. The historical finding was: fine-tuned
+scores *lower* than zero-shot base on judge
 faithfulness/fluency across every edit sub-type and both strata — a caution sign, possibly an
 under-trained checkpoint (94% of one epoch, interrupted). Also corrected the E4 results text's
 stale "50 of 586 test-set predictions" to "580 of 586" to match this artifact.
@@ -82,7 +259,7 @@ stale "50 of 586 test-set predictions" to "580 of 586" to match this artifact.
 - **Title:** Auditing HeSum: Reference Quality Defects in a Hebrew News Summarization Corpus
 - **Authors:** Amit Benbenishti, Avraham Asraf, Ofek Varona
 
-## Project arc (for narrative)
+## Historical project arc (context only; not the current paper narrative)
 
 1. **Original plan** — Fine-tune Qwen3-2B on HeSum, probe lead bias (`docs/ANLP Project abstract.md`).
 2. **Qwen era** — Model learned HeSum *style* not faithfulness; ROUGE misleading when decode artifacts inflated scores.
@@ -100,7 +277,8 @@ Source: `docs/obsidian/Experiment Results.md`
 - **E2/E3:** Curated preferred 73.6% on rewrites; 99.5% tie placebo on untouched rows.
 - **F5:** Length/lead overlap is continuous — no discontinuity at 4k token filter.
 - **E4:** Training comparison (curated vs original headlines, same articles) — **in progress** at submission time.
-- **F9:** Partial DictaLM2 zero-shot baseline (n≈604); S2 single-focus reversal (model more single-focus than defective reference).
+- **F9 (historical side result, removed from compact paper):** Partial DictaLM2 zero-shot baseline
+  (n≈604); S2 single-focus reversal.
 
 ## Key repo docs for writing
 
@@ -112,7 +290,17 @@ Source: `docs/obsidian/Experiment Results.md`
 
 ## Current abstract (plain text)
 
-Hebrew news summarization is commonly trained on HeSum, a corpus of article–headline pairs scraped from Hebrew news sites and used as-is for the training target. We argue that a large share of these targets are unfit to train on, and that this, not model capacity, is the field's real bottleneck. The evidence came from two fine-tuning attempts, neither originally designed as a data audit. Qwen3-2B, fine-tuned on HeSum, learned the corpus's headline style without learning to be faithful to the article it summarized. Switching to the Hebrew-native dicta-il/dictalm2.0-instruct fixed fluency, but surfaced a harder problem: its zero-shot summaries routinely read as better than the references they were scored against. Both failures pointed past the model and into the data, so we stopped fine-tuning and audited the corpus instead. We built a multi-stage curation pipeline and a four-dimension rubric judge (faithfulness, single-focus, informativeness, cleanliness) that reads the source article directly and scores a headline without needing a second reference string to compare it against. A large share of the corpus fails this audit outright, and most of what survives still needs its headline rewritten. Flagged rows score measurably worse on every rubric dimension, and in a blind head-to-head comparison curated headlines are strongly preferred over the originals—while a placebo comparison on untouched rows confirms the judge isn't just guessing. We report this as a dataset review rather than a model-building exercise, and close with the training comparison (curated vs. original headlines, identical articles) that was still in progress at submission time.
+HeSum is one of the few corpora large enough to train modern Hebrew news summarizers, but its targets
+are extended subheadings scraped from news sites rather than summaries written for modeling. We audit
+whether those targets are suitable references before treating them as ground truth. A reproducible
+pipeline filters unusable rows and rewrites defective headlines; an independent rubric judge then
+scores original and curated headlines directly against their articles for faithfulness, single-focus,
+informativeness, and cleanliness. The audit removes 41.5% of the source corpus and rewrites 52.4% of
+the retained headlines. Flagged references show large, defect-specific quality losses, while curated
+headlines are preferred in 73.6% of blind comparisons; unchanged placebo pairs tie 99.5% of the time.
+These results show that scraped reference quality is a first-order experimental variable, not a fixed
+property of a benchmark. We release the resulting audit and frame target validation as a prerequisite
+for trustworthy Hebrew summarization training and evaluation.
 
 ## Decisions made this round (abstract)
 
