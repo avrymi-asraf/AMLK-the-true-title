@@ -1,0 +1,60 @@
+{"hesum_id": "181", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 3, "informativeness": 4, "cleanliness": 2}, "submitted_at": "2026-07-31T09:53:47+00:00"}
+{"hesum_id": "181", "annotator_id": "ofek", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-31T09:56:20+00:00"}
+{"hesum_id": "331", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 4, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T10:08:01+00:00"}
+{"hesum_id": "331", "annotator_id": "ofek", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-31T10:09:24+00:00"}
+{"hesum_id": "637", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 5, "informativeness": 3, "cleanliness": 5}, "submitted_at": "2026-07-31T10:16:37+00:00"}
+{"hesum_id": "647", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 3, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T10:17:56+00:00"}
+{"hesum_id": "749", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 4, "informativeness": 3, "cleanliness": 5}, "submitted_at": "2026-07-31T10:19:14+00:00"}
+{"hesum_id": "749", "annotator_id": "ofek", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-31T10:20:24+00:00"}
+{"hesum_id": "851", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 4, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T10:21:43+00:00"}
+{"hesum_id": "851", "annotator_id": "ofek", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-31T10:22:52+00:00"}
+{"hesum_id": "1380", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 5, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T10:24:34+00:00"}
+{"hesum_id": "2171", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 2, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T10:25:59+00:00"}
+{"hesum_id": "2794", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 3, "informativeness": 3, "cleanliness": 2}, "submitted_at": "2026-07-31T11:20:09+00:00"}
+{"hesum_id": "2794", "annotator_id": "ofek", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-31T11:21:24+00:00"}
+{"hesum_id": "2847", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 3, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T11:23:16+00:00"}
+{"hesum_id": "2857", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 5, "informativeness": 3, "cleanliness": 5}, "submitted_at": "2026-07-31T11:24:53+00:00"}
+{"hesum_id": "2992", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 4, "informativeness": 4, "cleanliness": 5}, "submitted_at": "2026-07-31T11:26:07+00:00"}
+{"hesum_id": "3242", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 2, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T11:27:23+00:00"}
+{"hesum_id": "3291", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 2, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T11:28:37+00:00"}
+{"hesum_id": "3307", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 1, "informativeness": 4, "cleanliness": 5}, "submitted_at": "2026-07-31T11:29:49+00:00"}
+{"hesum_id": "3428", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 1, "informativeness": 3, "cleanliness": 5}, "submitted_at": "2026-07-31T11:31:01+00:00"}
+{"hesum_id": "3441", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 2, "informativeness": 3, "cleanliness": 5}, "submitted_at": "2026-07-31T11:32:16+00:00"}
+{"hesum_id": "3462", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 5, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T11:35:20+00:00"}
+{"hesum_id": "3462", "annotator_id": "ofek", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-31T11:36:30+00:00"}
+{"hesum_id": "3497", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 4, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T11:37:44+00:00"}
+{"hesum_id": "3497", "annotator_id": "ofek", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-31T11:38:52+00:00"}
+{"hesum_id": "3651", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 4, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T11:40:07+00:00"}
+{"hesum_id": "3655", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 4, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T11:41:20+00:00"}
+{"hesum_id": "4039", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 5, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T11:42:34+00:00"}
+{"hesum_id": "4039", "annotator_id": "ofek", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-31T11:43:42+00:00"}
+{"hesum_id": "4292", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 1, "informativeness": 3, "cleanliness": 5}, "submitted_at": "2026-07-31T11:44:56+00:00"}
+{"hesum_id": "5083", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 1, "informativeness": 4, "cleanliness": 5}, "submitted_at": "2026-07-31T11:46:11+00:00"}
+{"hesum_id": "5216", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 5, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T11:51:27+00:00"}
+{"hesum_id": "5281", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 2, "informativeness": 4, "cleanliness": 5}, "submitted_at": "2026-07-31T11:52:40+00:00"}
+{"hesum_id": "5547", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 2, "single_focus": 4, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T11:53:56+00:00"}
+{"hesum_id": "5547", "annotator_id": "ofek", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-31T11:55:03+00:00"}
+{"hesum_id": "5702", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 1, "informativeness": 4, "cleanliness": 5}, "submitted_at": "2026-07-31T11:56:16+00:00"}
+{"hesum_id": "6124", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 3, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T11:57:31+00:00"}
+{"hesum_id": "6138", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 4, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T11:58:44+00:00"}
+{"hesum_id": "6138", "annotator_id": "ofek", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-31T11:59:56+00:00"}
+{"hesum_id": "6381", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 3, "informativeness": 4, "cleanliness": 5}, "submitted_at": "2026-07-31T12:01:09+00:00"}
+{"hesum_id": "6413", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 1, "informativeness": 3, "cleanliness": 5}, "submitted_at": "2026-07-31T12:02:21+00:00"}
+{"hesum_id": "6769", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 2, "informativeness": 4, "cleanliness": 5}, "submitted_at": "2026-07-31T12:32:57+00:00"}
+{"hesum_id": "6941", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 5, "informativeness": 4, "cleanliness": 5}, "submitted_at": "2026-07-31T12:34:13+00:00"}
+{"hesum_id": "7013", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 5, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T12:35:24+00:00"}
+{"hesum_id": "7153", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 2, "informativeness": 4, "cleanliness": 5}, "submitted_at": "2026-07-31T12:36:39+00:00"}
+{"hesum_id": "7380", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 4, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T12:37:52+00:00"}
+{"hesum_id": "7527", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 5, "informativeness": 3, "cleanliness": 5}, "submitted_at": "2026-07-31T12:39:04+00:00"}
+{"hesum_id": "7527", "annotator_id": "ofek", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-31T12:40:16+00:00"}
+{"hesum_id": "7539", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 2, "informativeness": 3, "cleanliness": 5}, "submitted_at": "2026-07-31T12:41:28+00:00"}
+{"hesum_id": "7676", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 4, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T12:42:44+00:00"}
+{"hesum_id": "7804", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 1, "informativeness": 4, "cleanliness": 5}, "submitted_at": "2026-07-31T12:43:58+00:00"}
+{"hesum_id": "8005", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 1, "informativeness": 4, "cleanliness": 5}, "submitted_at": "2026-07-31T14:44:09+00:00"}
+{"hesum_id": "8263", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 4, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T14:45:21+00:00"}
+{"hesum_id": "8591", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 5, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T14:46:41+00:00"}
+{"hesum_id": "8926", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 1, "informativeness": 4, "cleanliness": 5}, "submitted_at": "2026-07-31T14:48:10+00:00"}
+{"hesum_id": "8987", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 4, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-31T14:49:24+00:00"}
+{"hesum_id": "8987", "annotator_id": "ofek", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-31T14:50:31+00:00"}
+{"hesum_id": "9446", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 5, "informativeness": 4, "cleanliness": 5}, "submitted_at": "2026-07-31T14:51:45+00:00"}
+{"hesum_id": "9808", "annotator_id": "ofek", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 5, "informativeness": 4, "cleanliness": 5}, "submitted_at": "2026-07-31T14:52:59+00:00"}
