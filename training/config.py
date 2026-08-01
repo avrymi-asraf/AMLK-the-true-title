@@ -1,11 +1,13 @@
 """
-Shared configuration for the training pipeline (training/train.py and the remote
-training/train_hf_job.py). Defines the model id, the per-method presets (qlora |
-lora | full), LoRA hyperparameters, common training settings, wandb naming helpers,
-and the Hub repo-id helpers. Changing a value here changes every training method at once.
+Shared configuration for the training pipeline (training/train.py, the remote
+training/train_hf_job.py body, and Colab submit via training/colab_submit.py).
+Defines the model id, the per-method presets (qlora | lora | full), LoRA
+hyperparameters, common training settings, wandb naming helpers, Hub repo-id
+helpers, and Colab path constants. Changing a value here changes every training
+method at once.
 
-Execution environment: imported by the local trainer and read (values only) by the
-self-contained HF Jobs script.
+Execution environment: imported by the local trainer / Colab submitter; values
+are serialized into env for the self-contained remote job body (HF Jobs or Colab).
 """
 from dataclasses import dataclass, field
 from datetime import date
@@ -25,6 +27,13 @@ DEFAULT_EPOCHS = 1
 # the curated splits are smaller, so re-measure before quoting a wall-clock).
 # Override with --max-new-tokens / MAX_NEW_TOKENS when a long-form probe needs more.
 DEFAULT_MAX_NEW_TOKENS = 128
+
+# Colab remote paths (train_hf_job.py OUTPUT_DIR / DATA_DIR env). HF Jobs keeps defaults
+# /data/output and ./data. Colab /content is ephemeral — Hub is cross-session durability.
+COLAB_OUTPUT_DIR = "/content/amlk-output"
+COLAB_DATA_DIR = "/content/amlk-data"
+# Default accelerator for --submit-colab. Prefer qlora on T4 (16 GB); bf16 lora may OOM.
+COLAB_DEFAULT_GPU = "T4"
 
 
 def wandb_project(model_slug: str = MODEL_SLUG) -> str:
@@ -96,8 +105,10 @@ class TrainingConfig:
     warmup_ratio: float = 0.05
     lr_scheduler_type: str = "cosine"
     logging_steps: int = 10
-    save_steps: int = 200
-    eval_steps: int = 200
+    # Match train_hf_job full-run cadence: denser mid-run Hub full Trainer checkpoints
+    # for cross-job --resume-from after SIGTERM (was 200; cloud twin uses 50).
+    save_steps: int = 50
+    eval_steps: int = 50
     bf16: bool = True
 
 

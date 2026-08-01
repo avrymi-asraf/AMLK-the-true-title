@@ -4,6 +4,11 @@ AMLK - Fine-tuning for Hebrew news summarization
 
 Amit Benbenishti, Avraham Asraf
 
+> **Note (2026-07-30):** Live base model is `dicta-il/dictalm2.0-instruct` on **curated HeSum**
+> (not Qwen3-2B). Paper E4 (raw vs curated SFT on matched test articles) is specified in
+> `docs/e4-raw-vs-curated-training-plan.md` — code ready, jobs open. This proposal text remains
+> the historical reviewer-response design for the positional probe and evaluation framing.
+
 This revision reworks the proposal in response to reviewer feedback. The main change is the
 positional-shortcut probe: instead of training a separate model per input variant (which answers
 "how learnable is the reference from each slice of the article" - a question about the data), the

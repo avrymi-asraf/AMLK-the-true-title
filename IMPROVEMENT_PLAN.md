@@ -130,7 +130,7 @@ You're unsatisfied with training results (hallucination + low ROUGE). Two resear
 |---|---|---|
 | P0 | Training targets are largely unsupported by their articles | Filter training data by article-support coverage |
 | P1 | Fine-tuning an *instruct* model without its instruction format | Wrap prompts in the model's chat template |
-| P2 | Decode config (`no_repeat_ngram_size`, `repetition_penalty`) already proven to crush scores once | Re-test with plain greedy decode |
+| P2 | Decode config (`no_repeat_ngram_size`, `repetition_penalty`) already proven to crush scores once | **DONE 2026-07-30** — defaults `1.0` / `0` (E4 §1.1) |
 | P3 | "Low ROUGE" is a miscalibrated expectation for this dataset | Re-anchor success metric to faithfulness, not ROUGE |
 | P4 | 7B model swap invalidated all hardware/preset assumptions | Re-validate regime (QLoRA, paged optimizer, timeout) on 7B |
 | P5 | English instruction to a Hebrew-instruct-tuned model | Cheap A/B, adopt only if visibly better |
@@ -186,14 +186,13 @@ Highest leverage of all six fixes, and free.
 
 ---
 
-## P2 — The decode config already proved it crushes scores, once
+## P2 — The decode config already proved it crushes scores, once — **DONE (2026-07-30)**
 
-**Diagnosis.** The project's own recorded results are direct causal evidence: **v1 → v2 used the identical adapter and changed only decoding — ROUGE-1 fell 11.4 → 4.7.** Yet the current shared decode config (`train_hf_job.py` / `evaluation/infer.py`) still carries the suspects:
-- `no_repeat_ngram_size=3` — blocks any repeated 3-gram, but Hebrew news summaries legitimately repeat multi-token entity names (ministries, outlet names like "ידיעות אחרונות"); blocking forces the model off a faithful continuation mid-entity. This operates on token identity, not meaning — a known limitation in the literature.
-- `repetition_penalty=1.2` — a strong additional push away from high-probability (faithful) tokens.
-- Symptom: v2/v3 median prediction ≈ 548 chars vs ~150-char references — over-generation that directly destroys ROUGE precision.
+**Diagnosis (historical).** The project's own recorded results were direct causal evidence: **v1 → v2 used the identical adapter and changed only decoding — ROUGE-1 fell 11.4 → 4.7.** HF applies `repetition_penalty` over the whole sequence (prompt included), so at `1.2` every word already in the ~3.8k-token article is suppressed — near-miss entity names in summarization. The old shared defaults were:
+- `no_repeat_ngram_size=3` — blocks legitimate multi-token Hebrew entity repeats
+- `repetition_penalty=1.2` — pushes away from high-probability (faithful) tokens
 
-**Fix.** Cheap and self-verifying (~$1, no retraining): the old DictaLM-3 adapter (`avreymi/amlk-dictalm3-1.7b-sft-clean`) is still on the Hub, and `--inference-only --pred-suffix` exists precisely for this. Submit one inference-only job with plain greedy decode (explicit EOS, `max_new_tokens=256`, **no** `no_repeat_ngram_size`, **no** `repetition_penalty`), score both files locally (`evaluation.evaluate --limit 200 --skip-llm` is enough for length/ROUGE). If plain decode recovers length/ROUGE (expected, given v1=11.4 was under the old decode), remove both knobs from the shared config; re-add the mildest only if visible looping returns.
+**Resolution.** Defaults are now **`repetition_penalty=1.0`** and **`no_repeat_ngram_size=0`** in `training/train_hf_job.py` and `evaluation/infer.py` (env/CLI overrides still work). Measured on a fixed 120-article subset: +1.39–1.54 faithfulness, +0.78 fluency; source-word overlap 0.204 → 0.685. See `docs/e4-raw-vs-curated-training-plan.md` §1.1 and `docs/obsidian/Decoding Configuration.md`. **Do not re-enable 1.2/3 as the default.** Degeneration is handled by `min_new_tokens`, explicit EOS, `max_new_tokens=128`, and the stop-cue prompt.
 
 ---
 
@@ -234,7 +233,7 @@ Highest leverage of all six fixes, and free.
 ## Execution order
 
 1. **P1** — chat-template the training/inference prompt for the finetuned system. Free, no GPU.
-2. **P2** — decode re-test on the existing Hub adapter. ~$1, self-verifying, no retraining.
+2. **P2** — **done** (defaults off: 1.0 / 0; E4 §1.1).
 3. **P3** — re-anchor documentation/eval reporting to faithfulness-first. No cost.
 4. **P4** — regime fixes (QLoRA default, paged optimizer, seed, preset-wiring fix) + smoke test on the 7B (~$0.05) + mini-test LR gate (~$0.10).
 5. **P5** — optional Hebrew-instruction probe. Near-free.

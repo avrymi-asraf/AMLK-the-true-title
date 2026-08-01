@@ -5,10 +5,17 @@ what happened, and **why** the next round changed. Append a new entry per round;
 a past one. Together with `evaluation/prompt_rounds.py` (the exact prompts) this is the
 experiment's permanent record and the source for the paper's prompt-sensitivity section.
 
-**Goal:** find the best *short* prompt for the **zero-shot base model**
+> **Current train/eval prompt (2026-07-30, E4 §1.3):** `data/prompts.py::PROMPT_TEMPLATE` is
+> **2 sentences / ≤35 words + who/what/where**, not the arena round-3 winner below
+> (1 sentence / ≤15 words). The arena winner was tuned on the **zero-shot base**; a fine-tuned
+> student at 15 words compressed out identifying specifics (faithfulness ~2.56). The 35-word
+> budget is what preprocess bakes into the `prompt` column for both E4 arms — rebuild processed
+> data after any change. This notebook remains the historical record of the arena loop.
+
+**Goal (arena loop):** find the best *short* prompt for the **zero-shot base model**
 (`dicta-il/dictalm2.0-instruct`) on Hebrew news summarization. No fine-tuning is involved —
-this loop runs *before* training, and the winner is promoted into
-`data/prompts.py::PROMPT_TEMPLATE`, which is the prompt the fine-tuning run then trains on.
+this loop ran *before* training; the round-3 winner was initially promoted into
+`data/prompts.py::PROMPT_TEMPLATE` (later superseded by the E4 35-word template above).
 
 ---
 
@@ -334,13 +341,17 @@ paired generations over 3 rounds:
 base* model, i.e. exactly what fine-tuning (the project's actual next step) exists to fix. But
 "prompt wording barely matters" (this notebook's earlier working hypothesis after round 2) turned
 out to be too strong a conclusion — a stop cue closed roughly half the remaining gap in one round.
-`p11_he_stopcue` (numeric cap + explicit stop-after-one-sentence cue) is promoted into
-`data/prompts.py::PROMPT_TEMPLATE` as the best-tested prompt, with the explicit caveat that it
-does not meet the original target and its round-3 numbers are on a smaller sample than rounds 1-2.
+`p11_he_stopcue` (numeric cap + explicit stop-after-one-sentence cue) was promoted into
+`data/prompts.py::PROMPT_TEMPLATE` as the best-tested **zero-shot** prompt (caveat: did not meet
+the original 0.9/4.0 target; round-3 numbers on a smaller sample than rounds 1–2).
 
-**Still unresolved:** whether `p11_he_stopcue`'s gain holds at n=100 (only checked at n=20), and
-whether stacking the stop cue with grounding/anti-list clauses (untested combination) closes more
-of the remaining gap. Both are cheap follow-ups if the project returns to this loop later.
+**Superseded for fine-tuning (2026-07-30):** train/eval now use the E4 35-word / 2-sentence
+template in `data/prompts.py` (see banner at top of this notebook). The arena result still
+stands for zero-shot prompt design and the paper's prompt-sensitivity section.
+
+**Still unresolved (arena loop):** whether `p11_he_stopcue`'s gain holds at n=100 (only checked
+at n=20), and whether stacking the stop cue with grounding/anti-list clauses closes more of the
+remaining gap. Both are cheap follow-ups if the project returns to this loop later.
 
 ### Bug found and fixed along the way
 
@@ -356,6 +367,11 @@ fine-tuned model inference and the eventual full 1-epoch training run.
 ---
 
 ## Change log (code)
+
+**2026-07-30 — E4 train prompt supersedes arena winner for fine-tuning.**
+`PROMPT_TEMPLATE` is now 2 sentences / ≤35 words + who/what/where
+(`docs/e4-raw-vs-curated-training-plan.md` §1.3). Arena `p11_he_stopcue` remains the documented
+zero-shot winner; rebuild `outputs/data/processed/*` after the change.
 
 **2026-07-11 — loop run (3 rounds): CJK/Hangul decode-constraint fix + winner promoted.**
 `evaluation/hebrew_constraint.py` (and inlined twins `prompt_sweep_hf_job.py`,

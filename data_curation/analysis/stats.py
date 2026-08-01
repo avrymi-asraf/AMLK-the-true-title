@@ -82,8 +82,17 @@ def wilson_ci(successes: int, n: int, *, alpha: float = 0.05) -> tuple[float, fl
     """
     if n == 0:
         return (0.0, 0.0)
-    from scipy.stats import norm
-    z = norm.ppf(1 - alpha / 2)
+    try:
+        from scipy.stats import norm
+        z = float(norm.ppf(1 - alpha / 2))
+    except ImportError:
+        # Standard normal quantile for alpha=0.05 is enough for E3/E4 win-rate CIs;
+        # avoid hard-failing mid-API after Gemini spend if scipy is missing.
+        if abs(alpha - 0.05) > 1e-9:
+            raise ImportError(
+                "scipy is required for wilson_ci when alpha != 0.05"
+            ) from None
+        z = 1.959963984540054
     p = successes / n
     denom = 1 + z ** 2 / n
     centre = p + z ** 2 / (2 * n)

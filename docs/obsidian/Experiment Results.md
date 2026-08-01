@@ -7,7 +7,7 @@ directly from artifacts on disk unless marked *in flight*. Pre-registered design
 `docs/superpowers/specs/2026-07-26-dataset-review-experimental-design.md`. Readable map:
 [[Reference Quality Experiment]]. Figure manifest: [[Paper Figures]].
 
-**Last updated:** 2026-07-27.
+**Last updated:** 2026-07-30.
 
 ---
 
@@ -20,8 +20,9 @@ directly from artifacts on disk unless marked *in flight*. Pre-registered design
 | **E1** full judge pass | **Done** (9,988 rows) | `outputs/results/e1_rubric_scores.jsonl` → F3–F5 |
 | **E2** paired curated vs original | **Done** (3,068 paired) | `outputs/results/e2_repair_summary.json` → F6 |
 | **E3** head-to-head + placebo | **Done** (1,159 judgments) | `outputs/results/e3_pairwise_summary.json` → F7 |
+| **E4 code path** | **Ready** (2026-07-30) | `docs/e4-raw-vs-curated-training-plan.md` — decode off, 35-word prompt, `download_raw`, `--test-from`, `e4_score`. **Jobs not submitted** |
 | **DictaLM2 zero-shot baseline** | **In flight** (648/800 Hub) | `predictions-dictalm2-baseline.jsonl` → F9 (scored on 604) |
-| **DictaLM2 fine-tuned Arm B** | **In flight** (~60/586 test) | `avreymi/amlk-dictalm2-instruct-sft` → F8 blocked |
+| **DictaLM2 fine-tuned Arm B** | **In flight** (~60/586 test) | `avreymi/amlk-dictalm2-instruct-sft` → F8 blocked until E4 arms complete |
 | Dual-reference probe (1.7B) | **Done** (1,427 rows) | `outputs/results/probe-dual-reference.json` (narrative support only) |
 | Human validation (150 rows) | **Not started** | Original F9 appendix plan |
 | Supplementary figures sx01–sx18 | **Done** | `outputs/figures/sx_*`, manifest in `supplementary_manifest.txt` |
@@ -195,15 +196,16 @@ headline-vs-summary format confound, not a clean "model beats gold" claim.
 | Inference v2 | `6a67a4f8…` — **RUNNING**, `GEN_BATCH_SIZE=1`, `MAX_NEW_TOKENS=128`, `PRED_SUFFIX=-step200` |
 | Hub predictions | `predictions-finetuned-step200.jsonl` — **50/586** rows (partial, timeout-safe pushes) |
 
-**Blockers for F8/E4:**
+**Blockers for F8/E4 (updated 2026-07-30):**
 
-1. Inference must complete on test set.
-2. **Split alignment:** our frozen split has **1,162** test ids (`frozen_split_v1.json`); avreymi's Hub
-   test has **586** rows and no `hesum_id` column. Need id recovery or a re-run on frozen test before
-   clean Arm A vs B comparison.
-3. Arm A training not confirmed started.
-
-**Branch:** training code on `origin/another-model` (`BASE_MODEL` env, DictaLM2 path).
+1. **Code path is ready** — decode defaults off, judge T=0, 35-word prompt, `data.download_raw`,
+   `preprocess --test-from`, `scripts.e4_score` (see plan). Older Arm B partial preds above used
+   the broken 1.2/3 decode and/or 15-word prompt; **do not treat them as the E4 result**.
+2. **Jobs still open:** rebuild both datasets with current prompt → Hub
+   `amlk-training-data-raw` / `amlk-training-data-e4cur` → train `amlk-e4-raw` /
+   `amlk-e4-curated` (`--test-subset 120 --skip-base-arm`) → score.
+3. Historical note: prior Arm B inference on Hub used a 586-row curated test without `hesum_id`;
+   E4 uses the preprocess 80/10/10 curated test copied through both arms (byte-identical).
 
 ---
 

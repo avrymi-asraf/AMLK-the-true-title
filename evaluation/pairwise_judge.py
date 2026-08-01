@@ -65,7 +65,10 @@ def compare_headlines(
     def _generate():
         response = model.generate_content(
             prompt,
-            generation_config={"response_mime_type": "application/json"},
+            generation_config={
+                "response_mime_type": "application/json",
+                "temperature": 0.0,
+            },
             request_options={"timeout": GEMINI_TIMEOUT},
         )
         if not response.candidates:

@@ -4,15 +4,16 @@ Implements `docs/ANLP Project abstract.md`, `docs/research-proposal.md`, and the
 `docs/research-proposal-revised.md` (current plan of record). Milestones from the abstract are dated below.
 
 ## A. Training pipeline — DONE (stack; full DictaLM2 epoch still open under D)
-- [x] A.1 Training data = **curated HeSum only** (`data_curation` → `final_clean_hesum.json` →
-      HF Arrow via `data.download` + `data.preprocess`). No raw biunlp/HeSum + IAHLT merge as
-      the train path (curation stays in `data_curation/`).
+- [x] A.1 Training data = **curated HeSum** for the main path (`data_curation` →
+      `final_clean_hesum.json` → HF Arrow via `data.download` + `data.preprocess`). E4-RAW is a
+      deliberate second arm via `data.download_raw` (not the default train path).
 - [x] A.2 Base model: `dicta-il/dictalm2.0-instruct` (MODEL_SLUG `dictalm2-instruct`)
 - [x] A.3 Fine-tune via HF `trl` SFT — one `training/train.py` for qlora | lora | full,
       completion-only loss, curated HF dataset path, **1 epoch** default, informative wandb
       names (`amlk-{model}`, date/method/variant/epochs), mid-run Hub checkpoint commits
       (`hub_strategy=every_save` + `/data/output` resume + `training/resume.py`), HF Jobs
       (`--submit-hf`, a10g-small, 8h). Chat wrap + Hebrew decode constraint always on.
+      Decode defaults: `repetition_penalty=1.0`, `no_repeat_ngram_size=0` (E4 §1.1).
 
 ## B. Evaluation pipeline — DONE (Stage B, due 07.06)
 - [x] B.1 ROUGE-1/2/L (Hebrew-aware tokenizer)
@@ -38,6 +39,20 @@ Implements `docs/ANLP Project abstract.md`, `docs/research-proposal.md`, and the
       default `--method lora`) + evaluation battery (finetuned vs zero-shot vs Gemini)
 - [ ] D.2 Improve training (regime comparison: qlora / lora / full FT; still 1 epoch per run)
       — see `IMPROVEMENT_PLAN.md` for diagnosis / gates
+
+## D'. E4 — raw vs curated SFT (paper F8) — CODE DONE, JOBS OPEN
+Plan: `docs/e4-raw-vs-curated-training-plan.md`. Code (decode off, judge T=0, 35-word prompt,
+`data.download_raw`, `preprocess --test-from`, `scripts.e4_score`) landed 2026-07-30.
+- [x] D'.1 Decode defaults off (`1.0` / `0`) + judge temperature pin + 35-word prompt
+- [x] D'.2 Raw loader + test-split swap + E4 scorer + tests
+- [ ] D'.3 Rebuild both datasets with current `PROMPT_TEMPLATE` →
+      `outputs/data/processed/e4cur` + `e4raw` (shared curated test via `--test-from`)
+- [ ] D'.4 Upload Hub datasets: `avreymi/amlk-training-data-raw`,
+      `avreymi/amlk-training-data-e4cur`
+- [ ] D'.5 Train E4-RAW → `avreymi/amlk-e4-raw` (`--test-subset 120 --skip-base-arm --run-tag e4-raw`)
+- [ ] D'.6 Train E4-CUR → `avreymi/amlk-e4-curated` (same flags, `--run-tag e4-cur`)
+- [ ] D'.7 Score: `python -m scripts.e4_score --raw … --curated … --limit 120` → write F8 /
+      `docs/obsidian/Experiment Results.md`
 
 ## E. Present results — 14.06
 - [ ] E.1 Paper draft

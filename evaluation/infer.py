@@ -159,11 +159,14 @@ def generate_summaries(
         ).to(device)
         with torch.no_grad():
             outs = model.generate(
-                # no_repeat_ngram_size + repetition_penalty kill greedy degeneration loops;
-                # min_new_tokens + explicit eos let the model stop instead of running to the cap.
+                # repetition_penalty / no_repeat_ngram_size OFF by default: HF applies the
+                # penalty over the whole sequence (prompt included), which suppresses the
+                # article's own vocabulary and breaks entity names in summarization. Measured
+                # +1.4–1.5 faithfulness when 1.2/3 → 1.0/0. Degeneration is handled by
+                # min_new_tokens, explicit eos, max_new_tokens, and the stop-cue prompt.
                 **inputs, max_new_tokens=max_new_tokens,
                 min_new_tokens=min(16, max_new_tokens), do_sample=False,
-                no_repeat_ngram_size=3, repetition_penalty=1.2,
+                no_repeat_ngram_size=0, repetition_penalty=1.0,
                 eos_token_id=tokenizer.eos_token_id,
                 pad_token_id=tokenizer.pad_token_id,
                 bad_words_ids=bad_words_ids,

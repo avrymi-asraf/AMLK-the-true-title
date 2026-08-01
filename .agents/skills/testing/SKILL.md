@@ -22,9 +22,12 @@ test cannot tell you whether a summary is faithful or fluent; do not try to make
 
 ## What to test (a few behavioral contracts, total)
 
-- `data/download.py`: normalizers map raw rows to `{text, summary, source}` and skip empties.
-- `data/preprocess.py`: `build_prompt` carries the task + article; `make_variant` makes
-  whole/lead/body that actually differ; the split is a clean 80/10/10 with no overlap.
+- `data/download.py`: curated normalizers map rows to `{text, summary, source, hesum_id}` and skip empties.
+- `data/download_raw.py` (E4): held-out curated ids excluded from the raw sample; sample is
+  text-deduplicated; sampler reproducible under its seed; sample size 5854.
+- `data/preprocess.py`: `build_prompt` carries the task + article (current budget is 35 words);
+  `make_variant` makes whole/lead/body that actually differ; the split is a clean 80/10/10 with
+  no overlap; `--test-from` re-validates after swapping the test split (E4 shared curated test).
 - `evaluation/evaluate.py`: ROUGE scores Hebrew non-zero (guards the tokenizer-strips-non-ASCII
   bug); a messy LLM reply parses into scores.
 - `evaluation/error_analysis.py`: failure-rate aggregation counts each type correctly.
@@ -52,8 +55,9 @@ If the default suite ever needs a GPU, an API key, or more than a few seconds, a
 
 ## Test files (split by area, so a change in one part runs its own file)
 
-- `tests/test_download.py` — dataset normalization.
-- `tests/test_preprocess.py` — prompt building, probe variants, splitting.
+- `tests/test_download.py` — curated + raw (E4) normalization, exclusion, dedupe, sample seed.
+- `tests/test_preprocess.py` — prompt building (35-word budget), probe variants, splitting,
+  train-contract validate, `--test-from` post-swap re-validate.
 - `tests/test_evaluation.py` — ROUGE/Hebrew, judge-reply parsing, failure rates; live Gemini
   test gated behind `RUN_LIVE_TESTS`.
 
