@@ -91,9 +91,9 @@ or assert details absent from the paired article. Training and evaluating agains
 gold therefore risks rewarding a model for reproducing dataset defects.
 
 Current summarization practice usually fine-tunes on the available corpus and reports overlap metrics
-such as ROUGE or BERTScore \citep{zhang2020bertscore}. Both assume the reference is trustworthy.
-That assumption is especially fragile for scraped targets: lead-derived references can reward copying
-the opening sentence rather than summarizing the article \citep{nallapati2016abstractive,see2017get}.
+such as ROUGE or BERTScore \citep{zhang2020bertscore}, both of which assume the reference is
+trustworthy -- an assumption especially fragile for scraped targets, where lead-derived references can
+reward copying the opening sentence rather than summarizing \citep{nallapati2016abstractive,see2017get}.
 
 The problem became visible during qualitative inspection of model outputs. Fluent generated headlines
 were sometimes more focused and better grounded than the HeSum headline used to score them. Returning
@@ -107,9 +107,8 @@ We reverse the usual order: audit the references first, then train. We contribut
 pipeline that filters unusable HeSum rows and repairs defective headlines, (ii) an article-grounded,
 four-dimension rubric that evaluates references without requiring a second reference string, and
 (iii) independent graded and pairwise tests of whether the flagged rows are genuinely worse and the
-rewrites genuinely better. The same evaluation stack also defines a controlled training comparison between models fine-tuned on
-the uncleaned HeSum data versus the curated corpus. The audit is the completed claim of this paper;
-the training comparison (E4) applies the same rubric and a blind pairwise preference test to model outputs.
+rewrites genuinely better. The audit is the completed claim of this paper; the same instrument also
+underwrites E4, a controlled comparison between models fine-tuned on uncleaned versus curated data.
 
 \section{Data}
 \label{sec:data}
@@ -133,11 +132,9 @@ overlapping analysis groups used below.
 The stratum numbering deliberately omits S1 (over-token-budget). Because the filter is a hard length
 cut, S1 and clean rows have no common support in article length and cannot support a valid group
 comparison. We instead analyze length continuously as a supplementary lead-bias check
-(Appendix Figure~\ref{fig:leadbias}). For E4, the curated corpus splits $80/10/10$ by article into
-train/validation/test ($4{,}683$/$585$/$586$ rows). One arm trains on that curated train split; the other
-trains on a size-matched sample of uncleaned HeSum after excluding the curated validation and test
-IDs. Both arms share that curated test split; generation and scoring use a fixed seeded subset of
-$120$ test articles (not the full $586$).
+(Appendix Figure~\ref{fig:leadbias}). The curated corpus splits $80/10/10$ by article into
+train/validation/test ($4{,}683$/$585$/$586$ rows); Section~\ref{sec:methods} describes how E4's two
+training arms and shared test subset use this split.
 
 \section{Methods}
 \label{sec:methods}
@@ -156,8 +153,8 @@ expected to fail. It also belongs to a different model family from the curator, 
 risk \citep{panickssery2024llm}. Twelve Hebrew worked examples---scores 1, 3, and 5 for each
 dimension---anchor the ordinal scale and are excluded from downstream analysis. On the pilot,
 quadratically weighted test--retest agreement is $0.86$ for faithfulness, $0.90$ for single-focus,
-$0.76$ for informativeness, and $0.65$ for cleanliness; a human spot-check is reported in
-Section~\ref{sec:limitations}.
+$0.76$ for informativeness, and $0.65$ for cleanliness; a three-annotator human validation round
+is reported in Section~\ref{sec:results} and Figure~\ref{fig:humancheck}.
 
 Four pre-registered experiments use this instrument to answer four separate questions: are the flagged
 strata actually worse (E1); does repairing a headline improve its own score (E2); do blind readers agree
@@ -183,17 +180,12 @@ unchanged placebo cohort: because original and curated strings are identical in 
 systematic preference there would expose judge bias rather than a curation effect.
 
 \paragraph{E4: Does training on the curated corpus change model quality?}
-Two arms fine-tune the Hebrew-native Mistral-7B model \dictalmtwo{} with LoRA
-\citep{hu2022lora} ($r=32$, $\alpha=64$, dropout $0.05$; attention and MLP projections) under matched
-optimization: completion-only cross-entropy loss, one epoch, effective batch size $16$, cosine learning
-rate peaking at $2\times10^{-4}$, bf16 precision, and greedy decoding. The arms use different training
-datasets of equal size ($4{,}683$ rows): Arm~A on uncleaned HeSum and Arm~B on the curated corpus.
-Held-out curated validation and test IDs are excluded from the uncleaned sample so evaluation articles
-are not seen in training. Both arms share the curated test split ($586$ rows), the same chat-formatted
-instruction, a $4{,}096$-token sequence budget, a $128$-token decode budget, and a Hebrew-script decode
-constraint. Generation and scoring use a fixed seeded subset of $120$ articles from that test split,
-matched by construction across arms. Outputs are scored on the same rubric dimensions and compared
-blindly head to head; results appear in Section~\ref{sec:e4-results}.
+Two arms fine-tune \dictalmtwo{} with LoRA \citep{hu2022lora} ($r{=}32$, $\alpha{=}64$; attention and
+MLP projections, one epoch, matched optimization) on equal-size ($4{,}683$-row) training sets: Arm~A
+on uncleaned HeSum, Arm~B on the curated corpus, with curated validation/test IDs excluded from Arm~A
+to prevent leakage. Both arms share the curated test split and generate on the same seeded
+$120$-article subset, scored with the E1--E3 rubric and a blind pairwise judge
+(Section~\ref{sec:e4-results}).
 
 \section{Results}
 \label{sec:results}
@@ -228,40 +220,41 @@ repair, and measuring preference without ceiling compression -- and their agreem
 claim: the pipeline identifies real reference defects and improves the headlines it rewrites. E4 asks
 whether that target-side improvement shows up in model outputs under matched fine-tuning.
 
+\paragraph{Humans corroborate the automated judge.}
+Three annotators independently scored disjoint subsets of a stratified worklist, pooling to
+$n=152$ rubric articles and $n=95$ blind pairwise comparisons (no overlapping rows, so
+inter-annotator reliability is not estimable). Human and judge scores agree within one ordinal
+point on at least $68\%$ of articles per dimension (Figure~\ref{fig:humancheck}) -- cleanliness
+$90\%$, single-focus $86\%$, informativeness $76\%$, faithfulness $68\%$. On the $n=78$ non-tie
+pairwise comparisons -- the same denominator as Figure~\ref{fig:pairwise} -- humans prefer the
+curated headline $83.3\%$ of the time, at least as decisively as the automated judge's $73.6\%$
+win rate in E3.
+
 \paragraph{Training on the curated corpus improves model outputs (E4).}
 \label{sec:e4-results}
-On the shared curated-test subset ($n=120$, seed $42$), both arms use the same chat instruction,
-decode budget, and Hebrew-script constraint. Outputs are scored with the same four-dimension
-article-grounded rubric used for E1--E3 and with a blind pairwise preference judge (Gemini,
-temperature $0$). Curated-SFT raises mean faithfulness from $3.60$ to $4.09$
-(Cliff's $\delta=0.20$, 95\% CI $[0.07,0.34]$) and informativeness from $3.90$ to $4.33$
+On the shared $n=120$ seeded test subset, curated-SFT raises mean faithfulness from $3.60$ to
+$4.09$ (Cliff's $\delta=0.20$, 95\% CI $[0.07,0.34]$) and informativeness from $3.90$ to $4.33$
 ($\delta=0.19$, CI $[0.06,0.32]$); single-focus and cleanliness show no significant paired
-difference (both CIs include $0$). Blind preference favors curated outputs on $64.3\%$ of
-non-tie comparisons ($74$ curated / $41$ uncleaned / $5$ ties; Wilson 95\% CI $[55.3\%,72.5\%]$
-excludes $50\%$). Under the pre-registered decision rule (pairwise CI excludes $50\%$ or
-faithfulness Cliff CI excludes $0$), curation wins. Gains concentrate in faithfulness and
-informativeness rather than surface cleanliness, consistent with E2/E3 improving substantively
-defective targets rather than merely polishing already-clean strings.
+difference (Figure~\ref{fig:e4rubric}). Blind pairwise preference favors curated outputs on
+$64.3\%$ of non-tie comparisons ($74$/$41$/$5$ ties; Wilson 95\% CI $[55.3\%,72.5\%]$ excludes
+$50\%$; Figure~\ref{fig:e4pairwise}). Under the pre-registered decision rule (pairwise CI excludes
+$50\%$ or faithfulness Cliff CI excludes $0$), curation wins.
 
 \section{Limitations and Conclusion}
 \label{sec:limitations}
 This audit shows that HeSum's scraped headlines cannot be treated as fixed ground truth: reference
 quality varies systematically with observable extraction patterns (E1) and repair measurably improves it
-(E2/E3). The methodological implication is that this can reverse how a model score should be read --
-matching a bundled or unsupported headline more closely is not necessarily better summarization, so
-evaluation should ask whether the target itself is faithful before asking whether an output resembles it.
-A single-annotator spot-check (Figure~\ref{fig:humancheck}) shows the judge tracks a human reader within
-one point on the ordinal rubric, and this check is being extended across the full annotator team.
+(E2/E3). This can reverse how a model score should be read -- matching a bundled or unsupported
+headline more closely is not necessarily better summarization, so evaluation should ask whether the
+target is faithful before asking whether an output resembles it. The human validation round
+(Figure~\ref{fig:humancheck}) corroborates the judge on non-overlapping slices but does not estimate
+inter-annotator reliability.
 
-Two caveats bound this claim. Curator and judge come from different model families and neither is a human
-gold standard, and the curator's editorial style leaks into what counts as a repair -- it rewrote many
-headlines the judge already scored near clean (S4), so a preferred rewrite is not proof of the unique
-correct target. The audit shows that repairing retained headlines improves them, not that every filtered
-article should be discarded. E4 finds a moderate preference for the curated-trained model on a fixed
-$n=120$ subset of the shared curated test (not the full $586$-row split), with pointwise gains on
-faithfulness and informativeness and a pairwise Wilson CI that excludes $50\%$. Reference auditing
-should still precede fine-tuning and benchmarking alike -- a scraped target is an observation to
-validate, not ground truth by default.
+Two caveats bound this claim: curator and judge share no human gold standard, and the curator's
+editorial style shapes what counts as a repair -- it rewrote many headlines already scored near
+clean (S4), so a preferred rewrite is not proof of a unique target. E4's fixed $n=120$ subset
+(Figures~\ref{fig:e4rubric}--\ref{fig:e4pairwise}) shows curated training also yields a better model,
+but the audit's claim does not depend on it -- a scraped target is an observation, not a given.
 
 \clearpage
 
@@ -336,11 +329,29 @@ validate, not ground truth by default.
 
 \begin{figure}[H]
   \centering
-  \includegraphics[width=0.72\textwidth]{figures/f9a_human_agreement.png}
+  \includegraphics[width=0.66\textwidth]{figures/f8a_e4_rubric.png}
   \vspace{-0.3em}
-  \caption{Judge-vs-human spot-check (F9a): one annotator against the automated judge on $52$ rubric
-  rows and $22$ blind pairwise comparisons; annotator coverage is being extended (see
-  Section~\ref{sec:limitations}).}
+  \caption{E4 rubric scores, Arm A (uncleaned) vs.\ Arm B (curated), on the shared seeded $n=120$
+  test subset. Single-focus and cleanliness showed no significant paired difference and are omitted.}
+  \label{fig:e4rubric}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.72\textwidth]{figures/f8b_e4_pairwise.png}
+  \vspace{-0.3em}
+  \caption{E4 blind pairwise preference between the curated-trained and uncleaned-trained outputs,
+  same $n=120$ subset as Figure~\ref{fig:e4rubric}.}
+  \label{fig:e4pairwise}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.72\textwidth]{figures/f6_human_validation.png}
+  \vspace{-0.3em}
+  \caption{Human validation ($n=152$ rubric articles, three annotators on disjoint subsets).
+  Share of human--judge rubric pairs within one ordinal point and with an exact score match per
+  dimension. Blind pairwise preference is reported in the text and in Figure~\ref{fig:pairwise}.}
   \label{fig:humancheck}
 \end{figure}
 

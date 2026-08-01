@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import statistics
 from collections import defaultdict
 from pathlib import Path
 
@@ -183,6 +184,34 @@ def pairwise_agreement(
     }
 
 
+def pairwise_curated_rate(human_records: list[dict]) -> dict:
+    """Blind pairwise outcome distribution across all annotators, pooled.
+
+    Reports both the raw three-way split and the non-tie curated-win rate, which is the more
+    direct comparison point to E3's judge win rate (E3 also reports a non-tie percentage).
+    """
+    outcomes = [
+        human_pairwise_outcome(r) for r in human_records if r.get("task") == "pairwise"
+    ]
+    n = len(outcomes)
+    if n == 0:
+        return {"n": 0}
+    curated = outcomes.count("curated")
+    original = outcomes.count("original")
+    tie = outcomes.count("tie")
+    non_tie = curated + original
+    return {
+        "n": n,
+        "curated": curated,
+        "original": original,
+        "tie": tie,
+        "curated_pct": round(100 * curated / n, 1),
+        "tie_pct": round(100 * tie / n, 1),
+        "non_tie_curated_pct": round(100 * curated / non_tie, 1) if non_tie else None,
+        "n_non_tie": non_tie,
+    }
+
+
 def completion_check(
     annotations: list[dict],
     worklist_path: Path = DEFAULT_WORKLIST_PATH,
@@ -252,6 +281,35 @@ def judge_human_kappa(
     }
 
 
+def judge_human_closeness(
+    judge_scores: dict[str, dict[str, int]],
+    human: dict[str, dict[str, int]],
+) -> dict[str, dict]:
+    """Per-dimension n, kappa, mean human/judge score, and share of pairs within one ordinal point.
+
+    "Within one point" is a closeness measure that stays informative even when kappa is deflated
+    by low variance (e.g. cleanliness, where both sides mostly agree the headline is near-clean).
+    """
+    paired = paired_dimension_scores(judge_scores, human)
+    out: dict[str, dict] = {}
+    for dim in DIMENSIONS:
+        judge_vals, human_vals = paired[dim]
+        n = len(judge_vals)
+        if n == 0:
+            out[dim] = {"n": 0}
+            continue
+        diffs = [h - j for h, j in zip(human_vals, judge_vals)]
+        out[dim] = {
+            "n": n,
+            "kappa": weighted_kappa(judge_vals, human_vals) if n >= 2 else None,
+            "human_mean": round(statistics.mean(human_vals), 3),
+            "judge_mean": round(statistics.mean(judge_vals), 3),
+            "exact_match_pct": round(100 * sum(1 for d in diffs if d == 0) / n, 1),
+            "within_one_pct": round(100 * sum(1 for d in diffs if abs(d) <= 1) / n, 1),
+        }
+    return out
+
+
 def human_human_kappa_pair(
     human_a: dict[str, dict[str, int]],
     human_b: dict[str, dict[str, int]],
@@ -303,6 +361,9 @@ def build_summary(
         "split_mode": worklist.get("split_mode"),
         "judge_human": judge_human,
         "judge_human_pooled": judge_human_kappa(judge_scores, pooled_human),
+        "judge_human_pooled_detail": judge_human_closeness(judge_scores, pooled_human),
+        "n_annotators": len(annotator_ids),
+        "n_pooled_articles": len(pooled_human),
     }
 
     if split_mode:
@@ -331,6 +392,8 @@ def build_summary(
 
     for aid in annotator_ids:
         summary["pairwise"][aid] = pairwise_agreement(by_annotator[aid], judge_pairwise)
+    summary["pairwise"]["pooled"] = pairwise_agreement(records, judge_pairwise)
+    summary["pairwise_rate_pooled"] = pairwise_curated_rate(records)
 
     return summary
 

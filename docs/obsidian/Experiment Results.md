@@ -239,7 +239,7 @@ Complements E1; does not replace DictaLM2 baseline or E4.
 | F7 | yes | `outputs/figures/f7_win_rate.*` |
 | F8 | blocked | needs finetuned predictions + Arm A |
 | F9 | yes (partial n=604) | `outputs/figures/f9_baseline_vs_reference_rubric.*` |
-| F9a | pending | `outputs/figures/f9a_judge_validation.*` — needs human annotation round |
+| F9a | yes | `outputs/figures/f9a_judge_validation.*` |
 | sx01–sx18 | yes | `outputs/figures/sx_*` |
 | Q1 | no | qualitative cards from viewer |
 
@@ -257,24 +257,62 @@ Lift these into the paper/discussion as needed:
 4. **DictaLM2 zero-shot:** On multi-pipe rows, the model is **more single-focus** than the reference
    (median 2 vs 1) — evidence the reference, not the model, carries the multi-headline defect.
 5. **DictaLM2 fine-tuned:** Training nearly finished; inference in progress. E4 conclusion pending.
-6. **Instrument:** Pilot κ 0.65–0.90; pairwise placebo validates E3. Human round: disjoint split
-   (~52/52/48 rows across amit/avreymi/ofek), UI on `main`; κ heatmap after all three finish their shares.
+6. **Instrument:** Pilot κ 0.65–0.90; pairwise placebo validates E3. **F9a complete** (3 annotators,
+   disjoint 152 rubric + 95 pairwise); pooled judge–human κ 0.79 single-focus, 0.50 informativeness,
+   0.28 cleanliness, 0.11 faithfulness — but cleanliness/faithfulness are within ±1 ordinal point
+   90%/68% of the time, so low κ reflects compressed score variance, not real disagreement. On
+   non-tie pairwise (n=78), humans pick curated 83.3% of the time — *more* decisive than E3's 73.6%
+   judge win rate.
 
 ---
 
-## F9a — Human judge validation (pending annotations)
+## F9a — Human judge validation (complete)
 
-**Status:** worklist `v1-split` (152 rows total, 38 pairwise); annotation UI ready
-(`evaluation/viewer/annotate_app.py`). Each annotator scores **only their assigned subset**
-(disjoint — no averaging three scores on the same row).
+**Status:** All three annotators complete — **247 tasks**, **152 unique rubric articles**, **95 pairwise**
+(disjoint split; no human–human κ).
 
-**Worklist:** `data_curation/artifacts/human_validation_worklist.json` (seed 42, stratified S0/S2/S3/S4;
-assignment amit 52 / avreymi 52 / ofek 48).
+| Annotator | Tasks | Rubric | Pairwise |
+|-----------|-------|--------|----------|
+| amit | 122 | 52 | 70 |
+| avreymi | 65 | 52 | 13 |
+| ofek | 60 | 48 | 12 |
 
-**After annotations land:** teammates push `data_curation/artifacts/human_annotations/*.jsonl`;
-`human_validation_results.py` → judge–human κ per annotator + pooled over the combined set;
-`human_validation_figures.py` → `f9a_judge_validation` heatmap (includes pilot
-test-retest row from `rubric_pilot.json`). Human–human κ not computed (no overlapping rows).
+**Artifacts:** `data_curation/artifacts/human_annotations/{amit,avreymi,ofek}.jsonl`;
+summary `outputs/results/human_validation_summary.json`; figure `f9a_judge_validation`
+(**two-panel closeness chart**: within ±1 / exact match % + pairwise vs E3 ref; no judge test-retest).
+
+### Rubric: pooled human vs judge closeness, n=152
+
+| Dimension | within ±1 pt | exact match | human mean | judge mean | κ (ref.) |
+|-----------|--------------|-------------|------------|------------|----------|
+| single_focus | **86%** | 59% | 3.26 | 3.18 | 0.79 |
+| informativeness | **76%** | 34% | 3.43 | 3.80 | 0.50 |
+| cleanliness | **90%** | 69% | 4.66 | 4.68 | 0.28 |
+| faithfulness | **68%** | 40% | 4.33 | 3.85 | 0.11 |
+
+**Readout:** Paper figure leads with **within ±1** and **exact match** % (not κ). All four dimensions
+≥68% within one ordinal point; cleanliness means nearly identical. Pairwise panel: human 83.3% curated
+on non-tie vs E3 judge 73.6%.
+
+### Pairwise A/B (blind original vs curated), n=95
+
+| Source | n | Curated % | Tie % |
+|--------|---|-----------|-------|
+| amit | 70 | 66% | 21% |
+| avreymi | 13 | 54% | 15% |
+| ofek | 12 | 100% | 0% |
+| **Pooled (all)** | **95** | **68%** | **18%** |
+| **Pooled, non-tie only** | **78** | **83.3%** | — |
+| E3 judge (non-tie) | 961 | **73.6%** | — |
+
+vs E3 overlap (n=33): 48% raw agreement. On the non-tie denominator that matches how E3 reports its
+win rate, pooled humans are *more* decisive for curated (83.3%) than the automated judge (73.6%) —
+the paper uses this comparison instead of the raw 68%-including-ties number.
+
+```bash
+python -m data_curation.analysis.human_validation_results
+python -m data_curation.analysis.human_validation_figures
+```
 
 ---
 
@@ -285,7 +323,7 @@ test-retest row from `rubric_pilot.json`). Human–human κ not computed (no ove
 - [ ] Finish finetuned inference; score on frozen split with `hesum_id`
 - [ ] Arm A training + predictions (external)
 - [ ] **F8** once both arms on same test set
-- [ ] Human validation round → appendix agreement heatmap (**F9a** — UI ready, see `evaluation/viewer/ANNOTATION.md`)
+- [x] Human validation round → appendix agreement heatmap (**F9a**)
 - [ ] **Q1** qualitative exhibit (5–6 Hebrew cards)
 - [ ] Reconcile F9 numbering: baseline figure vs judge-validation appendix ([[Paper Figures#F9 note]])
 
