@@ -141,7 +141,7 @@
 * `notebooks/evaluation_observation.ipynb`: Colab notebook for live per-example evaluation observation (finetuned/base/gemini).
 * `notebooks/cluster_topics_databricks.py`: Databricks source-format notebook for topic + style clustering over the corpus.
 * `scripts/run_nb_cell.py`: Agent cell-runner via `colab exec` for cell-by-cell observation.
-* `scripts/e4_score.py`: E4 scoring driver — pointwise Gemini faith/flu on raw vs curated prediction JSONLs, blind pairwise A/B (`pairwise_judge`), Cliff's δ + Wilson CI via `data_curation.analysis.stats`. Decision rule: curation wins if pairwise Wilson CI excludes 50% or paired judge CI excludes 0.
+* `scripts/e4_score.py`: E4 scoring driver — four-dimension rubric (`evaluation.rubric_judge`: faith/focus/info/clean) on raw vs curated prediction JSONLs, blind pairwise A/B (`pairwise_judge`), Cliff's δ + Wilson CI via `data_curation.analysis.stats`, offline HTML viewer (`e4-results-viewer.html`). Decision rule: curation wins if pairwise Wilson CI excludes 50% or paired faithfulness Cliff CI excludes 0.
 * `IMPROVEMENT_PLAN.md`: Code audit (C0–C5) + training improvement plan (P0–P5: grounding, chat template, decode, metrics, 7B regime). Historical diagnosis; many code fixes are already applied on this branch.
 * `docs/prompt-arena-notebook.md`: Lab notebook for the prompt-optimization loop that produced the current `PROMPT_TEMPLATE` (judge → compliance → ROUGE-L ranking). Prompt-arena **code** may live only on `another-model`; the winning prompt is already in `data/prompts.py`.
 
@@ -261,14 +261,16 @@ Additive path reuses `train_hf_job.py` as sole body with `OUTPUT_DIR`/`DATA_DIR`
 `--submit-hf` unchanged. Prefer qlora on T4; dry-run via `--colab-dry-run`. Live smoke
 not run in this change (code + unit tests only).
 
-**2026-08-01 — E4 COMPLETED; curation wins (pairwise Wilson CI excludes 50%).**
-Both arms: resume jobs → ckpt-293 + 120 preds. Final CE eval raw **0.977** /
-curated **0.751**. `scripts.e4_score` n=120 (gemini-2.5-flash-lite, T=0):
-pointwise faith 3.625→**3.767**, flu 4.758→**4.792** (Cliff CIs include 0);
-pairwise curated wins **74** / raw **41** / ties **5** → win rate **64.35%**,
-Wilson CI **[55.3, 72.5]** excludes 50% → **`curation_wins_by_decision_rule: true`**.
-Artifacts: `outputs/results/e4/{predictions-e4-*.jsonl,e4-score-summary.json,e4-pairwise.jsonl}`.
-Also: `wilson_ci` soft-falls without scipy; scipy installed in venv.
+**2026-08-01 — E4 COMPLETED with four-dimension rubric; curation wins.**
+Both arms: resume jobs → ckpt-293 + 120 preds. `scripts.e4_score` n=120
+(gemini-2.5-flash-lite, T=0, instrument `rubric_v1`):
+faith 3.60→**4.09** (Cliff δ=0.20, CI excludes 0), info 3.90→**4.33**
+(δ=0.19, CI excludes 0); focus/clean NS. Pairwise curated **74** / raw **41** /
+ties **5** → **64.35%**, Wilson **[55.3, 72.5]** excludes 50% →
+**`curation_wins_by_decision_rule: true`**. Paper Results §e4-results filled;
+HTML viewers (`e4-results-viewer.html`, `e4-base-compare.html`) on 4-dim rubric.
+Artifacts: `outputs/results/e4/{predictions-e4-*.jsonl,e4-score-summary.json,e4-pairwise.jsonl,e4-rubric-scores.jsonl,e4-rubric-cache.json}`.
+Legacy faith/flu summary kept as `e4-score-summary-faith-flu-legacy.json`.
 
 **2026-07-31 — E4 dual arms CANCELED; Hub resume ready; Jobs blocked on 402 credits.**
 Hardening worked (`save_steps=50`, `all_checkpoints`, SoftHub): raw Hub

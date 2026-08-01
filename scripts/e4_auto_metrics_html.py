@@ -1,10 +1,11 @@
 """
-E4 metrics + HTML: base vs raw-SFT vs curated-SFT (ROUGE/BERTScore + LLM judge).
+E4 metrics + HTML: base vs raw-SFT vs curated-SFT (ROUGE/BERTScore + 4-dim rubric).
 
 Pipeline role: after E4 prediction JSONLs exist, join them with zero-shot base
 predictions on the same shared curated test articles, score automatic metrics,
-and run Gemini pointwise faithfulness/fluency (T=0) on each arm. Writes a metrics
-JSON report and a self-contained HTML viewer (F8-style side-by-side).
+and run the Reference Quality Rubric (faithfulness, single-focus, informativeness,
+cleanliness — same instrument as E1–E3 / scripts.e4_score) on each arm. Writes a
+metrics JSON report and a self-contained HTML viewer (F8-style side-by-side).
 
 Run (from repo root, GEMINI_API_KEY for judge):
   python -m scripts.e4_auto_metrics_html \\
@@ -13,7 +14,7 @@ Run (from repo root, GEMINI_API_KEY for judge):
       --base outputs/results/dictalm2-sft-full/predictions-base.jsonl \\
       --output-dir outputs/results/e4
 
-Execution environment: local CPU; BERTScore on CPU; Gemini API for judge.
+Execution environment: local CPU; BERTScore on CPU; Gemini API for rubric judge.
 """
 from __future__ import annotations
 
@@ -25,8 +26,9 @@ import re
 import sys
 from pathlib import Path
 
-from evaluation.evaluate import _judge_scores, compute_bertscore, compute_rouge
+from evaluation.evaluate import compute_bertscore, compute_rouge
 from evaluation.gemini_client import GEMINI_MODEL, strip_think
+from evaluation.rubric_judge import DIMENSIONS, score_headline
 from rouge_score import rouge_scorer
 
 
@@ -159,8 +161,9 @@ def delta(a: float | None, b: float | None) -> float | None:
 
 
 def _cache_key(text: str, prediction: str) -> str:
-    payload = f"{text}\n---\n{prediction}".encode("utf-8")
-    return hashlib.sha256(payload).hexdigest()[:32]
+    """Match scripts.e4_score.cache_key so e4-rubric-cache.json is reusable."""
+    blob = (text + "\0" + prediction).encode("utf-8")
+    return hashlib.sha256(blob).hexdigest()
 
 
 def load_judge_cache(path: Path) -> dict[str, dict]:
@@ -175,93 +178,100 @@ def load_judge_cache(path: Path) -> dict[str, dict]:
 
 def save_judge_cache(path: Path, cache: dict[str, dict]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(cache, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.write_text(
+        json.dumps(cache, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+
+def _flat_rubric_hit(hit: dict) -> dict[str, int] | None:
+    if not isinstance(hit, dict):
+        return None
+    flat: dict[str, int] = {}
+    for dim in DIMENSIONS:
+        v = hit.get(dim)
+        if not isinstance(v, int) or not (1 <= v <= 5):
+            return None
+        flat[dim] = v
+    return flat
+
+
+def _flatten_score_headline(scored: dict) -> dict[str, int] | None:
+    flat: dict[str, int] = {}
+    for dim in DIMENSIONS:
+        entry = scored.get(dim)
+        if not isinstance(entry, dict):
+            return None
+        score = entry.get("score")
+        if not isinstance(score, int) or not (1 <= score <= 5):
+            return None
+        flat[dim] = score
+    return flat
 
 
 def judge_arm_cached(
     pairs: list[dict],
     arm: str,
     cache: dict[str, dict],
-    model: str = GEMINI_MODEL,
+    model=None,
 ) -> list[dict]:
-    """Pointwise faith/flu for one arm; resume from cache; fill cache in place."""
-    prepared: list[dict] = []
-    keys: list[str] = []
-    need_idx: list[int] = []
-    results: list[dict | None] = [None] * len(pairs)
-
+    """Four-dimension rubric for one arm; resume from cache; fill cache in place."""
+    results: list[dict] = []
+    n_hit = 0
+    n_api = 0
+    n = len(pairs)
     for i, p in enumerate(pairs):
         key = _cache_key(p["text"], p[arm])
-        keys.append(key)
-        hit = cache.get(key)
-        if (
-            isinstance(hit, dict)
-            and isinstance(hit.get("faithfulness"), (int, float))
-            and isinstance(hit.get("fluency"), (int, float))
-        ):
-            results[i] = {
-                "faithfulness": hit["faithfulness"],
-                "fluency": hit["fluency"],
-            }
+        hit = _flat_rubric_hit(cache.get(key) or {})
+        if hit is not None:
+            results.append(hit)
+            n_hit += 1
         else:
-            need_idx.append(i)
-            prepared.append({"text": p["text"], "prediction": p[arm]})
-
-    n_hit = len(pairs) - len(prepared)
+            n_api += 1
+            raw = score_headline(p["text"], p[arm], model=model, temperature=0.0)
+            flat = _flatten_score_headline(raw)
+            if flat is None:
+                results.append({})
+            else:
+                results.append(dict(flat))
+                cache[key] = dict(flat)
+        if (i + 1) % 25 == 0 or (i + 1) == n:
+            print(f"  rubric {arm} {i + 1}/{n}", file=sys.stderr)
     print(
-        f"  judge {arm}: cache hit {n_hit}/{len(pairs)}, "
-        f"API calls {len(prepared)} ({model})",
+        f"  judge {arm}: cache hit {n_hit}/{n}, API calls {n_api}",
         file=sys.stderr,
     )
-    if prepared:
-        scored = _judge_scores("gemini", model, None, prepared)
-        pe = scored.get("per_example") or []
-        for j, i in enumerate(need_idx):
-            row = pe[j] if j < len(pe) else {}
-            faith = row.get("faithfulness")
-            flu = row.get("fluency")
-            results[i] = {"faithfulness": faith, "fluency": flu}
-            if isinstance(faith, (int, float)) and isinstance(flu, (int, float)):
-                cache[keys[i]] = {"faithfulness": faith, "fluency": flu}
-
-    return [
-        r if r is not None else {"faithfulness": None, "fluency": None}
-        for r in results
-    ]
+    return results
 
 
-def attach_judge_scores(pairs: list[dict], cache: dict[str, dict]) -> list[dict]:
-    """Run Gemini pointwise judge for base/raw/curated; attach per-example scores."""
+def attach_judge_scores(pairs: list[dict], cache: dict[str, dict], model=None) -> list[dict]:
+    """Run four-dimension rubric for base/raw/curated; attach per-example scores."""
     if not os.environ.get("GEMINI_API_KEY"):
         raise RuntimeError(
-            "GEMINI_API_KEY is required for LLM judge "
+            "GEMINI_API_KEY is required for rubric judge "
             "(or pass --skip-judge)"
         )
     out = [dict(p) for p in pairs]
     for arm in ("base", "raw", "curated"):
-        scores = judge_arm_cached(pairs, arm, cache)
+        scores = judge_arm_cached(pairs, arm, cache, model=model)
         for i, s in enumerate(scores):
-            out[i][f"{arm}_faithfulness"] = s.get("faithfulness")
-            out[i][f"{arm}_fluency"] = s.get("fluency")
+            for dim in DIMENSIONS:
+                out[i][f"{arm}_{dim}"] = s.get(dim)
     return out
 
 
 def judge_arm_means(examples: list[dict], arm: str) -> dict:
-    faith = [
-        e[f"{arm}_faithfulness"]
-        for e in examples
-        if isinstance(e.get(f"{arm}_faithfulness"), (int, float))
-    ]
-    flu = [
-        e[f"{arm}_fluency"]
-        for e in examples
-        if isinstance(e.get(f"{arm}_fluency"), (int, float))
-    ]
-    return {
-        "faithfulness_mean": round(sum(faith) / len(faith), 3) if faith else None,
-        "fluency_mean": round(sum(flu) / len(flu), 3) if flu else None,
-        "n_scored": len(faith),
-    }
+    means: dict = {"n_scored": 0}
+    n_full = 0
+    for dim in DIMENSIONS:
+        vals = [
+            e[f"{arm}_{dim}"]
+            for e in examples
+            if isinstance(e.get(f"{arm}_{dim}"), (int, float))
+        ]
+        means[f"{dim}_mean"] = round(sum(vals) / len(vals), 3) if vals else None
+        n_full = max(n_full, len(vals))
+    means["n_scored"] = n_full
+    return means
 
 
 def best_arm_by_judge(example: dict, metric: str = "faithfulness") -> str:
@@ -304,8 +314,8 @@ def build_summary(systems: dict, has_judge: bool = False) -> dict:
             row["bertscore_p"] = s["bertscore"]["precision"]
             row["bertscore_r"] = s["bertscore"]["recall"]
         if has_judge and "judge" in s:
-            row["faithfulness_mean"] = s["judge"].get("faithfulness_mean")
-            row["fluency_mean"] = s["judge"].get("fluency_mean")
+            for dim in DIMENSIONS:
+                row[f"{dim}_mean"] = s["judge"].get(f"{dim}_mean")
             row["judge_n"] = s["judge"].get("n_scored")
         if arm != "base":
             row["delta_rougeL_vs_base"] = delta(row["rougeL"], base["rouge"]["rougeL"])
@@ -315,18 +325,15 @@ def build_summary(systems: dict, has_judge: bool = False) -> dict:
                     s["bertscore"]["f1"], base["bertscore"]["f1"]
                 )
             if has_judge and "judge" in s and "judge" in base:
-                row["delta_faithfulness_vs_base"] = delta(
-                    s["judge"].get("faithfulness_mean"),
-                    base["judge"].get("faithfulness_mean"),
-                )
-                row["delta_fluency_vs_base"] = delta(
-                    s["judge"].get("fluency_mean"),
-                    base["judge"].get("fluency_mean"),
-                )
+                for dim in DIMENSIONS:
+                    row[f"delta_{dim}_vs_base"] = delta(
+                        s["judge"].get(f"{dim}_mean"),
+                        base["judge"].get(f"{dim}_mean"),
+                    )
         rows.append(row)
     note = "curated HeSum headlines (shared test)"
     if has_judge:
-        note += f"; Gemini {GEMINI_MODEL} faith/flu T=0"
+        note += f"; Gemini {GEMINI_MODEL} four-dim rubric T=0"
     return {"systems": rows, "reference_note": note, "has_judge": has_judge}
 
 
@@ -368,10 +375,9 @@ def render_html(
         }
         if has_judge:
             for arm in ("base", "raw", "curated"):
-                row[f"{arm}_faithfulness"] = e.get(f"{arm}_faithfulness")
-                row[f"{arm}_fluency"] = e.get(f"{arm}_fluency")
+                for dim in DIMENSIONS:
+                    row[f"{arm}_{dim}"] = e.get(f"{arm}_{dim}")
             row["winner_faithfulness"] = best_arm_by_judge(e, "faithfulness")
-            row["winner_fluency"] = best_arm_by_judge(e, "fluency")
         example_payload.append(row)
 
     payload = {
@@ -380,6 +386,7 @@ def render_html(
         "has_bertscore": has_bertscore,
         "has_judge": has_judge,
         "judge_model": GEMINI_MODEL if has_judge else None,
+        "dimensions": list(DIMENSIONS),
     }
     data_json = json.dumps(payload, ensure_ascii=False)
     # Escape for embedding in <script type="application/json">
@@ -405,8 +412,7 @@ def render_html(
 
     bert_header = "<th>BERTScore F1</th><th>Δ F1 vs base</th>" if has_bertscore else ""
     judge_header = (
-        "<th>Faith (1–5)</th><th>Δ Faith vs base</th>"
-        "<th>Fluency (1–5)</th><th>Δ Flu vs base</th>"
+        "<th>Faith</th><th>Focus</th><th>Info</th><th>Clean</th><th>Δ Faith vs base</th>"
         if has_judge
         else ""
     )
@@ -424,17 +430,14 @@ def render_html(
         else:
             bert_cells[arm] = ""
         if has_judge:
+            dim_td = "".join(
+                f"<td>{cell(arm, f'{dim}_mean')}</td>" for dim in DIMENSIONS
+            )
             if arm == "base":
-                judge_cells[arm] = (
-                    f"<td>{cell(arm, 'faithfulness_mean')}</td><td>—</td>"
-                    f"<td>{cell(arm, 'fluency_mean')}</td><td>—</td>"
-                )
+                judge_cells[arm] = dim_td + "<td>—</td>"
             else:
                 judge_cells[arm] = (
-                    f"<td>{cell(arm, 'faithfulness_mean')}</td>"
-                    f"<td>{dcell(arm, 'delta_faithfulness_vs_base')}</td>"
-                    f"<td>{cell(arm, 'fluency_mean')}</td>"
-                    f"<td>{dcell(arm, 'delta_fluency_vs_base')}</td>"
+                    dim_td + f"<td>{dcell(arm, 'delta_faithfulness_vs_base')}</td>"
                 )
         else:
             judge_cells[arm] = ""
@@ -464,7 +467,7 @@ def render_html(
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>E4 Metrics — Base vs Raw vs Curated{(" + Judge" if has_judge else "")}</title>
+<title>E4 Metrics — Base vs Raw vs Curated{(" + Rubric" if has_judge else "")}</title>
 <style>
   :root {{
     --bg: #0f1419;
@@ -631,7 +634,7 @@ def render_html(
   <div class="sub">
     Shared curated test · ROUGE
     {" + BERTScore" if has_bertscore else ""}
-    {" + Gemini LLM-as-judge (faithfulness / fluency, T=0)" if has_judge else " · no LLM judge"}
+    {" + four-dimension rubric (faith / focus / info / clean, T=0)" if has_judge else " · no rubric judge"}
     · reference = curated HeSum headlines
   </div>
   <div class="metrics-wrap">
@@ -657,8 +660,8 @@ def render_html(
   </div>
   <p class="note">
     Δ is system − base on the same n examples. Higher ROUGE / BERTScore = closer to the
-    curated reference (style-confounded for raw targets). Judge scores are article-grounded
-    faithfulness / fluency (1–5), not reference overlap.
+    curated reference (style-confounded for raw targets). Rubric scores are article-grounded
+    (faithfulness, single-focus, informativeness, cleanliness; 1–5), not reference overlap.
   </p>
   <div class="controls">
     <input type="search" id="q" placeholder="Search Hebrew / English text…" />
@@ -683,6 +686,8 @@ def render_html(
   const payload = JSON.parse(document.getElementById("payload").textContent);
   const examples = payload.examples;
   const hasJudge = !!payload.has_judge;
+  const dims = payload.dimensions || ["faithfulness","single_focus","informativeness","cleanliness"];
+  const dimShort = {{faithfulness:"F", single_focus:"SF", informativeness:"I", cleanliness:"C"}};
   let filter = "all";
   let filterMode = "rougeL";
   let query = "";
@@ -716,24 +721,32 @@ def render_html(
     return `<span class="${{cls}}">${{arm}} ${{label}} ${{s}}</span>`;
   }}
 
-  function judgePill(arm, faith, flu, bestFaith) {{
-    if (faith == null && flu == null) return "";
-    const cls = bestFaith ? "pill best" : "pill";
-    const f = (typeof faith === "number") ? faith : "—";
-    const l = (typeof flu === "number") ? flu : "—";
-    return `<span class="${{cls}}">${{arm}} F${{f}}/L${{l}}</span>`;
+  function rubricLine(arm, ex) {{
+    return dims.map((d) => {{
+      const v = ex[arm + "_" + d];
+      return (dimShort[d] || d) + ":" + ((typeof v === "number") ? v : "—");
+    }}).join(" · ");
   }}
 
-  function armBlock(colorVar, title, text, bestRl, bestFaith, faith, flu) {{
+  function judgePill(arm, ex, bestFaith) {{
+    const hasAny = dims.some((d) => typeof ex[arm + "_" + d] === "number");
+    if (!hasAny) return "";
+    const cls = bestFaith ? "pill best" : "pill";
+    const parts = dims.map((d) => {{
+      const v = ex[arm + "_" + d];
+      return (dimShort[d] || d) + ((typeof v === "number") ? v : "—");
+    }});
+    return `<span class="${{cls}}">${{arm}} ${{parts.join(" ")}}</span>`;
+  }}
+
+  function armBlock(colorVar, title, text, bestRl, bestFaith, arm, ex) {{
     const tags = [];
     if (bestRl) tags.push('<span class="pill best">best R-L</span>');
     if (hasJudge && bestFaith) tags.push('<span class="pill best">best faith</span>');
     let judgeLine = "";
     if (hasJudge) {{
-      const f = (typeof faith === "number") ? faith : "—";
-      const l = (typeof flu === "number") ? flu : "—";
       judgeLine = `<div class="label" style="margin-top:0.35rem;font-weight:500">
-        faith ${{f}} · fluency ${{l}}</div>`;
+        ${{rubricLine(arm, ex)}}</div>`;
     }}
     const ring = (bestRl || (hasJudge && bestFaith)) ? "winner-ring" : "";
     return `
@@ -756,9 +769,9 @@ def render_html(
     const bestFaithRaw = hasJudge && wf === "raw";
     const bestFaithCur = hasJudge && wf === "curated";
     const judgePills = hasJudge ? `
-      ${{judgePill("base", ex.base_faithfulness, ex.base_fluency, bestFaithBase || wf === "tie")}}
-      ${{judgePill("raw", ex.raw_faithfulness, ex.raw_fluency, bestFaithRaw || wf === "tie")}}
-      ${{judgePill("cur", ex.curated_faithfulness, ex.curated_fluency, bestFaithCur || wf === "tie")}}
+      ${{judgePill("base", ex, bestFaithBase || wf === "tie")}}
+      ${{judgePill("raw", ex, bestFaithRaw || wf === "tie")}}
+      ${{judgePill("curated", ex, bestFaithCur || wf === "tie")}}
     ` : "";
     return `
 <article class="card" data-idx="${{ex.idx}}"
@@ -785,12 +798,9 @@ def render_html(
       <div class="box ref rtl">${{esc(ex.reference)}}</div>
     </div>
     <div class="grid3 block">
-      ${{armBlock("base", "Base (zero-shot)", ex.base, bestBase, bestFaithBase,
-        ex.base_faithfulness, ex.base_fluency)}}
-      ${{armBlock("raw", "Raw SFT", ex.raw, bestRaw, bestFaithRaw,
-        ex.raw_faithfulness, ex.raw_fluency)}}
-      ${{armBlock("curated", "Curated SFT", ex.curated, bestCur, bestFaithCur,
-        ex.curated_faithfulness, ex.curated_fluency)}}
+      ${{armBlock("base", "Base (zero-shot)", ex.base, bestBase, bestFaithBase, "base", ex)}}
+      ${{armBlock("raw", "Raw SFT", ex.raw, bestRaw, bestFaithRaw, "raw", ex)}}
+      ${{armBlock("curated", "Curated SFT", ex.curated, bestCur, bestFaithCur, "curated", ex)}}
     </div>
   </div>
 </article>`;
@@ -852,7 +862,7 @@ def render_html(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="E4 base vs raw vs curated metrics + HTML (ROUGE/BERTScore + LLM judge)"
+        description="E4 base vs raw vs curated metrics + HTML (ROUGE/BERTScore + 4-dim rubric)"
     )
     parser.add_argument(
         "--raw",
@@ -883,13 +893,13 @@ def main() -> int:
     parser.add_argument(
         "--skip-judge",
         action="store_true",
-        help="Skip Gemini faithfulness/fluency judge",
+        help="Skip four-dimension rubric judge",
     )
     parser.add_argument(
         "--judge-cache",
         type=Path,
         default=None,
-        help="JSON cache for judge scores (default: <output-dir>/e4-judge-cache.json)",
+        help="JSON cache for rubric scores (default: <output-dir>/e4-rubric-cache.json)",
     )
     parser.add_argument(
         "--limit",
@@ -932,18 +942,22 @@ def main() -> int:
     examples = per_example_rouge(pairs, normalize=False)
 
     has_judge = not args.skip_judge
-    cache_path = args.judge_cache or (args.output_dir / "e4-judge-cache.json")
+    cache_path = args.judge_cache or (args.output_dir / "e4-rubric-cache.json")
     if has_judge:
-        print(f"LLM judge ({GEMINI_MODEL}, T=0) on base/raw/curated…")
+        print(f"Rubric judge ({GEMINI_MODEL}, T=0) on base/raw/curated…")
+        import google.generativeai as genai
+
+        genai.configure(api_key=os.environ["GEMINI_API_KEY"])
+        model = genai.GenerativeModel(GEMINI_MODEL)
         cache = load_judge_cache(cache_path)
         try:
-            examples = attach_judge_scores(examples, cache)
+            examples = attach_judge_scores(examples, cache, model=model)
         except Exception as exc:  # noqa: BLE001 — surface API/env failures clearly
             print(f"error: judge failed: {exc}", file=sys.stderr)
             save_judge_cache(cache_path, cache)
             return 1
         save_judge_cache(cache_path, cache)
-        print(f"Wrote judge cache {cache_path} ({len(cache)} keys)")
+        print(f"Wrote rubric cache {cache_path} ({len(cache)} keys)")
         for arm in ("base", "raw", "curated"):
             systems[arm]["judge"] = judge_arm_means(examples, arm)
 
@@ -957,7 +971,7 @@ def main() -> int:
     if not args.skip_bertscore:
         metrics_parts.append("bertscore")
     if has_judge:
-        metrics_parts.append("gemini_judge_faith_flu")
+        metrics_parts.append("gemini_rubric_v1")
 
     report = {
         "n": len(pairs),
@@ -966,8 +980,10 @@ def main() -> int:
         "curated_file": str(args.curated),
         "metrics": " + ".join(metrics_parts),
         "llm_judge": has_judge,
+        "instrument": "rubric_v1" if has_judge else None,
         "judge_model": GEMINI_MODEL if has_judge else None,
         "judge_temperature": 0.0 if has_judge else None,
+        "dimensions": list(DIMENSIONS) if has_judge else None,
         "systems": systems,
         "summary": summary,
         "per_example_winner_counts_rougeL": {
@@ -980,16 +996,14 @@ def main() -> int:
             arm: sum(1 for e in examples if best_arm_by_judge(e, "faithfulness") == arm)
             for arm in ("base", "raw", "curated", "tie")
         }
-        # Compact per-example scores for re-analysis without re-judging.
         report["per_example_judge"] = [
             {
                 "idx": e["idx"],
-                "base_faithfulness": e.get("base_faithfulness"),
-                "base_fluency": e.get("base_fluency"),
-                "raw_faithfulness": e.get("raw_faithfulness"),
-                "raw_fluency": e.get("raw_fluency"),
-                "curated_faithfulness": e.get("curated_faithfulness"),
-                "curated_fluency": e.get("curated_fluency"),
+                **{
+                    f"{arm}_{dim}": e.get(f"{arm}_{dim}")
+                    for arm in ("base", "raw", "curated")
+                    for dim in DIMENSIONS
+                },
                 "winner_faithfulness": best_arm_by_judge(e, "faithfulness"),
                 "winner_rougeL": best_arm_by_metric(e, "rougeL"),
             }
@@ -1021,14 +1035,13 @@ def main() -> int:
                 extra += f"  ΔBS={row['delta_bertscore_f1_vs_base']:+.4f}"
             if row.get("delta_faithfulness_vs_base") is not None:
                 extra += f"  ΔFaith={row['delta_faithfulness_vs_base']:+.3f}"
-            if row.get("delta_fluency_vs_base") is not None:
-                extra += f"  ΔFlu={row['delta_fluency_vs_base']:+.3f}"
         bs = f"  BS-F1={row['bertscore_f1']:.4f}" if "bertscore_f1" in row else ""
         judge = ""
         if row.get("faithfulness_mean") is not None:
-            judge = (
-                f"  Faith={row['faithfulness_mean']:.3f}"
-                f"  Flu={row['fluency_mean']:.3f}"
+            judge = "  " + " ".join(
+                f"{dim[:5]}={row.get(f'{dim}_mean')}"
+                for dim in DIMENSIONS
+                if row.get(f"{dim}_mean") is not None
             )
         print(
             f"  {row['system']:8s}  R1={row['rouge1']:.4f}  R2={row['rouge2']:.4f}  "

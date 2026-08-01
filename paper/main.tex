@@ -109,7 +109,7 @@ four-dimension rubric that evaluates references without requiring a second refer
 (iii) independent graded and pairwise tests of whether the flagged rows are genuinely worse and the
 rewrites genuinely better. The same evaluation stack also defines a controlled training comparison between models fine-tuned on
 the uncleaned HeSum data versus the curated corpus. The audit is the completed claim of this paper;
-the training comparison is retained as a modular final experiment while its two arms finish.
+the training comparison (E4) applies the same rubric and a blind pairwise preference test to model outputs.
 
 \section{Data}
 \label{sec:data}
@@ -193,8 +193,7 @@ are not seen in training. Both arms share the curated test split ($586$ rows), t
 instruction, a $4{,}096$-token sequence budget, a $128$-token decode budget, and a Hebrew-script decode
 constraint. Generation and scoring use a fixed seeded subset of $120$ articles from that test split,
 matched by construction across arms. Outputs are scored on the same rubric dimensions and compared
-blindly head to head. Final E4 results will occupy the reserved paragraph in
-Section~\ref{sec:e4-results}.
+blindly head to head; results appear in Section~\ref{sec:e4-results}.
 
 \section{Results}
 \label{sec:results}
@@ -226,15 +225,23 @@ target required reconstruction.
 
 E1, E2, and E3 answer different questions -- validating the labels, tracking which dimensions move after
 repair, and measuring preference without ceiling compression -- and their agreement supports a narrow
-claim: the pipeline identifies real reference defects and improves the headlines it rewrites, without yet
-establishing downstream model gain, which is why E4 remains separate.
+claim: the pipeline identifies real reference defects and improves the headlines it rewrites. E4 asks
+whether that target-side improvement shows up in model outputs under matched fine-tuning.
 
-\paragraph{Training comparison (E4; reserved).}
+\paragraph{Training on the curated corpus improves model outputs (E4).}
 \label{sec:e4-results}
-The controlled Arm~A--B run (uncleaned versus curated training data) is still completing. This
-paragraph is intentionally reserved for the final rubric and blind-preference comparison; no claim
-about training on the curated corpus is made from a single arm. The completed audit and repair
-findings above do not depend on E4.
+On the shared curated-test subset ($n=120$, seed $42$), both arms use the same chat instruction,
+decode budget, and Hebrew-script constraint. Outputs are scored with the same four-dimension
+article-grounded rubric used for E1--E3 and with a blind pairwise preference judge (Gemini,
+temperature $0$). Curated-SFT raises mean faithfulness from $3.60$ to $4.09$
+(Cliff's $\delta=0.20$, 95\% CI $[0.07,0.34]$) and informativeness from $3.90$ to $4.33$
+($\delta=0.19$, CI $[0.06,0.32]$); single-focus and cleanliness show no significant paired
+difference (both CIs include $0$). Blind preference favors curated outputs on $64.3\%$ of
+non-tie comparisons ($74$ curated / $41$ uncleaned / $5$ ties; Wilson 95\% CI $[55.3\%,72.5\%]$
+excludes $50\%$). Under the pre-registered decision rule (pairwise CI excludes $50\%$ or
+faithfulness Cliff CI excludes $0$), curation wins. Gains concentrate in faithfulness and
+informativeness rather than surface cleanliness, consistent with E2/E3 improving substantively
+defective targets rather than merely polishing already-clean strings.
 
 \section{Limitations and Conclusion}
 \label{sec:limitations}
@@ -249,10 +256,12 @@ one point on the ordinal rubric, and this check is being extended across the ful
 Two caveats bound this claim. Curator and judge come from different model families and neither is a human
 gold standard, and the curator's editorial style leaks into what counts as a repair -- it rewrote many
 headlines the judge already scored near clean (S4), so a preferred rewrite is not proof of the unique
-correct target. The audit also only shows that repairing retained headlines improves them, not that every
-filtered article should be discarded or that training on the curated corpus yields a better model;
-E4 addresses the latter. Reference auditing should still precede fine-tuning and benchmarking alike
--- a scraped target is an observation to validate, not ground truth by default.
+correct target. The audit shows that repairing retained headlines improves them, not that every filtered
+article should be discarded. E4 finds a moderate preference for the curated-trained model on a fixed
+$n=120$ subset of the shared curated test (not the full $586$-row split), with pointwise gains on
+faithfulness and informativeness and a pairwise Wilson CI that excludes $50\%$. Reference auditing
+should still precede fine-tuning and benchmarking alike -- a scraped target is an observation to
+validate, not ground truth by default.
 
 \clearpage
 
