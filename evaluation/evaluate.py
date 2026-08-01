@@ -17,7 +17,13 @@ import re
 import sys
 from pathlib import Path
 
-from evaluation.gemini_client import GEMINI_MODEL, GEMINI_TIMEOUT, call_with_retry, strip_think
+from evaluation.gemini_client import (
+    GEMINI_MODEL,
+    GEMINI_TIMEOUT,
+    JUDGE_GENERATION_CONFIG,
+    call_with_retry,
+    strip_think,
+)
 
 JUDGE_PROMPT = """You are a strict evaluator of Hebrew text summaries.
 Read the ARTICLE and the candidate SUMMARY, then rate the summary:
@@ -148,7 +154,10 @@ def _judge_scores(provider: str, model_id: str, hf_provider: str | None, predict
             genai.configure(api_key=os.environ["GEMINI_API_KEY"])
             gemini = genai.GenerativeModel(model_id)
             raw = call_with_retry(lambda: gemini.generate_content(
-                prompt, request_options={"timeout": GEMINI_TIMEOUT}).text)
+                prompt,
+                generation_config=JUDGE_GENERATION_CONFIG,
+                request_options={"timeout": GEMINI_TIMEOUT},
+            ).text)
 
         scores = _parse_json(raw)
         f, l = scores.get("faithfulness"), scores.get("fluency")
@@ -173,7 +182,11 @@ def _judge_scores(provider: str, model_id: str, hf_provider: str | None, predict
 def gemini_json(model, prompt: str) -> dict:
     """Call a Gemini model and parse its reply as JSON (used by error_analysis.py)."""
     return _parse_json(call_with_retry(
-        lambda: model.generate_content(prompt, request_options={"timeout": GEMINI_TIMEOUT}).text))
+        lambda: model.generate_content(
+            prompt,
+            generation_config=JUDGE_GENERATION_CONFIG,
+            request_options={"timeout": GEMINI_TIMEOUT},
+        ).text))
 
 
 def judge_with_llm(predictions: list[dict]) -> dict:

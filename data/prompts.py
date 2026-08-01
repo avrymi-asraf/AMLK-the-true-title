@@ -9,15 +9,16 @@ Execution environment: imported locally by preprocess, train, and evaluation hel
 """
 import re
 
-# Prompt-arena round-3 winner (full experiment log: docs/prompt-arena-notebook.md). A numeric
-# word cap alone bound length only weakly across 3 rounds; adding an explicit stop cue ("write
-# one sentence only and stop right after it") beat every other candidate tested, including
-# worked examples (which hallucinated content). Still short of the loop's 0.9 compliance / 4.0
-# faithfulness target — re-run the loop if a stronger prompt is needed.
+# Fine-tuned student budget (docs/e4-raw-vs-curated-training-plan.md §1.3). The prompt-arena
+# 15-word / 1-sentence winner was tuned on the zero-shot base; at 15 words a fine-tuned model
+# compresses out identifying specifics the judge needs (faithfulness ~2.56). Widening to 2
+# sentences / 35 words + who/what/where reached ~4.52 on a correctly-decoded base. Same stop
+# cue; must be identical across E4 arms (baked into the prompt column at preprocess time).
 PROMPT_TEMPLATE = (
-    "סכם את כתבת החדשות הבאה בעברית במשפט קצר אחד, לא יותר מ-15 מילים. "
-    "כתוב משפט אחד בלבד ועצור מיד בסופו.\n\n"
-    "{text}\n\nתקציר (משפט אחד, עד 15 מילים):"
+    "סכם את כתבת החדשות הבאה בעברית ב-2 משפטים קצרים, לא יותר מ-35 מילים. "
+    "כלול את הפרטים המזהים המרכזיים: מי, מה והיכן. "
+    "כתוב 2 משפטים בלבד ועצור מיד בסופם.\n\n"
+    "{text}\n\nתקציר (עד 2 משפטים, עד 35 מילים):"
 )
 
 

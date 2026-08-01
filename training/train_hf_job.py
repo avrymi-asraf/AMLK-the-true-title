@@ -28,9 +28,10 @@ Stability (so a long run is not lost on crash/timeout):
   1. Checkpoints write to /data/output — the per-job bucket volume that survives
      infra restarts of the same job; trainer.train(resume_from_checkpoint=True)
      picks them up automatically.
-  2. hub_strategy="every_save" pushes each checkpoint as a Hub commit mid-run,
-     so partial adapters exist on OUTPUT_REPO even if the job dies later.
-  3. Predictions files are uploaded immediately after each generation loop.
+  2. hub_strategy="all_checkpoints" pushes each checkpoint-* folder (optimizer +
+     trainer_state + adapter) mid-run so --resume-from works after SIGTERM. Soft
+     Hub push: I/O errors on push never kill training (local /data/output remains).
+  3. Predictions files are uploaded periodically during generation (soft-fail too).
   4. Cross-job Hub resume: RESUME_FROM=auto|checkpoint-N downloads a *full*
      Trainer checkpoint (optimizer+trainer_state) from OUTPUT_REPO into
      /data/output before train — adapter-only Hub root is not enough.
@@ -199,6 +200,35 @@ def _materialize_hub_checkpoint(repo_id: str, checkpoint_name: str, output_dir: 
     return str(dest)
 
 
+class SoftHubSFTTrainer(SFTTrainer):
+    """SFTTrainer that never aborts training because a Hub checkpoint push failed.
+
+    E4 curated full run died on OSError during mid-run hub push (storage/network I/O)
+    even though /data/output already held the checkpoint. Hub is best-effort; local
+    bucket checkpoints + a later soft final push are enough to resume or finish.
+    """
+
+    def _push_from_checkpoint(self, checkpoint_folder: str) -> None:
+        try:
+            super()._push_from_checkpoint(checkpoint_folder)
+        except Exception as exc:
+            print(
+                f"WARNING: Hub checkpoint push failed for {checkpoint_folder} "
+                f"({type(exc).__name__}: {exc}); training continues. "
+                f"Local checkpoint remains under {self.args.output_dir}."
+            )
+
+    def push_to_hub(self, *args, **kwargs):
+        try:
+            return super().push_to_hub(*args, **kwargs)
+        except Exception as exc:
+            print(
+                f"WARNING: final Hub push failed ({type(exc).__name__}: {exc}); "
+                f"local weights remain under {self.args.output_dir}."
+            )
+            return None
+
+
 class StepTimeCallback(TrainerCallback):
     """Median seconds per optimizer step, warmup excluded — the number that makes two runs
     comparable on GPU cost.
@@ -271,12 +301,13 @@ print(f"Train config: quantize={quantize} use_lora={use_lora} "
 # training/config.py DEFAULT_MAX_NEW_TOKENS. train.py passes MAX_NEW_TOKENS via env.
 MAX_NEW_TOKENS = int(os.environ.get("MAX_NEW_TOKENS") or 128)
 print(f"max_new_tokens={MAX_NEW_TOKENS} (post-train dual-arm decode budget)")
-# Decode penalties, overridable because they are under suspicion, not settled: HF's
-# repetition penalty is applied over the *whole* sequence, prompt included, so at 1.2 every
-# word already in the article is pushed down — in summarization that penalizes copying the
-# right entity or number. See docs/training-improvement-notebook.md.
-REPETITION_PENALTY = float(os.environ.get("REPETITION_PENALTY") or 1.2)
-NO_REPEAT_NGRAM_SIZE = int(os.environ.get("NO_REPEAT_NGRAM_SIZE") or 3)
+# Decode defaults: NO repetition penalty. HF applies repetition_penalty over the whole
+# sequence (prompt included); at 1.2 every word already in the ~3.8k-token article is
+# suppressed, so the model emits near-miss entity names. Measured +1.4–1.5 faithfulness
+# on a 120-article subset when 1.2/ngram-3 → 1.0/0. Degeneration is handled by min_new_tokens,
+# explicit eos, max_new_tokens=128, and the stop-cue prompt. Env overrides still work.
+REPETITION_PENALTY = float(os.environ.get("REPETITION_PENALTY") or 1.0)
+NO_REPEAT_NGRAM_SIZE = int(os.environ.get("NO_REPEAT_NGRAM_SIZE") or 0)
 print(f"decode: repetition_penalty={REPETITION_PENALTY} "
       f"no_repeat_ngram_size={NO_REPEAT_NGRAM_SIZE}")
 print(f"wandb: {WANDB_PROJECT} / {WANDB_RUN_NAME}")
@@ -408,10 +439,11 @@ else:
     train_ds = train_ds.map(lambda ex: {**ex, "prompt": format_chat_prompt(ex["prompt"])})
     val_ds = val_ds.map(lambda ex: {**ex, "prompt": format_chat_prompt(ex["prompt"])})
 
-    # Mini: log every step; smoke: 10 steps; full 1-epoch: eval+save every 100 steps → ~2 mid-run
-    # Hub commits over the ~293 optimizer steps of a 4683-example epoch (hub_strategy=every_save
-    # crash-resume). load_best_model_at_end requires save_steps to be a multiple of eval_steps,
-    # so these two move together — the eval cost lever is the val slice size above, not the cadence.
+    # Mini: log every step; smoke: 10 steps; full 1-epoch: eval+save every 50 steps → ~5–6
+    # mid-run full Trainer checkpoint-* folders on Hub (hub_strategy=all_checkpoints) over the
+    # ~293 optimizer steps of a 4683-example epoch — denser resume surface after SIGTERM.
+    # load_best_model_at_end requires save_steps to be a multiple of eval_steps, so these two
+    # move together — the eval cost lever is the val slice size above, not the cadence.
     if MINI_TEST:
         n_epochs, max_steps_cfg = 1, -1
         log_steps, eval_steps_cfg, save_steps_cfg = 1, 5, 20
@@ -420,12 +452,15 @@ else:
         log_steps, eval_steps_cfg, save_steps_cfg = 5, 5, 5
     else:
         n_epochs, max_steps_cfg = EPOCHS, -1
-        log_steps, eval_steps_cfg, save_steps_cfg = 10, 100, 100
+        log_steps, eval_steps_cfg, save_steps_cfg = 10, 50, 50
 
     # /data is the bucket run_uv_job auto-mounts — survives infra restarts of this job.
     output_dir = "/data/output"
     print(f"Stability: checkpoints → {output_dir} (bucket resume)")
-    print(f"Stability: hub_strategy=every_save → {OUTPUT_REPO} every {save_steps_cfg} steps")
+    print(
+        f"Stability: hub_strategy=all_checkpoints → {OUTPUT_REPO} every "
+        f"{save_steps_cfg} steps (full Trainer ckpt; soft-fail Hub I/O)"
+    )
 
     # Cross-job resume: pull a full Trainer checkpoint from the Hub into /data/output.
     # Adapter-only root files on OUTPUT_REPO are not enough (no optimizer/trainer_state).
@@ -445,15 +480,18 @@ else:
         _materialize_hub_checkpoint(OUTPUT_REPO, chosen, output_dir)
 
     # When finishing a killed run from Hub, keep *last* weights after the remaining steps.
-    # load_best_model_at_end would otherwise reload the mid-run best (e.g. step 200) and
-    # discard the final ~1/3 of the epoch if no later eval/save lands on a multiple of 100.
+    # load_best_model_at_end would otherwise reload the mid-run best (e.g. step 100) and
+    # discard the final stretch of the epoch if no later eval/save lands on a save_steps multiple.
     load_best = not bool(RESUME_FROM)
 
     sft_config = SFTConfig(
         output_dir=output_dir,
         push_to_hub=True,
         hub_model_id=OUTPUT_REPO,
-        hub_strategy="every_save",
+        # all_checkpoints (not every_save): every_save only copies adapter weights to the
+        # repo root; resume needs checkpoint-N/{optimizer,trainer_state,adapter}. SoftHub
+        # wraps push so Hub I/O OSError cannot kill the epoch (E4 curated death mode).
+        hub_strategy="all_checkpoints",
         hub_private_repo=True,
         num_train_epochs=n_epochs,
         max_steps=max_steps_cfg,
@@ -488,7 +526,7 @@ else:
         run_name=WANDB_RUN_NAME,
     )
 
-    trainer = SFTTrainer(
+    trainer = SoftHubSFTTrainer(
         model=model,
         args=sft_config,
         train_dataset=train_ds,
@@ -529,16 +567,17 @@ else:
             wandb.run.summary[key] = value
 
     # Resume tails often end between save_steps; run a final eval + save so metrics and Hub
-    # get the completed-epoch weights (not only the last every_save at step 200).
+    # get the completed-epoch weights (not only the last all_checkpoints save).
     if RESUME_FROM:
         print("Post-resume final eval + save (end of remaining steps)...")
         metrics = trainer.evaluate()
         print(f"Final eval: {metrics}")
         trainer.save_model(output_dir)
 
-    # Final Hub commit with the best (or last) weights — mid-run saves already pushed via every_save.
+    # Final Hub commit with the best (or last) weights — mid-run saves already pushed
+    # via all_checkpoints (soft-fail inside SoftHubSFTTrainer.push_to_hub).
     trainer.push_to_hub()
-    print(f"Final adapter push complete → {OUTPUT_REPO}")
+    print(f"Final adapter push complete (or soft-failed) → {OUTPUT_REPO}")
 
     trained_model = trainer.model.eval()
     device = next(trained_model.parameters()).device
@@ -621,11 +660,18 @@ def _write_and_push_predictions(label: str, rows: list[dict]) -> None:
     path.write_text(
         "\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8",
     )
-    api.upload_file(
-        path_or_fileobj=str(path), path_in_repo=path.name,
-        repo_id=OUTPUT_REPO, repo_type="model",
-    )
-    print(f"  Pushed {path.name} ({len(rows)}/{len(test_ds)} rows) to {OUTPUT_REPO}")
+    try:
+        api.upload_file(
+            path_or_fileobj=str(path), path_in_repo=path.name,
+            repo_id=OUTPUT_REPO, repo_type="model",
+        )
+        print(f"  Pushed {path.name} ({len(rows)}/{len(test_ds)} rows) to {OUTPUT_REPO}")
+    except Exception as exc:
+        # Soft-fail: keep generating; local path still has the jsonl for a later retry.
+        print(
+            f"  WARNING: Hub push of {path.name} failed "
+            f"({type(exc).__name__}: {exc}); generation continues with local file."
+        )
 
 
 def generate_and_push(label: str):

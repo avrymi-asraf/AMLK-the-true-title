@@ -96,8 +96,10 @@ class TrainingConfig:
     warmup_ratio: float = 0.05
     lr_scheduler_type: str = "cosine"
     logging_steps: int = 10
-    save_steps: int = 200
-    eval_steps: int = 200
+    # Match train_hf_job full-run cadence: denser mid-run Hub full Trainer checkpoints
+    # for cross-job --resume-from after SIGTERM (was 200; cloud twin uses 50).
+    save_steps: int = 50
+    eval_steps: int = 50
     bf16: bool = True
 
 

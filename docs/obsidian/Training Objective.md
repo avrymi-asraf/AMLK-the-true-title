@@ -58,8 +58,14 @@ Cheap (loss already computed). Avoid ROUGE-based early stopping on HF Jobs unles
 Optimizing token likelihood does not teach:
 - when to emit EOS
 - how long to write (refs ~25 words, preds ~89 words)
-- anti-repetition at decode time
 
-Hence high ROUGE + low faithfulness. See [[Prediction Failure Modes]].
+**Decode note (2026-07-30):** do **not** use `repetition_penalty=1.2` /
+`no_repeat_ngram_size=3` as the fix — HF applies the penalty over the whole prompt and it
+hurts faithfulness (~+1.4 when turned **off**). Current defaults are `1.0` / `0`. Degeneration
+is handled by `min_new_tokens`, explicit EOS, `max_new_tokens`, and the stop-cue prompt.
+See [[Decoding Configuration]] and `docs/e4-raw-vs-curated-training-plan.md` §1.1.
+
+Hence high ROUGE + low faithfulness can still appear from target quality / prompt budget,
+not from missing decode penalties. See [[Prediction Failure Modes]].
 
 Related: [[Fix Plan#Phase 2]], [[HeSum Paper Insights#ROUGE vs human eval]]

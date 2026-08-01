@@ -173,7 +173,8 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
                   resume_from: str = "", dataset_repo_override: str = "",
                   max_train: int = 0, test_subset: int = 0, skip_base_arm: bool = False,
                   run_tag: str = "", learning_rate: float = 0.0,
-                  repetition_penalty: float = 0.0, no_repeat_ngram_size: int = -1):
+                  repetition_penalty: float = 0.0, no_repeat_ngram_size: int = -1,
+                  batch_size: int = 0):
     """Upload the processed splits to the Hub and submit train_hf_job.py to HF Jobs.
 
     inference_only=True skips dataset re-upload and training; loads the already-pushed
@@ -192,6 +193,9 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
     max_train caps train examples so arms match on step count, test_subset restricts
     generation to the fixed judged subset, skip_base_arm drops the zero-shot arm (its
     predictions are greedy and already scored), and run_tag names the wandb run.
+    batch_size overrides per_device_train_batch_size and rescales gradient_accumulation
+    so the effective batch (preset product, 16 for lora) stays the same — needed to try
+    micro-batch 2 on a10g when activation headroom allows group_by_length to pay off.
     """
     import warnings
     warnings.filterwarnings("ignore", category=UserWarning)
@@ -225,7 +229,7 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
         api.create_repo(repo_id=data_repo, repo_type="dataset", private=True, exist_ok=True)
         api.upload_folder(folder_path=str(data_dir), repo_id=data_repo, repo_type="dataset")
 
-    # Ensure the model repo exists before the job starts so mid-run hub_strategy=every_save works.
+    # Ensure the model repo exists before the job starts so mid-run hub_strategy=all_checkpoints works.
     if not inference_only:
         api.create_repo(repo_id=out_repo, repo_type="model", private=True, exist_ok=True)
 
@@ -281,6 +285,19 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
     train_cfg = _train_config_payload(method)
     if learning_rate:
         train_cfg["learning_rate"] = learning_rate
+    if batch_size and batch_size > 0:
+        # Hold effective batch fixed so LR / step count stay comparable to the preset.
+        eff = (int(train_cfg["per_device_train_batch_size"])
+               * int(train_cfg["gradient_accumulation_steps"]))
+        if eff % batch_size != 0:
+            print(
+                f"WARNING: effective batch {eff} not divisible by --batch-size {batch_size}; "
+                f"using accum={max(1, eff // batch_size)} "
+                f"(new effective={batch_size * max(1, eff // batch_size)})",
+                file=sys.stderr,
+            )
+        train_cfg["per_device_train_batch_size"] = int(batch_size)
+        train_cfg["gradient_accumulation_steps"] = max(1, eff // batch_size)
     lora_cfg = _lora_config_payload() if train_cfg["use_lora"] else {}
     n_new_tokens = max_new_tokens or DEFAULT_MAX_NEW_TOKENS
 
@@ -295,7 +312,10 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
     if resume_key:
         print(f"  Resume from: {resume_key} (Hub full Trainer ckpt → finish epoch + gen)")
     print(f"  wandb: {project} / {run_name}")
-    print(f"  Stability: hub_strategy=every_save (checkpoint commits mid-run) + /data/output resume")
+    print(
+        f"  Stability: hub_strategy=all_checkpoints (full Trainer ckpt every save; "
+        f"soft-fail Hub I/O) + /data/output resume"
+    )
     job = api.run_uv_job(
         script=str(script_path),
         flavor=flavor,
@@ -323,7 +343,8 @@ def submit_hf_job(method: str, variant: str, hf_token: str, hf_user: str,
             "MAX_TRAIN_EXAMPLES": str(max_train or 0),
             "TEST_SUBSET_N": str(test_subset or 0),
             "SKIP_BASE_ARM": "1" if skip_base_arm else "0",
-            # Decode penalties (empty = the job's defaults 1.2 / 3).
+            # Decode penalties (empty = the job's defaults 1.0 / 0 — no penalty; see
+            # docs/e4-raw-vs-curated-training-plan.md §1.1).
             "REPETITION_PENALTY": str(repetition_penalty) if repetition_penalty else "",
             "NO_REPEAT_NGRAM_SIZE": (
                 str(no_repeat_ngram_size) if no_repeat_ngram_size >= 0 else ""
@@ -413,7 +434,9 @@ def train_local(method: str, variant: str, output_dir: Path, max_steps: int,
         run_name=run_name,
         push_to_hub=push_to_hub,
         hub_model_id=model_repo(hf_user, variant) if push_to_hub else None,
-        hub_strategy="every_save" if push_to_hub else "end",
+        # all_checkpoints (not every_save): full Trainer checkpoint-* folders on Hub
+        # for --resume-from (optimizer+trainer_state). every_save only copies adapter root.
+        hub_strategy="all_checkpoints" if push_to_hub else "end",
         hub_private_repo=True,
     )
 
@@ -458,7 +481,12 @@ def main():
     parser.add_argument("--output", default=None, help="Local checkpoint dir (default: outputs/checkpoints/<method>-<variant>)")
     parser.add_argument("--max-steps", type=int, default=-1, help="Cap steps for a smoke run")
     parser.add_argument("--max-length", type=int, default=MAX_LENGTH)
-    parser.add_argument("--batch-size", type=int, default=0, help="Override per-device batch size (for memory-limited local GPUs)")
+    parser.add_argument(
+        "--batch-size", type=int, default=0,
+        help="Override per-device train batch size (local or --submit-hf). "
+             "On HF, rescales gradient_accumulation to keep effective batch = preset product "
+             "(lora: 16). Try 2 on a10g if memory allows — unlocks group_by_length padding savings.",
+    )
     parser.add_argument("--push-to-hub", action="store_true", help="Push the trained adapter to the Hub")
     parser.add_argument("--submit-hf", action="store_true", help="Submit a remote training job to HF Jobs instead of training locally")
     parser.add_argument("--hf-user", default="", help="HuggingFace username (required with --submit-hf or --push-to-hub)")
@@ -501,10 +529,10 @@ def main():
                         help="Skip zero-shot base generation (greedy base preds already scored)")
     parser.add_argument("--run-tag", default="", help="Extra tag in the wandb run name")
     parser.add_argument("--repetition-penalty", type=float, default=0.0,
-                        help="Decode repetition penalty (default 1.2; HF applies it to the "
-                             "prompt too, which penalizes copying the article's own entities)")
+                        help="Decode repetition penalty (default 1.0 = off; HF applies it to "
+                             "the prompt too, which penalizes copying the article's entities)")
     parser.add_argument("--no-repeat-ngram-size", type=int, default=-1,
-                        help="Decode no-repeat n-gram size (default 3; 0 disables)")
+                        help="Decode no-repeat n-gram size (default 0 = off)")
     parser.add_argument("--learning-rate", type=float, default=0.0,
                         help="Override the method preset's learning rate")
     parser.add_argument(
@@ -548,7 +576,8 @@ def main():
                       test_subset=args.test_subset, skip_base_arm=args.skip_base_arm,
                       run_tag=args.run_tag, learning_rate=args.learning_rate,
                       repetition_penalty=args.repetition_penalty,
-                      no_repeat_ngram_size=args.no_repeat_ngram_size)
+                      no_repeat_ngram_size=args.no_repeat_ngram_size,
+                      batch_size=args.batch_size)
         return
 
     if args.push_to_hub and not args.hf_user:

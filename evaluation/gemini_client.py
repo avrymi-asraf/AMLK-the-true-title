@@ -16,6 +16,9 @@ import time
 GEMINI_MODEL = "gemini-2.5-flash-lite"
 # Per-request deadline (seconds) for every generate_content call.
 GEMINI_TIMEOUT = 60
+# Judge/label calls are measurements, not generations: an unpinned temperature makes
+# re-scoring the same file drift, which shows up as fake deltas between training arms.
+JUDGE_GENERATION_CONFIG = {"temperature": 0.0}
 
 
 def strip_think(text: str) -> str:

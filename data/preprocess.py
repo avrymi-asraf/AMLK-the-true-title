@@ -1,22 +1,23 @@
 """
-Pipeline step 2 of 2: build the HuggingFace training dataset from curated HeSum.
+Pipeline step 2 of 2: build the HuggingFace training dataset from HeSum records.
 
-Reads the curated source (final_clean_hesum.json or curated_records.jsonl produced
-by data.download), builds raw (prompt, completion) pairs with the hardened
-summarization prompt, applies the positional probe --variant (whole|lead|body),
-truncates each article to MAX_LENGTH-256 tokens so the summary always survives,
-splits 80/10/10, and saves Arrow splits to outputs/data/processed/<variant>/.
+Reads curated (or E4-RAW) source JSON/JSONL, builds raw (prompt, completion) pairs
+with the hardened summarization prompt, applies the positional probe --variant
+(whole|lead|body), truncates each article to MAX_LENGTH-256 tokens so the summary
+always survives, splits 80/10/10, and saves Arrow splits under
+outputs/data/processed/<variant>/ (or --output).
 
-This is the only supported training-data path. The main-branch data_curation
-pipeline already cleaned headlines and filtered bad sources — no roundup drop or
-pipe-digest rewrite is applied here. Chat-template wrap happens later at
-train/infer time so multi-model baselines keep their own templates.
+For E4, --test-from <dir> substitutes another arm's test split (curated test on
+the raw arm) and re-runs validate_train_dataset so train↔test text overlap is
+caught after the swap. Chat-template wrap happens later at train/infer time.
 
 Train contract (enforced by validate_train_dataset): each split has columns
 text, summary, source, prompt, completion — what SFTTrainer + completion_only_loss
 and the dual-arm prediction writers expect.
 
 Run: python -m data.preprocess --variant whole [--force]
+     python -m data.preprocess --input outputs/data/raw/raw_records.jsonl \\
+         --test-from outputs/data/processed/e4cur --output outputs/data/processed/e4raw --force
 Execution environment: local development machine (CPU; loads the base tokenizer only).
 """
 from __future__ import annotations
@@ -64,11 +65,14 @@ def split_dataset(
 
 
 def load_source_records(input_path: Path | None = None) -> list[dict]:
-    """Load curated rows as {text, summary, source, hesum_id}.
+    """Load rows as {text, summary, source, hesum_id}.
 
     Preference order when input_path is None:
       1. outputs/data/curated/final_clean_hesum.json  (canonical curated product)
       2. outputs/data/curated/curated_records.jsonl   (normalized export from download)
+
+    With --input, accepts curated JSON, curated JSONL, or E4-RAW JSONL
+    (source=hesum-raw) from data.download_raw.
     """
     if input_path is not None:
         if input_path.suffix.lower() == ".jsonl":
@@ -84,6 +88,17 @@ def load_source_records(input_path: Path | None = None) -> list[dict]:
         "Copy final_clean_hesum.json into outputs/data/curated/ "
         "(or run: python -m data.download)."
     )
+
+
+def load_test_split(test_from: Path) -> hf_datasets.Dataset:
+    """Load a saved test/ Arrow dir for E4 test-split swap."""
+    test_dir = test_from / "test" if (test_from / "test").exists() else test_from
+    if not test_dir.exists():
+        raise FileNotFoundError(
+            f"--test-from path not found: {test_from} (expected a processed dir "
+            f"with a test/ subdir, or a test split directory itself)"
+        )
+    return hf_datasets.load_from_disk(str(test_dir))
 
 
 def _load_jsonl_records(path: Path) -> list[dict]:
@@ -207,8 +222,8 @@ def save_splits(
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Build HuggingFace train/val/test splits from curated HeSum "
-            "(the only supported training-data path)"
+            "Build HuggingFace train/val/test splits from HeSum records "
+            "(curated default; E4-RAW via --input + --test-from)"
         ),
     )
     parser.add_argument(
@@ -221,12 +236,30 @@ def main(argv: list[str] | None = None) -> int:
         "--input",
         type=Path,
         default=None,
-        help="Curated JSON or JSONL (default: auto-detect under outputs/data/curated/)",
+        help="Curated JSON/JSONL or E4-RAW JSONL (default: auto-detect curated)",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=None,
+        help=(
+            "Output dir for Arrow splits "
+            f"(default: {OUTPUT_ROOT}/<variant>). Use distinct dirs for E4 arms."
+        ),
+    )
+    parser.add_argument(
+        "--test-from",
+        type=Path,
+        default=None,
+        help=(
+            "Replace the built test split with test/ from this processed dir "
+            "(E4: share curated test across arms). Re-validates after swap."
+        ),
     )
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Overwrite existing outputs/data/processed/<variant>/",
+        help="Overwrite existing output dir",
     )
     parser.add_argument(
         "--seed",
@@ -236,7 +269,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    output_dir = OUTPUT_ROOT / processed_profile_name(args.variant)
+    output_dir = args.output or (OUTPUT_ROOT / processed_profile_name(args.variant))
     if output_dir.exists() and not args.force:
         print(f"Output already exists at {output_dir}. Pass --force to rebuild.")
         return 0
@@ -246,7 +279,7 @@ def main(argv: list[str] | None = None) -> int:
     except (FileNotFoundError, ValueError, json.JSONDecodeError) as e:
         print(f"ERROR: {e}", file=sys.stderr)
         return 1
-    print(f"Loaded {len(records)} curated records")
+    print(f"Loaded {len(records)} records")
 
     from transformers import AutoTokenizer
 
@@ -268,11 +301,26 @@ def main(argv: list[str] | None = None) -> int:
     validate_train_dataset(train, val, test)
     print("  OK — columns, non-empty fields, completion==summary, no split leak")
 
+    if args.test_from is not None:
+        print(f"Swapping test split from {args.test_from}...")
+        try:
+            test = load_test_split(args.test_from)
+        except (FileNotFoundError, ValueError) as e:
+            print(f"ERROR: {e}", file=sys.stderr)
+            return 1
+        print(f"  test after swap: {len(test)}")
+        # Mandatory: the first validate ran before the swap, so it cannot catch
+        # raw-train ↔ curated-test overlap on the arm that needs that check.
+        print("Re-validating train contract after test-split swap...")
+        validate_train_dataset(train, val, test)
+        print("  OK — post-swap: no train/val/test text overlap")
+
     save_splits(train, val, test, output_dir)
     print(f"Saved HuggingFace Arrow splits to {output_dir}")
     print(
-        "Next: python -m training.train --submit-hf --hf-user <you> "
-        f"(uploads {output_dir} to the Hub as amlk-training-data)"
+        "Next: upload this dir to a Hub dataset repo, then "
+        "python -m training.train --submit-hf --hf-user <you> "
+        "--dataset-repo <repo> --skip-data-upload"
     )
     return 0
 
