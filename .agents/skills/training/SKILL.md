@@ -1,14 +1,16 @@
 ---
 name: training
-description: AMLK training process — fine-tune dicta-il/dictalm2.0-instruct for Hebrew summarization (qlora|lora|full) on HF Jobs, with informative wandb names, 1-epoch runs, and mid-run Hub checkpoint pushes.
+description: AMLK training process — fine-tune dicta-il/dictalm2.0-instruct for Hebrew summarization (qlora|lora|full) on HF Jobs or Colab, with informative wandb names, 1-epoch runs, and mid-run Hub checkpoint pushes.
 ---
 
 # AMLK Training Process
 
 One script trains all three regimes the paper compares: `training/train.py`, selected with
 `--method qlora|lora|full`. The methods differ only by the small `METHOD_PRESETS` deltas in
-`training/config.py`. The self-contained `training/train_hf_job.py` is the same logic packaged
-for HuggingFace Jobs.
+`training/config.py`. The self-contained `training/train_hf_job.py` is the **sole remote
+training body** for both backends:
+- `--submit-hf` → HuggingFace Jobs (`run_uv_job`)
+- `--submit-colab` → Google Colab (`training/colab_submit.py` + `scripts/colab_train_entry.py`)
 
 **Primary data path:** curated HeSum → HuggingFace Arrow training splits.
 `data.download` resolves `final_clean_hesum.json` from (1)
@@ -54,18 +56,19 @@ no_repeat_ngram_size** (1.0 / 0) — penalties suppress article vocabulary in su
    Hyperparameters come from `METHOD_PRESETS` via `TRAIN_CONFIG`/`LORA_CONFIG` env JSON.
 5. wandb: project `amlk-{MODEL_SLUG}`, run name `{date}_{slug}_{method}_{variant}_{N}ep[_tag]`.
 6. **Stability:**
-   - Checkpoints → `/data/output` (per-job bucket; survives infra restart; auto-resume).
+   - Checkpoints → `OUTPUT_DIR` (`/data/output` on HF Jobs bucket; `/content/amlk-output`
+     on Colab — same-session only). Cross-session durability is always Hub.
    - `hub_strategy="all_checkpoints"` → each `checkpoint-N/` (optimizer + trainer_state +
      adapter) lands on Hub mid-run so `--resume-from` works after SIGTERM. Full-run
      `save_steps=50` / `eval_steps=50`. SoftHubSFTTrainer soft-fails Hub I/O so a push
-     OSError cannot kill the epoch (local bucket still has the save).
-   - Predictions uploaded periodically during generation (soft-fail too).
-   - Full-run timeout default **8h** (7B QLoRA worst-case ~5.8h at smoke step-time).
+     OSError cannot kill the epoch (local OUTPUT_DIR still has the save).
+   - Predictions written under OUTPUT_DIR and uploaded periodically (soft-fail too).
+   - Full-run HF Jobs timeout default **8h** (7B QLoRA worst-case ~5.8h at smoke step-time).
 
 ## Run it (always `python -m` from repo root)
 
 > **Do NOT train or run model inference on the local machine — it freezes (8 GB GPU).**
-> Everything model-related runs on HF Jobs.
+> Everything model-related runs on HF Jobs or Colab.
 
 ```bash
 source .env && source .venv/bin/activate
@@ -82,6 +85,13 @@ python -m training.train --submit-hf --hf-user avreymi --smoke-test \
 
 python -m training.train --submit-hf --hf-user avreymi --skip-data-upload
 python -m training.train --submit-hf --hf-user avreymi --inference-only
+
+# Colab path (same train_hf_job body; OUTPUT_DIR=/content/amlk-output). Prefer qlora on T4.
+# Dry-run (no VM): add --colab-dry-run. First smoke uses durable session + always stop.
+python -m training.train --submit-colab --hf-user avreymi --method qlora --smoke-test \
+  --skip-data-upload --skip-base-arm \
+  --output-repo avreymi/amlk-dictalm2-instruct-colab-smoke --run-tag colab
+# Optional: --colab-mode durable|run|auto  --colab-gpu T4  --colab-session NAME
 
 # Cross-job resume (full Trainer ckpt with optimizer — not adapter-only Hub root):
 # 1) Upload a killed job's checkpoint-N (from bucket or local) to OUTPUT_REPO:
@@ -131,6 +141,20 @@ Secrets must be real token strings via the Python API (not `"$HF_TOKEN"`). Never
 batch/lr in `train_hf_job.py` — always resolve from `METHOD_PRESETS` through `TRAIN_CONFIG`.
 `MODEL_SLUG` must be passed (not derived with naive `.`→`-` replace — that turns
 `dictalm2.0-instruct` into the wrong `dictalm2-0-instruct`).
+
+## Colab submission — additive path
+
+- Same env payload as HF Jobs via `training.train.build_job_env` / `prepare_remote_submit`.
+- Extra env: `OUTPUT_DIR=/content/amlk-output`, `DATA_DIR=/content/amlk-data`.
+- Secrets: upload local `.env` to `/content/.env` (not userdata). Always
+  `colab --auth=oauth2` before the subcommand; isolate `--config /tmp/amlk-colab-<tag>.json`.
+- Smoke default mode **durable**: `new -s NAME --gpu T4` → upload → high-timeout `exec` →
+  always `stop -s NAME` and verify `sessions` empty.
+- Steady-state: `colab run --gpu T4` without `--keep` (self-clean; Hub-only artifacts).
+- Prefer **`--method qlora`** on T4 (16 GB); bf16 lora often OOMs for 7B.
+- Pin `jupyter-kernel-client==0.15.0` if KernelClient import breaks after CLI upgrade.
+- Production full-epoch still prefers HF Jobs until Colab is proven end-to-end.
+- See `.agents/skills/colab-cli/SKILL.md` for agent safety rules.
 
 ## Monitoring
 

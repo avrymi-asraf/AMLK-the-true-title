@@ -1,6 +1,6 @@
 ## Project Goal
 
-* **Description:** AMLK is a Hebrew **news** summarization research project. The goal is to fine-tune `dicta-il/dictalm2.0-instruct` (MODEL_SLUG `dictalm2-instruct`) on **curated HeSum** (main-branch `data_curation` product: `final_clean_hesum.json`), evaluate with ROUGE, BERTScore, and LLM-as-judge, and produce a research paper and presentation. Design choices are informed by **English summarization literature** (lead bias, metric limits, strong baselines) without re-running English experiments. Evaluation includes an **advanced-model baseline** (e.g. Gemini API on the same test set and prompt) so metrics can be interpreted against a stronger system. A **truncation / positional-shortcut probe** trains separate models on Whole text, Lead-only, and Body-only inputs. Optional **headline-style control** varies the instruction (short headline vs longer summary). **Error analysis** labels a sampled set of predictions for failure types common in the literature. Runs locally or on HuggingFace Jobs; all scripts are command-line Python.
+* **Description:** AMLK is a Hebrew **news** summarization research project. The goal is to fine-tune `dicta-il/dictalm2.0-instruct` (MODEL_SLUG `dictalm2-instruct`) on **curated HeSum** (main-branch `data_curation` product: `final_clean_hesum.json`), evaluate with ROUGE, BERTScore, and LLM-as-judge, and produce a research paper and presentation. Design choices are informed by **English summarization literature** (lead bias, metric limits, strong baselines) without re-running English experiments. Evaluation includes an **advanced-model baseline** (e.g. Gemini API on the same test set and prompt) so metrics can be interpreted against a stronger system. A **truncation / positional-shortcut probe** trains separate models on Whole text, Lead-only, and Body-only inputs. Optional **headline-style control** varies the instruction (short headline vs longer summary). **Error analysis** labels a sampled set of predictions for failure types common in the literature. Runs locally, on HuggingFace Jobs, or Colab (`--submit-colab`); all scripts are command-line Python.
 
 ---
 
@@ -8,13 +8,13 @@
 
 * **Architecture:** The project is divided into sequential pipelines:
   1. **Data curation** (main worktree, offline / occasional) — `data_curation/` builds the clean HeSum product `final_clean_hesum.json` (source filter + headline repair + deterministic cleanup). Not re-run by every train job.
-  2. **Training pipeline** — materialize curated HeSum (`final_clean_hesum.json` → `data.download` → `data.preprocess` → HF Arrow splits with `prompt`/`completion`), load `dicta-il/dictalm2.0-instruct`, and fine-tune with HuggingFace `transformers`/`trl`. Local GPU is insufficient; jobs go to HuggingFace Jobs. **E4 secondary path:** `data.download_raw` + shared curated test (`preprocess --test-from`) for raw-vs-curated SFT.
+  2. **Training pipeline** — materialize curated HeSum (`final_clean_hesum.json` → `data.download` → `data.preprocess` → HF Arrow splits with `prompt`/`completion`), load `dicta-il/dictalm2.0-instruct`, and fine-tune with HuggingFace `transformers`/`trl`. Local GPU is insufficient; jobs go to HuggingFace Jobs (`--submit-hf`) or Colab (`--submit-colab`; same `train_hf_job.py` body, `OUTPUT_DIR=/content/amlk-output`). **E4 secondary path:** `data.download_raw` + shared curated test (`preprocess --test-from`) for raw-vs-curated SFT.
   3. **Evaluation pipeline** — scores fine-tuned and baseline checkpoints on the held-out test set: ROUGE, BERTScore, LLM-as-judge (Gemini), advanced-model baseline, error analysis, plus side tools (topic/style stratification, predictions viewer). E4 uses `scripts.e4_score` (pointwise + pairwise).
   4. **Results & reporting** — aggregated metrics feed into the paper and presentation.
 
 * **Code Flow:**
   1. Curated HeSum (`data_curation` product) → `data.download` / `data.preprocess` → HuggingFace train/val/test Arrow splits on disk (and Hub on train submit). E4-RAW: `data.download_raw` → preprocess with `--test-from` curated test.
-  2. Model fine-tuning on HF Jobs → adapter checkpoint on Hub; dual-arm test predictions (`predictions-finetuned.jsonl` / `predictions-base.jsonl`)
+  2. Model fine-tuning on HF Jobs or Colab → adapter checkpoint on Hub; dual-arm test predictions (`predictions-finetuned.jsonl` / `predictions-base.jsonl`)
   3. Evaluation scripts consume predictions → metric reports (`scripts.e4_score` for raw vs curated)
   4. Reports feed the paper / presentation
 
@@ -28,7 +28,7 @@
 │   └── skills/
 │       ├── colab-cli/SKILL.md             # Official Google Colab CLI usage for agent-safe remote runtimes
 │       ├── coding-principles/SKILL.md    # Project-local coding standards
-│       ├── training/SKILL.md             # AMLK training process (dictalm2, curated data, HF Jobs, wandb)
+│       ├── training/SKILL.md             # AMLK training process (dictalm2, curated data, HF Jobs/Colab, wandb)
 │       └── testing/SKILL.md              # AMLK testing philosophy
 ├── data_curation/                        # Offline curation pipeline (source of final_clean_hesum.json)
 │   ├── CURATION_ROADMAP.md               # End-to-end curation roadmap
@@ -49,9 +49,10 @@
 │   └── preprocess.py                     # Pipeline step 2: records → HF Arrow train/val/test; --test-from for E4
 ├── training/
 │   ├── __init__.py
-│   ├── config.py                         # MODEL_ID, MODEL_SLUG, MAX_LENGTH, METHOD_PRESETS, LoRAConfig, wandb_*/repo helpers
-│   ├── train.py                          # Single trainer: --method qlora|lora|full, --submit-hf, resume, TRAIN_CONFIG env
-│   ├── train_hf_job.py                   # Self-contained UV script run by HF Jobs (submitted by train.py --submit-hf)
+│   ├── config.py                         # MODEL_ID, MODEL_SLUG, MAX_LENGTH, METHOD_PRESETS, COLAB_* paths, wandb_*/repo helpers
+│   ├── train.py                          # Single trainer: --method qlora|lora|full, --submit-hf|--submit-colab, resume, TRAIN_CONFIG env
+│   ├── train_hf_job.py                   # Sole remote body: HF Jobs + Colab (OUTPUT_DIR /data/output or /content/amlk-output)
+│   ├── colab_submit.py                   # Colab CLI submit: oauth2, upload .env+scripts, durable/run modes
 │   └── resume.py                         # Full Trainer checkpoint helpers (Hub list/pick; used by train.py --resume-from)
 ├── evaluation/
 │   ├── __init__.py
@@ -78,6 +79,7 @@
 ├── scripts/
 │   ├── __init__.py
 │   ├── e4_score.py                       # E4: pointwise judge + blind pairwise on raw vs curated preds
+│   ├── colab_train_entry.py              # Remote Colab entry: .env + job env JSON + PEP723 deps → train_hf_job.py
 │   └── run_nb_cell.py                    # Drive notebook cells on a Colab session via colab-cli
 ├── tests/                                # Behavioral tests (download/preprocess/eval/viewer/…)
 ├── docs/
@@ -117,9 +119,11 @@
 * `data/prompts.py`: Single hardened `PROMPT_TEMPLATE` (Hebrew stop-cue; **2 sentences / ≤35 words** after E4 §1.3 — who/what/where), `build_prompt(text)`, `make_variant` (whole|lead|body), plus `format_chat_prompt` / `prepare_tokenizer_for_templated_prompts` — wraps instructions in the model's chat template at train/infer time. No Qwen-era `/no_think` injection. Shared by preprocess, train, and evaluation. Prompt is baked at preprocess time — rebuild both E4 arms after any change.
 * `data/clean.py`: Legacy pure-regex digest helpers (`normalize_summary`, `is_roundup_digest`, `pipe_segments`). **Not used by the train path** (curation already cleaned headlines); kept for style/diagnostics and tests.
 * `data/preprocess.py`: **Training-data path (step 2).** Reads curated or E4-RAW JSON/JSONL, builds raw `(prompt, completion)` pairs (chat wrap happens at train/infer), applies `--variant whole|lead|body`, truncates each article to `MAX_LENGTH-256` tokens, splits 80/10/10, **validates the train contract** (`validate_train_dataset`), saves Arrow splits to `--output` or `outputs/data/processed/<variant>/`. **`--test-from <dir>`** (E4) replaces the built test split with another arm's `test/` and **re-validates** so train↔test text overlap is caught after the swap.
-* `training/config.py`: Shared constants: `MODEL_ID="dicta-il/dictalm2.0-instruct"`, `MODEL_SLUG="dictalm2-instruct"`, `MAX_LENGTH=4096` (source of truth; preprocess uses `MAX_LENGTH-256=3840` article tokens), `DEFAULT_EPOCHS=1`, `DEFAULT_MAX_NEW_TOKENS=128`, `METHOD_PRESETS` (qlora / lora / full for 7B; default method is **lora** after paired smokes), `LoRAConfig` (r=32, alpha=64, q/k/v/o + gate/up/down_proj), `TrainingConfig`, `wandb_project`/`wandb_run_name`, and `dataset_repo`/`model_repo`/`processed_profile_name` Hub-id helpers (adapter repos `amlk-{MODEL_SLUG}-sft[-variant]`). Self-contained job scripts keep twin fallbacks of `max_length` (must stay in sync).
-* `training/train.py`: One trainer for all three regimes (`--method qlora|lora|full`). Trains with `completion_only_loss=True`, 1 epoch by default, logs to model-specific wandb with informative run names, saves the adapter; `--push-to-hub` or `--submit-hf` push to the Hub. Serializes resolved `TRAIN_CONFIG`/`LORA_CONFIG` JSON into the remote job env (so METHOD_PRESETS cannot be ignored). Full-run default flavor **a10g-small**, timeout **8h**. Chat-wraps prompts before SFT. Mid-run stability: creates the model repo before the job starts so `hub_strategy=every_save` can commit checkpoints while training. Cross-job resume: `--resume-from` / `--push-resume-checkpoint` (full Trainer ckpts via `training/resume.py`). Improvement-loop flags: `--dataset-repo`, `--skip-data-upload`, `--max-train`, `--test-subset`, `--skip-base-arm`, `--run-tag`, `--learning-rate`. Inference is NOT here for Gemini — that's `evaluation/predict.py`; dual-arm finetuned/base preds come from the cloud job.
-* `training/train_hf_job.py`: Self-contained PEP 723 UV script submitted inline by `train.py --submit-hf`. Reads METHOD/VARIANT/BASE_MODEL/DATASET_REPO/OUTPUT_REPO/WANDB_*/EPOCHS/`TRAIN_CONFIG`/`LORA_CONFIG`/`RESUME_FROM` from env, trains on the cloud GPU (1 epoch default), then generates fine-tuned + zero-shot base test predictions. Chat-wraps train/val/infer for both arms; `add_special_tokens=False` on generate (no double-BOS); Hebrew-script `bad_words_ids` always on. **Decode defaults: `repetition_penalty=1.0`, `no_repeat_ngram_size=0`** (penalties off — HF's penalty hits the prompt and breaks entity copy; see `docs/e4-raw-vs-curated-training-plan.md` §1.1). Stability: `/data/output` resume, `hub_strategy=every_save`, immediate prediction uploads. Never run directly.
+* `training/config.py`: Shared constants: `MODEL_ID="dicta-il/dictalm2.0-instruct"`, `MODEL_SLUG="dictalm2-instruct"`, `MAX_LENGTH=4096` (source of truth; preprocess uses `MAX_LENGTH-256=3840` article tokens), `DEFAULT_EPOCHS=1`, `DEFAULT_MAX_NEW_TOKENS=128`, `METHOD_PRESETS` (qlora / lora / full for 7B; default method is **lora** after paired smokes), `LoRAConfig` (r=32, alpha=64, q/k/v/o + gate/up/down_proj), `TrainingConfig`, `COLAB_OUTPUT_DIR=/content/amlk-output`, `COLAB_DATA_DIR=/content/amlk-data`, `COLAB_DEFAULT_GPU=T4`, `wandb_project`/`wandb_run_name`, and `dataset_repo`/`model_repo`/`processed_profile_name` Hub-id helpers (adapter repos `amlk-{MODEL_SLUG}-sft[-variant]`). Self-contained job scripts keep twin fallbacks of `max_length` (must stay in sync).
+* `training/train.py`: One trainer for all three regimes (`--method qlora|lora|full`). Trains with `completion_only_loss=True`, 1 epoch by default, logs to model-specific wandb with informative run names, saves the adapter; `--push-to-hub`, `--submit-hf` (HF Jobs), or `--submit-colab` (Colab) push to the Hub. Shared `build_job_env` / `prepare_remote_submit` serialize `TRAIN_CONFIG`/`LORA_CONFIG` for both remotes. Full-run HF default flavor **a10g-small**, timeout **8h**. Colab: prefer `--method qlora` on T4; `--colab-dry-run` plans without allocating. Cross-job resume: `--resume-from` / `--push-resume-checkpoint`. Inference is NOT here for Gemini — that's `evaluation/predict.py`; dual-arm finetuned/base preds come from the cloud job.
+* `training/train_hf_job.py`: Self-contained PEP 723 UV script — **sole training body** for `--submit-hf` and `--submit-colab`. Reads METHOD/VARIANT/BASE_MODEL/DATASET_REPO/OUTPUT_REPO/`OUTPUT_DIR`/`DATA_DIR`/WANDB_*/EPOCHS/`TRAIN_CONFIG`/`LORA_CONFIG`/`RESUME_FROM` from env. Defaults: `OUTPUT_DIR=/data/output`, `DATA_DIR=./data` (Colab overrides to `/content/amlk-output` + `/content/amlk-data`). Chat-wraps train/val/infer; Hebrew `bad_words_ids`; decode defaults `repetition_penalty=1.0`, `no_repeat_ngram_size=0`. Stability: `hub_strategy=all_checkpoints`, SoftHub, preds under OUTPUT_DIR + soft Hub push. Never run directly.
+* `training/colab_submit.py`: Local Colab CLI launcher for train body. Always `--auth=oauth2` + isolated `--config /tmp/amlk-colab-<tag>.json`; smoke uses durable `new -s` + upload `.env`/scripts + high-timeout `exec` + always `stop`; steady-state can use `colab run` without `--keep`. Pins `jupyter-kernel-client==0.15.0` if needed. Never loads 7B locally.
+* `scripts/colab_train_entry.py`: Remote entry on Colab VM: load `/content/.env` + `amlk_job_env.json`, pip-install PEP 723 deps from `train_hf_job.py`, run the job body.
 * `training/resume.py`: Pure helpers for **full** Trainer checkpoints (optimizer + `trainer_state` + weights/adapter) — list Hub dirs, pick `auto`/exact name, validate local dirs. Used by `train.py` for `--resume-from` and `--push-resume-checkpoint`. Inlined twins live inside `train_hf_job.py` (that script cannot import the repo).
 * `evaluation/predict.py`: Generates the Gemini advanced-baseline summaries via API (no GPU, no model load), same hardened prompt as training. Resumes from a partial file. Fine-tuned and zero-shot base predictions come from the cloud training job, not here.
 * `evaluation/gemini_client.py`: Shared Gemini API helpers (`GEMINI_MODEL`, `JUDGE_GENERATION_CONFIG` with `temperature=0.0`, `call_with_retry`). Also defines `strip_think()` — drops closed `<think>…</think>` reasoning blocks so metrics score the summary (used by evaluate.py and error_analysis.py; residual utility for chat-capable Qwen-family outputs).
@@ -185,6 +189,12 @@ python -m data.preprocess --variant whole --force   # also: --variant lead | bod
 python -m training.train --submit-hf --hf-user avreymi --smoke-test --skip-data-upload
 python -m training.train --submit-hf --hf-user avreymi --skip-data-upload   # full 1-epoch
 
+# Colab alternative (same train_hf_job body; OUTPUT_DIR=/content/amlk-output). Prefer qlora on T4.
+python -m training.train --submit-colab --hf-user avreymi --method qlora --smoke-test \
+  --skip-data-upload --skip-base-arm \
+  --output-repo avreymi/amlk-dictalm2-instruct-colab-smoke --run-tag colab
+# Dry-run (no VM): add --colab-dry-run
+
 # Cross-job resume (full Trainer ckpt with optimizer — not adapter-only Hub root):
 # python -m training.train --push-resume-checkpoint /path/to/checkpoint-200 \
 #   --output-repo avreymi/amlk-dictalm2-instruct-sft
@@ -219,6 +229,17 @@ hf jobs inspect <job-id>
 # Dataset: avreymi/amlk-training-data (private, curated whole splits).
 ```
 
+**Colab training — submit (agent-safe CLI):**
+```bash
+# Always --auth=oauth2; isolated config; never unpiped repl/console; stop durable sessions.
+# Prefer qlora on T4. Hub is cross-session durability (/content is ephemeral).
+python -m training.train --submit-colab --hf-user avreymi --method qlora --smoke-test \
+  --skip-data-upload --skip-base-arm --colab-dry-run   # plan only
+python -m training.train --submit-colab --hf-user avreymi --method qlora --smoke-test \
+  --skip-data-upload --skip-base-arm \
+  --output-repo avreymi/amlk-dictalm2-instruct-colab-smoke --run-tag colab
+```
+
 **Reading model outputs (predictions viewer):**
 ```bash
 source .venv/bin/activate && streamlit run evaluation/viewer/app.py
@@ -232,6 +253,13 @@ source .venv/bin/activate && python -m pytest tests/ -v
 ---
 
 ## Status - remember to update it
+
+**2026-08-01 — Colab training submit path (`--submit-colab`) implemented.**
+Additive path reuses `train_hf_job.py` as sole body with `OUTPUT_DIR`/`DATA_DIR` env
+(`/content/amlk-output`, `/content/amlk-data` on Colab). Shared `build_job_env` /
+`prepare_remote_submit`; `training/colab_submit.py` + `scripts/colab_train_entry.py`.
+`--submit-hf` unchanged. Prefer qlora on T4; dry-run via `--colab-dry-run`. Live smoke
+not run in this change (code + unit tests only).
 
 **2026-08-01 — E4 COMPLETED; curation wins (pairwise Wilson CI excludes 50%).**
 Both arms: resume jobs → ckpt-293 + 120 preds. Final CE eval raw **0.977** /

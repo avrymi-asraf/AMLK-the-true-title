@@ -14,9 +14,10 @@
 # ///
 """
 Pipeline step 3 (remote variant): self-contained fine-tuning of
-dicta-il/dictalm2.0-instruct (qlora|lora|full), run on HuggingFace Jobs.
-Submitted inline by training/train.py --submit-hf; never run directly. All
-settings arrive as environment variables (the repo is NOT uploaded with the script).
+dicta-il/dictalm2.0-instruct (qlora|lora|full). Sole training body for both
+HuggingFace Jobs (`training/train.py --submit-hf`) and Colab
+(`--submit-colab` → `training/colab_submit.py` + `scripts/colab_train_entry.py`).
+Never run directly. All settings arrive as environment variables.
 
 Hyperparameters come from TRAIN_CONFIG / LORA_CONFIG JSON (serialized by train.py
 from METHOD_PRESETS) so --method cannot silently use wrong batch/lr. Default
@@ -25,18 +26,18 @@ Train and serve both apply the model chat template (C0); generation tokenizes wi
 add_special_tokens=False to avoid double-BOS (C1).
 
 Stability (so a long run is not lost on crash/timeout):
-  1. Checkpoints write to /data/output — the per-job bucket volume that survives
-     infra restarts of the same job; trainer.train(resume_from_checkpoint=True)
-     picks them up automatically.
+  1. Checkpoints write to OUTPUT_DIR (default /data/output on HF Jobs;
+     /content/amlk-output on Colab) — same-session resume only on Colab.
   2. hub_strategy="all_checkpoints" pushes each checkpoint-* folder (optimizer +
      trainer_state + adapter) mid-run so --resume-from works after SIGTERM. Soft
-     Hub push: I/O errors on push never kill training (local /data/output remains).
-  3. Predictions files are uploaded periodically during generation (soft-fail too).
+     Hub push: I/O errors on push never kill training (local OUTPUT_DIR remains).
+  3. Predictions write under OUTPUT_DIR and upload periodically (soft-fail too).
   4. Cross-job Hub resume: RESUME_FROM=auto|checkpoint-N downloads a *full*
-     Trainer checkpoint (optimizer+trainer_state) from OUTPUT_REPO into
-     /data/output before train — adapter-only Hub root is not enough.
+     Trainer checkpoint from OUTPUT_REPO into OUTPUT_DIR before train —
+     adapter-only Hub root is not enough. Hub is the durability layer across
+     sessions (Colab /content is ephemeral).
 
-Execution environment: ephemeral HuggingFace Jobs GPU container.
+Execution environment: ephemeral HF Jobs GPU container, or Colab T4/L4 VM.
 """
 import json
 import os
@@ -66,13 +67,18 @@ SMOKE_TEST = os.environ.get("SMOKE_TEST", "0") == "1"
 MINI_TEST = os.environ.get("MINI_TEST", "0") == "1"
 INFERENCE_ONLY = os.environ.get("INFERENCE_ONLY", "0") == "1"
 # Cross-job resume from a full Trainer checkpoint on OUTPUT_REPO:
-#   "" (default) → only /data/output local resume (same job restart)
+#   "" (default) → only OUTPUT_DIR local resume (same job / same Colab session)
 #   "auto"       → highest checkpoint-* with optimizer+trainer_state on Hub
 #   "checkpoint-N" → that exact dir
 RESUME_FROM = (os.environ.get("RESUME_FROM") or "").strip()
 PRED_SUFFIX = os.environ.get("PRED_SUFFIX", "")
 # One epoch per run by default (override via EPOCHS env / train.py --epochs).
 EPOCHS = int(os.environ.get("EPOCHS") or 1)
+# Checkpoint + prediction working dir. HF Jobs: /data/output (bucket). Colab:
+# /content/amlk-output (ephemeral — Hub is cross-session durability).
+OUTPUT_DIR = os.environ.get("OUTPUT_DIR") or "/data/output"
+# Dataset download dir. HF Jobs: ./data. Colab: /content/amlk-data.
+DATA_DIR = os.environ.get("DATA_DIR") or "./data"
 # Base checkpoint + slug — duplicated from training/config.py on purpose (this script
 # is submitted inline and cannot import the repo). train.py passes both as env; keep
 # the fallbacks in sync with config.MODEL_ID / config.MODEL_SLUG.
@@ -204,8 +210,8 @@ class SoftHubSFTTrainer(SFTTrainer):
     """SFTTrainer that never aborts training because a Hub checkpoint push failed.
 
     E4 curated full run died on OSError during mid-run hub push (storage/network I/O)
-    even though /data/output already held the checkpoint. Hub is best-effort; local
-    bucket checkpoints + a later soft final push are enough to resume or finish.
+    even though OUTPUT_DIR already held the checkpoint. Hub is best-effort; local
+    checkpoints + a later soft final push are enough to resume or finish.
     """
 
     def _push_from_checkpoint(self, checkpoint_folder: str) -> None:
@@ -311,8 +317,10 @@ NO_REPEAT_NGRAM_SIZE = int(os.environ.get("NO_REPEAT_NGRAM_SIZE") or 0)
 print(f"decode: repetition_penalty={REPETITION_PENALTY} "
       f"no_repeat_ngram_size={NO_REPEAT_NGRAM_SIZE}")
 print(f"wandb: {WANDB_PROJECT} / {WANDB_RUN_NAME}")
+print(f"OUTPUT_DIR={OUTPUT_DIR}  DATA_DIR={DATA_DIR}")
+Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
 
-local_data = Path("./data")
+local_data = Path(DATA_DIR)
 snapshot_download(repo_id=DATASET_REPO, repo_type="dataset", local_dir=str(local_data))
 train_ds = load_from_disk(str(local_data / "train"))
 val_ds = load_from_disk(str(local_data / "val"))
@@ -454,15 +462,16 @@ else:
         n_epochs, max_steps_cfg = EPOCHS, -1
         log_steps, eval_steps_cfg, save_steps_cfg = 10, 50, 50
 
-    # /data is the bucket run_uv_job auto-mounts — survives infra restarts of this job.
-    output_dir = "/data/output"
-    print(f"Stability: checkpoints → {output_dir} (bucket resume)")
+    # OUTPUT_DIR: /data/output on HF Jobs (bucket); /content/amlk-output on Colab
+    # (same-session only). Cross-session durability is always Hub OUTPUT_REPO.
+    output_dir = OUTPUT_DIR
+    print(f"Stability: checkpoints → {output_dir} (same-session resume)")
     print(
         f"Stability: hub_strategy=all_checkpoints → {OUTPUT_REPO} every "
         f"{save_steps_cfg} steps (full Trainer ckpt; soft-fail Hub I/O)"
     )
 
-    # Cross-job resume: pull a full Trainer checkpoint from the Hub into /data/output.
+    # Cross-job resume: pull a full Trainer checkpoint from the Hub into OUTPUT_DIR.
     # Adapter-only root files on OUTPUT_REPO are not enough (no optimizer/trainer_state).
     if RESUME_FROM:
         api_hub = HfApi()
@@ -632,10 +641,16 @@ def _pred_filename(label: str) -> str:
     return f"predictions-{label}{PRED_SUFFIX}.jsonl"
 
 
+def _pred_local_path(label: str) -> Path:
+    """Local prediction path under OUTPUT_DIR (HF bucket or Colab /content/amlk-output)."""
+    Path(OUTPUT_DIR).mkdir(parents=True, exist_ok=True)
+    return Path(OUTPUT_DIR) / _pred_filename(label)
+
+
 def _load_partial_predictions(label: str) -> list[dict]:
-    """Resume from Hub (or local) partial jsonl if a prior job left one mid-arm."""
+    """Resume from Hub (or local OUTPUT_DIR) partial jsonl if a prior job left one mid-arm."""
     name = _pred_filename(label)
-    path = Path(name)
+    path = _pred_local_path(label)
     try:
         from huggingface_hub import hf_hub_download
         local = hf_hub_download(
@@ -643,7 +658,7 @@ def _load_partial_predictions(label: str) -> list[dict]:
         )
         path = Path(local)
     except Exception as exc:
-        print(f"  No Hub partial for {name} ({exc.__class__.__name__}); starting fresh")
+        print(f"  No Hub partial for {name} ({exc.__class__.__name__}); trying local")
         if not path.exists():
             return []
     rows = []
@@ -656,7 +671,7 @@ def _load_partial_predictions(label: str) -> list[dict]:
 
 
 def _write_and_push_predictions(label: str, rows: list[dict]) -> None:
-    path = Path(_pred_filename(label))
+    path = _pred_local_path(label)
     path.write_text(
         "\n".join(json.dumps(r, ensure_ascii=False) for r in rows), encoding="utf-8",
     )
