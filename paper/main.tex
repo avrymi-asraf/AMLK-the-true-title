@@ -107,10 +107,9 @@ We reverse the usual order: audit the references first, then train. We contribut
 pipeline that filters unusable HeSum rows and repairs defective headlines, (ii) an article-grounded,
 four-dimension rubric that evaluates references without requiring a second reference string, and
 (iii) independent graded and pairwise tests of whether the flagged rows are genuinely worse and the
-rewrites genuinely better. The same rubric also defines a controlled training comparison between
-models trained on identical articles with original versus curated targets. The audit is the completed
-claim of this paper; the training comparison is retained as a modular final experiment while its two
-arms finish.
+rewrites genuinely better. The same evaluation stack also defines a controlled training comparison between models fine-tuned on
+the uncleaned HeSum data versus the curated corpus. The audit is the completed claim of this paper;
+the training comparison is retained as a modular final experiment while its two arms finish.
 
 \section{Data}
 \label{sec:data}
@@ -135,8 +134,10 @@ The stratum numbering deliberately omits S1 (over-token-budget). Because the fil
 cut, S1 and clean rows have no common support in article length and cannot support a valid group
 comparison. We instead analyze length continuously as a supplementary lead-bias check
 (Appendix Figure~\ref{fig:leadbias}). For E4, the curated corpus splits $80/10/10$ by article into
-train/validation/test ($4{,}683$/$585$/$586$ rows), with both arms sharing the identical split so that
-only the target headline differs.
+train/validation/test ($4{,}683$/$585$/$586$ rows). One arm trains on that curated train split; the other
+trains on a size-matched sample of uncleaned HeSum after excluding the curated validation and test
+IDs. Both arms share that curated test split; generation and scoring use a fixed seeded subset of
+$120$ test articles (not the full $586$).
 
 \section{Methods}
 \label{sec:methods}
@@ -160,7 +161,8 @@ Section~\ref{sec:limitations}.
 
 Four pre-registered experiments use this instrument to answer four separate questions: are the flagged
 strata actually worse (E1); does repairing a headline improve its own score (E2); do blind readers agree
-(E3); and does training on the repaired targets change a model's output (E4).
+(E3); and does training on the curated corpus rather than the uncleaned data change a model's output
+(E4).
 
 \paragraph{E1: Are the flagged strata worse than clean headlines?}
 E1 scores $9{,}988$ original headlines and compares each flagged stratum with clean S0 using
@@ -180,16 +182,19 @@ order to a blind pairwise judge and checks position bias. It evaluates a rewritt
 unchanged placebo cohort: because original and curated strings are identical in the placebo, any
 systematic preference there would expose judge bias rather than a curation effect.
 
-\paragraph{E4: Does training on the repaired targets change model quality?}
+\paragraph{E4: Does training on the curated corpus change model quality?}
 Two arms fine-tune the Hebrew-native Mistral-7B model \dictalmtwo{} with LoRA
-\citep{hu2022lora} ($r=32$, $\alpha=64$, dropout $0.05$; attention and MLP projections). They use the
-same article IDs, frozen test split, completion-only cross-entropy loss, one epoch, effective batch size
-$16$, cosine learning rate peaking at $2\times10^{-4}$, bf16 precision, and greedy decoding. Only the
-target differs: original headlines for Arm A and curated headlines for Arm B. This controls article
-selection and data quantity. Both arms use the same chat-formatted instruction, $4{,}096$-token
-sequence budget, $128$-token decode budget, and Hebrew-script decode constraint. Their outputs will be
-scored on the same four rubric dimensions and compared blindly head to head. Final E4 results will
-occupy the reserved paragraph in Section~\ref{sec:e4-results}.
+\citep{hu2022lora} ($r=32$, $\alpha=64$, dropout $0.05$; attention and MLP projections) under matched
+optimization: completion-only cross-entropy loss, one epoch, effective batch size $16$, cosine learning
+rate peaking at $2\times10^{-4}$, bf16 precision, and greedy decoding. The arms use different training
+datasets of equal size ($4{,}683$ rows): Arm~A on uncleaned HeSum and Arm~B on the curated corpus.
+Held-out curated validation and test IDs are excluded from the uncleaned sample so evaluation articles
+are not seen in training. Both arms share the curated test split ($586$ rows), the same chat-formatted
+instruction, a $4{,}096$-token sequence budget, a $128$-token decode budget, and a Hebrew-script decode
+constraint. Generation and scoring use a fixed seeded subset of $120$ articles from that test split,
+matched by construction across arms. Outputs are scored on the same rubric dimensions and compared
+blindly head to head. Final E4 results will occupy the reserved paragraph in
+Section~\ref{sec:e4-results}.
 
 \section{Results}
 \label{sec:results}
@@ -226,9 +231,10 @@ establishing downstream model gain, which is why E4 remains separate.
 
 \paragraph{Training comparison (E4; reserved).}
 \label{sec:e4-results}
-The controlled Arm A--B run is still completing. This paragraph is intentionally reserved for the
-final rubric and blind-preference comparison; no claim about training on curated targets is made from a
-single arm. The completed audit and repair findings above do not depend on E4.
+The controlled Arm~A--B run (uncleaned versus curated training data) is still completing. This
+paragraph is intentionally reserved for the final rubric and blind-preference comparison; no claim
+about training on the curated corpus is made from a single arm. The completed audit and repair
+findings above do not depend on E4.
 
 \section{Limitations and Conclusion}
 \label{sec:limitations}
@@ -244,9 +250,9 @@ Two caveats bound this claim. Curator and judge come from different model famili
 gold standard, and the curator's editorial style leaks into what counts as a repair -- it rewrote many
 headlines the judge already scored near clean (S4), so a preferred rewrite is not proof of the unique
 correct target. The audit also only shows that repairing retained headlines improves them, not that every
-filtered article should be discarded or that better targets yield a better trained model; E4 settles the
-latter. Reference auditing should still precede fine-tuning and benchmarking alike -- a scraped target is
-an observation to validate, not ground truth by default.
+filtered article should be discarded or that training on the curated corpus yields a better model;
+E4 addresses the latter. Reference auditing should still precede fine-tuning and benchmarking alike
+-- a scraped target is an observation to validate, not ground truth by default.
 
 \clearpage
 
