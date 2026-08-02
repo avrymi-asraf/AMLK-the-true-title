@@ -1,154 +1,179 @@
-"""F8 from `docs/obsidian/Paper Figures.md` -- the E4 before/after figure reported in
-`paper/main.tex` (Results, "Training on the curated corpus improves model outputs (E4)"). Reads
-the aggregate summary written by `scripts/e4_score.py` (`outputs/results/e4/e4-score-summary.json`)
-when available; otherwise falls back to the exact numbers already reported in the committed paper
-text (n=120 seeded subset, `gemini-2.5-flash-lite`, T=0) so the figure stays reproducible without
-requiring the raw judge artifact to be present on every machine. Local, CPU-only: Plotly + kaleido
-for rendering, no GPU/API.
+"""F8 from `docs/obsidian/Paper Figures.md` -- the E4 model-output comparison reported in
+`paper/main.tex`. It follows `scripts.e4_score`: paired rubric rows from the uncleaned-trained and
+curated-trained arms become four ordinal score-distribution panels on the same axis used for E1.
+This is a local, CPU-only reporting step (Plotly + kaleido); it never loads a model or calls an API.
 
 Run:
-    python -m data_curation.analysis.e4_figures
+    python -m data_curation.analysis.e4_figures \
+        --rubric-jsonl outputs/results/e4/e4-rubric-scores.jsonl
 
 Output:
-    outputs/figures/f8_e4_before_after.{html,svg,png}
+    outputs/figures/f8a_e4_rubric.{html,svg,png}
 """
 
 from __future__ import annotations
 
+import argparse
 import json
+from collections import Counter
 from pathlib import Path
-from typing import Any
 
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
-from data_curation.analysis.plotting import CATEGORICAL_PALETTE, apply_house_style, save_figure
+from data_curation.analysis.plotting import apply_house_style, ordinal_palette, save_figure
 
 RESULTS_DIR = Path(__file__).resolve().parents[2] / "outputs" / "results"
-E4_SUMMARY_PATH = RESULTS_DIR / "e4" / "e4-score-summary.json"
+E4_RUBRIC_PATH = RESULTS_DIR / "e4" / "e4-rubric-scores.jsonl"
 
-# Fallback: the exact numbers reported in paper/main.tex (Section: E4 results), pinned so this
-# figure reproduces even when the raw e4-score-summary.json artifact isn't on disk.
-FALLBACK_SUMMARY: dict[str, Any] = {
-    "n_pairs": 120,
-    "pointwise": {
-        "by_dimension": {
-            "faithfulness": {
-                "raw_mean": 3.60, "curated_mean": 4.09,
-                "cliffs_delta_curated_vs_raw": 0.20, "cliffs_ci": [0.07, 0.34],
-            },
-            "informativeness": {
-                "raw_mean": 3.90, "curated_mean": 4.33,
-                "cliffs_delta_curated_vs_raw": 0.19, "cliffs_ci": [0.06, 0.32],
-            },
-        },
-    },
-    "pairwise": {
-        "curated_wins": 74, "raw_wins": 41, "ties": 5,
-        "curated_win_rate_pct": 64.3, "wilson_ci_pct": [55.3, 72.5],
-    },
+DIMENSIONS = ("faithfulness", "single_focus", "informativeness", "cleanliness")
+DIMENSION_LABELS = {
+    "faithfulness": "Faithfulness",
+    "single_focus": "Single-focus",
+    "informativeness": "Informativeness",
+    "cleanliness": "Cleanliness",
 }
-
-# Only the two dimensions with a paired CI that excludes 0 (main.tex): single-focus and
-# cleanliness showed no significant difference and are not plotted with fabricated bar heights.
-PLOTTED_DIMENSIONS = ["faithfulness", "informativeness"]
-DIMENSION_LABELS = {"faithfulness": "Faithfulness", "informativeness": "Informativeness"}
+ARM_KEYS = ("raw_scores", "curated_scores")
+ARM_LABELS = ("A: uncleaned", "B: curated")
 
 
-def load_e4_summary(path: Path = E4_SUMMARY_PATH) -> dict[str, Any]:
-    if path.is_file():
-        return json.loads(path.read_text(encoding="utf-8"))
-    return FALLBACK_SUMMARY
+def load_rubric_rows(path: Path, *, expected_n: int | None = None) -> list[dict]:
+    """Load and validate paired four-dimension rubric scores from `scripts.e4_score`."""
+    rows: list[dict] = []
+    with open(path, encoding="utf-8") as handle:
+        for line_number, line in enumerate(handle, start=1):
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            for arm_key in ARM_KEYS:
+                scores = row.get(arm_key)
+                if not isinstance(scores, dict) or set(scores) != set(DIMENSIONS):
+                    raise ValueError(
+                        f"line {line_number}: {arm_key} must contain all four rubric dimensions"
+                    )
+                if any(
+                    isinstance(score, bool) or not isinstance(score, int) or not 1 <= score <= 5
+                    for score in scores.values()
+                ):
+                    raise ValueError(
+                        f"line {line_number}: scores must be integers from 1 to 5"
+                    )
+            rows.append(row)
+    if expected_n is not None and len(rows) != expected_n:
+        raise ValueError(f"expected {expected_n} rubric rows, found {len(rows)}")
+    return rows
 
 
-def build_f8a_rubric_bars(summary: dict) -> go.Figure:
-    """F8a -- grouped bar of Arm A (uncleaned) vs. Arm B (curated) mean rubric score, for the two
-    dimensions with a paired Cliff's delta CI that excludes 0 (faithfulness, informativeness).
-    Single-focus and cleanliness are not plotted: main.tex reports "no significant paired
-    difference" for both without per-arm means, and this figure only shows numbers already on
-    the page rather than a fabricated bar height.
-    """
-    by_dim = summary["pointwise"]["by_dimension"]
-    labels = [DIMENSION_LABELS[d] for d in PLOTTED_DIMENSIONS]
-    raw_vals = [by_dim[d]["raw_mean"] for d in PLOTTED_DIMENSIONS]
-    cur_vals = [by_dim[d]["curated_mean"] for d in PLOTTED_DIMENSIONS]
+def summarize_rubric_rows(rows: list[dict]) -> dict:
+    """Aggregate score counts and means for each dimension and training arm."""
+    if not rows:
+        raise ValueError("rubric rows are empty")
+    by_dimension: dict[str, dict] = {}
+    for dimension in DIMENSIONS:
+        raw = [row["raw_scores"][dimension] for row in rows]
+        curated = [row["curated_scores"][dimension] for row in rows]
+        raw_counts = Counter(raw)
+        curated_counts = Counter(curated)
+        by_dimension[dimension] = {
+            "raw_counts": [raw_counts[level] for level in range(1, 6)],
+            "curated_counts": [curated_counts[level] for level in range(1, 6)],
+            "raw_mean": sum(raw) / len(raw),
+            "curated_mean": sum(curated) / len(curated),
+        }
+    return {"n_pairs": len(rows), "by_dimension": by_dimension}
 
-    fig = go.Figure()
-    fig.add_trace(go.Bar(x=labels, y=raw_vals, name="Arm A (uncleaned)",
-                          marker_color=CATEGORICAL_PALETTE[3],
-                          text=[f"{v:.2f}" for v in raw_vals], textposition="outside"))
-    fig.add_trace(go.Bar(x=labels, y=cur_vals, name="Arm B (curated)",
-                          marker_color=CATEGORICAL_PALETTE[0],
-                          text=[f"{v:.2f}" for v in cur_vals], textposition="outside"))
-    for i, d in enumerate(PLOTTED_DIMENSIONS):
-        delta = by_dim[d]["cliffs_delta_curated_vs_raw"]
-        lo, hi = by_dim[d]["cliffs_ci"]
-        fig.add_annotation(
-            x=labels[i], y=max(raw_vals[i], cur_vals[i]) + 0.7,
-            text=f"\u03b4={delta:.2f} [{lo:.2f}, {hi:.2f}]",
-            showarrow=False, font=dict(size=12, color="#6b6b6b"),
+
+def build_f8a_rubric_distributions(summary: dict) -> go.Figure:
+    """F8 -- ordinal score distributions for both E4 training arms on all four dimensions."""
+    fig = make_subplots(
+        rows=2,
+        cols=2,
+        subplot_titles=[DIMENSION_LABELS[dimension] for dimension in DIMENSIONS],
+        horizontal_spacing=0.17,
+        vertical_spacing=0.22,
+    )
+    colors = ordinal_palette(5)
+    n_pairs = summary["n_pairs"]
+
+    for index, dimension in enumerate(DIMENSIONS):
+        row = index // 2 + 1
+        col = index % 2 + 1
+        dimension_summary = summary["by_dimension"][dimension]
+        for level, color in zip(range(1, 6), colors):
+            percentages = [
+                100 * dimension_summary[f"{arm}_counts"][level - 1] / n_pairs
+                for arm in ("raw", "curated")
+            ]
+            fig.add_trace(
+                go.Bar(
+                    y=list(ARM_LABELS),
+                    x=percentages,
+                    name=f"Score {level}",
+                    legendgroup=f"score-{level}",
+                    showlegend=index == 0,
+                    orientation="h",
+                    marker_color=color,
+                    text=[f"{value:.0f}%" if value >= 8 else "" for value in percentages],
+                    textposition="inside",
+                    hovertemplate=(
+                        f"{DIMENSION_LABELS[dimension]}<br>"
+                        "%{y}<br>"
+                        f"Score {level}: %{{x:.1f}}%<extra></extra>"
+                    ),
+                ),
+                row=row,
+                col=col,
+            )
+        fig.update_xaxes(range=[0, 100], ticksuffix="%", row=row, col=col)
+        fig.update_yaxes(
+            categoryorder="array",
+            categoryarray=list(reversed(ARM_LABELS)),
+            row=row,
+            col=col,
         )
 
-    fig.update_layout(barmode="group")
-    apply_house_style(
-        fig,
-        "Training on curated targets raises rubric scores (E4)",
-        subtitle=(
-            f"Mean score, shared seeded n={summary['n_pairs']} test subset -- single-focus and"
-            " cleanliness showed no significant paired difference and are omitted"
-        ),
-        yaxis_title="mean rubric score (1-5)",
-        source_note="Source: scripts.e4_score, outputs/results/e4/e4-score-summary.json",
-        width=900,
-        height=520,
-    )
-    fig.update_yaxes(range=[0, 5.8])
-    return fig
-
-
-def build_f8b_pairwise(summary: dict) -> go.Figure:
-    """F8b -- blind pairwise preference between the two trained arms, drawn like F7's win-rate
-    bar so the model-output comparison reads on the same visual scale as the E3 headline
-    comparison.
-    """
-    pw = summary["pairwise"]
-    n = pw["curated_wins"] + pw["raw_wins"] + pw["ties"]
-    row_label = f"E4 (n={n})"
-    outcomes = [
-        ("curated_wins", "Curated (Arm B) wins", CATEGORICAL_PALETTE[0]),
-        ("ties", "Tie", "#cccccc"),
-        ("raw_wins", "Uncleaned (Arm A) wins", CATEGORICAL_PALETTE[3]),
-    ]
-
-    fig = go.Figure()
-    for key, label, color in outcomes:
-        pct = 100.0 * pw[key] / n
-        fig.add_trace(go.Bar(
-            y=[row_label], x=[pct], name=label, orientation="h", marker_color=color,
-            text=[f"{pct:.1f}%"], textposition="inside",
-        ))
-
-    lo, hi = pw["wilson_ci_pct"]
     fig.update_layout(barmode="stack")
     apply_house_style(
         fig,
-        "Blind pairwise preference: curated-trained vs. uncleaned-trained outputs (E4)",
-        subtitle=f"Curated win rate {pw['curated_win_rate_pct']:.1f}%, Wilson 95% CI [{lo:.1f}%, {hi:.1f}%] excludes 50%",
-        xaxis_title="share of judgments",
-        source_note="Source: scripts.e4_score, outputs/results/e4/e4-score-summary.json",
-        width=1000,
-        height=300,
+        "E4 rubric distributions by training arm",
+        subtitle=(
+            f"Share at each score from 1 (worst) to 5 (best), "
+            f"shared seeded n={n_pairs} test subset"
+        ),
+        width=1200,
+        height=620,
     )
-    fig.update_xaxes(range=[0, 100], ticksuffix="%")
-    fig.update_layout(margin=dict(l=260, b=90))
+    fig.update_layout(
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.14,
+            x=0.5,
+            xanchor="center",
+            traceorder="normal",
+        ),
+        margin=dict(l=170, r=50, t=105, b=110),
+    )
     return fig
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--rubric-jsonl",
+        type=Path,
+        default=E4_RUBRIC_PATH,
+        help="Paired E4 rubric scores written by scripts.e4_score",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
-    summary = load_e4_summary()
-    f8a = build_f8a_rubric_bars(summary)
-    print("F8a saved:", save_figure(f8a, "f8a_e4_rubric"))
-    f8b = build_f8b_pairwise(summary)
-    print("F8b saved:", save_figure(f8b, "f8b_e4_pairwise"))
+    args = parse_args()
+    rows = load_rubric_rows(args.rubric_jsonl, expected_n=120)
+    summary = summarize_rubric_rows(rows)
+    figure = build_f8a_rubric_distributions(summary)
+    print("F8 saved:", save_figure(figure, "f8a_e4_rubric"))
 
 
 if __name__ == "__main__":

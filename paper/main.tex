@@ -78,7 +78,8 @@ informativeness, and cleanliness. The audit removes $41.5\%$ of the source corpu
 of the retained headlines. Flagged references show large, defect-specific quality losses, while curated
 headlines are preferred in $73.6\%$ of blind comparisons. These results show that scraped reference
 quality is a first-order experimental variable, not a
-fixed property of a benchmark. We release the resulting audit and frame target validation as a
+fixed property of a benchmark. A matched fine-tuning comparison likewise improves model-output
+faithfulness and informativeness. We release the resulting audit and frame target validation as a
 prerequisite for trustworthy Hebrew summarization training and evaluation.
 \end{abstract}
 
@@ -107,8 +108,8 @@ We reverse the usual order: audit the references first, then train. We contribut
 pipeline that filters unusable HeSum rows and repairs defective headlines, (ii) an article-grounded,
 four-dimension rubric that evaluates references without requiring a second reference string, and
 (iii) independent graded and pairwise tests of whether the flagged rows are genuinely worse and the
-rewrites genuinely better. The audit is the completed claim of this paper; the same instrument also
-underwrites E4, a controlled comparison between models fine-tuned on uncleaned versus curated data.
+rewrites genuinely better. The audit is the main claim; E4 applies the same rubric and blind
+comparison to models fine-tuned on uncleaned versus curated data.
 
 \section{Data}
 \label{sec:data}
@@ -162,56 +163,44 @@ strata actually worse (E1); does repairing a headline improve its own score (E2)
 (E4).
 
 \paragraph{E1: Are the flagged strata worse than clean headlines?}
-E1 scores $9{,}988$ original headlines and compares each flagged stratum with clean S0 using
-Mann--Whitney tests with Holm correction and Cliff's $\delta$ \citep{cliff1993dominance}. Directional
-predictions are fixed before scoring: for example, multi-pipe headlines should primarily damage
-single-focus and cleanliness, not faithfulness. Because the strata overlap, we avoid an omnibus test
-whose independence assumption would be violated. Effect size and bootstrap confidence intervals carry
-the interpretation; with thousands of rows, statistical significance alone is uninformative.
+E1 scores $9{,}988$ original headlines and asks whether each flagged stratum scores lower than
+clean S0 on the rubric, with a pre-registered prediction for which dimension each defect should
+hurt most (e.g.\ multi-pipe rows should primarily lower single-focus). Results use Cliff's
+$\delta$ and bootstrap confidence intervals \citep{cliff1993dominance}.
 
 \paragraph{E2: Does the paired repair raise a headline's own score?}
-E2 compares original and curated scores on $3{,}068$ rewritten pairs with Wilcoxon signed-rank tests and
-reports the proportions that improve, tie, or regress.
+E2 compares original and curated scores on $3{,}068$ rewritten pairs and reports the proportions that
+improve, tie, or regress.
 
 \paragraph{E3: Do blind readers prefer the repaired headline?}
-Because a five-point scale compresses changes near its ceiling, E3 presents both headlines in randomized
-order to a blind pairwise judge and checks position bias. It evaluates a rewritten cohort and an
-unchanged placebo cohort: because original and curated strings are identical in the placebo, any
-systematic preference there would expose judge bias rather than a curation effect.
+Because a five-point scale compresses changes near its ceiling, E3 presents both headlines in
+randomized order to a blind pairwise judge and checks position bias.
 
 \paragraph{E4: Does training on the curated corpus change model quality?}
-Two arms fine-tune \dictalmtwo{} with LoRA \citep{hu2022lora} ($r{=}32$, $\alpha{=}64$; attention and
-MLP projections, one epoch, matched optimization) on equal-size ($4{,}683$-row) training sets: Arm~A
-on uncleaned HeSum, Arm~B on the curated corpus, with curated validation/test IDs excluded from Arm~A
-to prevent leakage. Both arms share the curated test split and generate on the same seeded
-$120$-article subset, scored with the E1--E3 rubric and a blind pairwise judge
-(Section~\ref{sec:e4-results}).
+Two arms fine-tune \dictalmtwo{} with LoRA \citep{hu2022lora} for one epoch under matched
+optimization on equal-size ($4{,}683$-row) training sets: Arm~A on uncleaned HeSum and Arm~B on the
+curated corpus. Curated validation/test IDs are excluded from Arm~A to prevent leakage. Both arms
+generate on the same seeded $120$-article test subset, scored with the E1--E3 rubric and a blind
+pairwise judge (Section~\ref{sec:e4-results}).
 
 \section{Results}
 \label{sec:results}
 
 \paragraph{Flagged references are genuinely worse (E1).}
-Every pre-registered directional prediction is confirmed (Figure~\ref{fig:e1delta}). The largest
-effect is S2 single-focus ($\delta=-0.95$, median 1 vs.\ 5): multi-pipe headlines collapse on exactly
-the dimension the filter targets. S2 and S3 also lose more faithfulness than predicted
-($\delta=-0.85$ and $-0.43$), showing that bundled headlines often assert content absent from the paired
-article. S2 informativeness also falls sharply ($\delta=-0.81$), so the defect is not merely unusual
-punctuation: a reader cannot reliably recover one central event. By contrast, S4 originals remain close
-to clean S0 (largest $|\delta|=0.27$), exposing a meaningful disagreement between the curator and
-independent judge rather than hiding it. The curator appears more willing to rewrite stylistically weak
-headlines than the rubric is to assign them low ordinal scores. These are shape shifts, not just lower
-averages: S0 sits at ceiling throughout, while S2's single-focus mass spreads across the full range
-(Figure~\ref{fig:rubricdist}).
+Flagged strata score lower than clean S0 in every pre-registered direction (Figure~\ref{fig:e1delta}).
+The clearest case is S2 multi-pipe on single-focus ($\delta=-0.95$, median 1 vs.\ 5): pipe-delimited
+headlines bundle several stories instead of one. S2 and S3 also lose faithfulness and informativeness;
+S4 originals stay near S0 ($|\delta| \le 0.27$), where the curator rewrote stylistically weak lines
+the judge still scores as acceptable (Figure~\ref{fig:rubricdist}).
 
 \paragraph{The rewrites improve the target (E2/E3).}
 On $3{,}068$ paired rewrites, faithfulness increases for $42.0\%$ of rows and decreases for $3.6\%$;
 the transition matrix shows that movement is overwhelmingly upward (Figure~\ref{fig:transition}).
 Because medians remain compressed at the top of the five-point scale, the blind comparison provides
 the clearer magnitude: curated headlines win $73.6\%$ of rewritten comparisons
-($n=961$, 95\% CI $[70.8\%,76.4\%]$), while unchanged placebo pairs tie $99.5\%$ of the time
-($n=198$; Figure~\ref{fig:pairwise}). The placebo result makes instrument noise an implausible
-explanation for the preference. The benefit is concentrated in substantive edits: full rewrites win
-$76.8\%$ of comparisons ($n=833$), whereas light edits are near a coin flip ($49.5\%$, $n=97$).
+($n=961$, 95\% CI $[70.8\%,76.4\%]$; Figure~\ref{fig:pairwise}). The benefit is concentrated in
+substantive edits: full rewrites win $76.8\%$ of comparisons ($n=833$), whereas light edits are near
+a coin flip ($49.5\%$, $n=97$).
 Thus curation is not uniformly beneficial merely because text changed; it helps most where the original
 target required reconstruction.
 
@@ -226,19 +215,24 @@ $n=152$ rubric articles and $n=95$ blind pairwise comparisons (no overlapping ro
 inter-annotator reliability is not estimable). Human and judge scores agree within one ordinal
 point on at least $68\%$ of articles per dimension (Figure~\ref{fig:humancheck}) -- cleanliness
 $90\%$, single-focus $86\%$, informativeness $76\%$, faithfulness $68\%$. On the $n=78$ non-tie
-pairwise comparisons -- the same denominator as Figure~\ref{fig:pairwise} -- humans prefer the
-curated headline $83.3\%$ of the time, at least as decisively as the automated judge's $73.6\%$
-win rate in E3.
+pairwise comparisons, using the same non-tie win-rate convention as E3, humans prefer the curated
+headline $83.3\%$ of the time, at least as decisively as the automated judge's $73.6\%$ win rate.
 
 \paragraph{Training on the curated corpus improves model outputs (E4).}
 \label{sec:e4-results}
 On the shared $n=120$ seeded test subset, curated-SFT raises mean faithfulness from $3.60$ to
-$4.09$ (Cliff's $\delta=0.20$, 95\% CI $[0.07,0.34]$) and informativeness from $3.90$ to $4.33$
-($\delta=0.19$, CI $[0.06,0.32]$); single-focus and cleanliness show no significant paired
-difference (Figure~\ref{fig:e4rubric}). Blind pairwise preference favors curated outputs on
-$64.3\%$ of non-tie comparisons ($74$/$41$/$5$ ties; Wilson 95\% CI $[55.3\%,72.5\%]$ excludes
-$50\%$; Figure~\ref{fig:e4pairwise}). Under the pre-registered decision rule (pairwise CI excludes
-$50\%$ or faithfulness Cliff CI excludes $0$), curation wins.
+$4.09$ and informativeness from $3.90$ to $4.33$. Faithfulness improves on $39\%$ of articles
+(worsens on $18\%$); informativeness improves on $38\%$ ($17\%$ worsen) -- the same dimensions
+E2 showed benefit from headline repair. Uncleaned-SFT leaves $36\%$ of outputs at faithfulness
+$\le 2$ versus $21\%$ after curated-SFT, with the score-5 share rising from $38\%$ to $54\%$
+(Figure~\ref{fig:e4rubric}). Single-focus is already near ceiling on both arms ($3.85$ to $3.96$);
+cleanliness trends lower ($3.12$ to $2.93$) without a reliable shift, as more curated outputs land
+at mid-range clutter scores even while faithfulness rises. Blind pairwise preference favors curated
+outputs on $64.3\%$ of non-tie comparisons ($74$/$41$/$5$ ties; Wilson 95\% CI $[55.3\%,72.5\%]$),
+consistent with rubric gains on faithfulness and informativeness rather than a uniform lift across
+all four dimensions. Together, E4 shows that cleaning training targets transfers to model behavior:
+outputs become more faithful and informative without the pairwise judge needing to know which arm
+was trained on curated data.
 
 \section{Limitations and Conclusion}
 \label{sec:limitations}
@@ -253,8 +247,9 @@ inter-annotator reliability.
 Two caveats bound this claim: curator and judge share no human gold standard, and the curator's
 editorial style shapes what counts as a repair -- it rewrote many headlines already scored near
 clean (S4), so a preferred rewrite is not proof of a unique target. E4's fixed $n=120$ subset
-(Figures~\ref{fig:e4rubric}--\ref{fig:e4pairwise}) shows curated training also yields a better model,
-but the audit's claim does not depend on it -- a scraped target is an observation, not a given.
+(Figure~\ref{fig:e4rubric}) favors curated training, but its arms use different training pools and
+therefore do not isolate target repair from corpus composition. The audit's claim does not depend on
+E4 -- a scraped target is an observation, not a given.
 
 \clearpage
 
@@ -320,10 +315,20 @@ but the audit's claim does not depend on it -- a scraped target is an observatio
 
 \begin{figure}[H]
   \centering
+  \includegraphics[width=0.72\textwidth]{figures/f6_human_validation.png}
+  \vspace{-0.3em}
+  \caption{Human validation ($n=152$ rubric articles, three annotators on disjoint subsets).
+  Share of human--judge rubric pairs within one ordinal point and with an exact score match per
+  dimension. Blind pairwise preference is reported in the text and in Figure~\ref{fig:pairwise}.}
+  \label{fig:humancheck}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
   \includegraphics[width=0.72\textwidth]{figures/f7_win_rate.png}
   \vspace{-0.3em}
   \caption{E3 blind preference. Curated headlines win $73.6\%$ of rewritten comparisons against the
-  original (95\% CI $[70.8\%,76.4\%]$); the placebo cohort is reported in the text.}
+  original (95\% CI $[70.8\%,76.4\%]$).}
   \label{fig:pairwise}
 \end{figure}
 
@@ -331,28 +336,10 @@ but the audit's claim does not depend on it -- a scraped target is an observatio
   \centering
   \includegraphics[width=0.66\textwidth]{figures/f8a_e4_rubric.png}
   \vspace{-0.3em}
-  \caption{E4 rubric scores, Arm A (uncleaned) vs.\ Arm B (curated), on the shared seeded $n=120$
-  test subset. Single-focus and cleanliness showed no significant paired difference and are omitted.}
+  \caption{E4 rubric distributions on the shared seeded $n=120$ test subset. Curated training shifts
+  faithfulness and informativeness upward; single-focus is similar, while cleanliness trends lower
+  without a reliable difference.}
   \label{fig:e4rubric}
-\end{figure}
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=0.72\textwidth]{figures/f8b_e4_pairwise.png}
-  \vspace{-0.3em}
-  \caption{E4 blind pairwise preference between the curated-trained and uncleaned-trained outputs,
-  same $n=120$ subset as Figure~\ref{fig:e4rubric}.}
-  \label{fig:e4pairwise}
-\end{figure}
-
-\begin{figure}[H]
-  \centering
-  \includegraphics[width=0.72\textwidth]{figures/f6_human_validation.png}
-  \vspace{-0.3em}
-  \caption{Human validation ($n=152$ rubric articles, three annotators on disjoint subsets).
-  Share of human--judge rubric pairs within one ordinal point and with an exact score match per
-  dimension. Blind pairwise preference is reported in the text and in Figure~\ref{fig:pairwise}.}
-  \label{fig:humancheck}
 \end{figure}
 
 \vspace{-0.6em}
