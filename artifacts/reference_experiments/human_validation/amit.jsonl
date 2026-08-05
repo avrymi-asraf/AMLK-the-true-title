@@ -1,0 +1,122 @@
+{"hesum_id": "38", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 3, "single_focus": 5, "informativeness": 3, "cleanliness": 5}, "submitted_at": "2026-07-28T16:41:54+00:00"}
+{"hesum_id": "117", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-28T16:44:01+00:00"}
+{"hesum_id": "833", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-28T16:48:34+00:00"}
+{"hesum_id": "848", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 5, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-28T16:51:42+00:00"}
+{"hesum_id": "856", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 5, "informativeness": 4, "cleanliness": 5}, "submitted_at": "2026-07-28T16:52:09+00:00"}
+{"hesum_id": "1172", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 5, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-28T16:53:08+00:00"}
+{"hesum_id": "1178", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 4, "informativeness": 4, "cleanliness": 4}, "submitted_at": "2026-07-28T16:53:49+00:00"}
+{"hesum_id": "1767", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 2, "single_focus": 1, "informativeness": 1, "cleanliness": 4}, "submitted_at": "2026-07-28T16:54:27+00:00"}
+{"hesum_id": "1772", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 3, "single_focus": 5, "informativeness": 3, "cleanliness": 4}, "submitted_at": "2026-07-28T16:55:23+00:00"}
+{"hesum_id": "1883", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 5, "informativeness": 4, "cleanliness": 5}, "submitted_at": "2026-07-28T16:56:21+00:00"}
+{"hesum_id": "2579", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 5, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-28T16:59:41+00:00"}
+{"hesum_id": "2800", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 5, "informativeness": 5, "cleanliness": 4}, "submitted_at": "2026-07-28T16:59:55+00:00"}
+{"hesum_id": "2800", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-28T17:00:06+00:00"}
+{"hesum_id": "2805", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 1, "single_focus": 3, "informativeness": 2, "cleanliness": 5}, "submitted_at": "2026-07-28T19:05:36+00:00"}
+{"hesum_id": "2805", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-28T19:06:17+00:00"}
+{"hesum_id": "4330", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-28T19:09:02+00:00"}
+{"hesum_id": "4403", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 3, "single_focus": 5, "informativeness": 2, "cleanliness": 5}, "submitted_at": "2026-07-28T19:09:59+00:00"}
+{"hesum_id": "4403", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-28T19:10:06+00:00"}
+{"hesum_id": "4859", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 5, "informativeness": 3, "cleanliness": 4}, "submitted_at": "2026-07-28T19:11:09+00:00"}
+{"hesum_id": "4859", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-28T19:11:29+00:00"}
+{"hesum_id": "5061", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 3, "informativeness": 4, "cleanliness": 4}, "submitted_at": "2026-07-28T19:12:40+00:00"}
+{"hesum_id": "5793", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 1, "informativeness": 2, "cleanliness": 4}, "submitted_at": "2026-07-28T19:13:50+00:00"}
+{"hesum_id": "6158", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 3, "single_focus": 3, "informativeness": 3, "cleanliness": 4}, "submitted_at": "2026-07-28T19:14:43+00:00"}
+{"hesum_id": "6383", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 4, "informativeness": 4, "cleanliness": 5}, "submitted_at": "2026-07-28T19:16:20+00:00"}
+{"hesum_id": "6767", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 3, "informativeness": 4, "cleanliness": 4}, "submitted_at": "2026-07-28T19:17:14+00:00"}
+{"hesum_id": "7034", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 5, "informativeness": 4, "cleanliness": 5}, "submitted_at": "2026-07-28T19:18:25+00:00"}
+{"hesum_id": "7683", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 5, "informativeness": 3, "cleanliness": 5}, "submitted_at": "2026-07-28T19:18:45+00:00"}
+{"hesum_id": "7683", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-28T19:18:50+00:00"}
+{"hesum_id": "7686", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 2, "informativeness": 3, "cleanliness": 4}, "submitted_at": "2026-07-28T19:19:44+00:00"}
+{"hesum_id": "7734", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-28T19:20:29+00:00"}
+{"hesum_id": "7939", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 5, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-28T19:21:23+00:00"}
+{"hesum_id": "8440", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 5, "informativeness": 4, "cleanliness": 5}, "submitted_at": "2026-07-28T19:23:08+00:00"}
+{"hesum_id": "8440", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-28T19:24:55+00:00"}
+{"hesum_id": "9060", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 3, "single_focus": 4, "informativeness": 3, "cleanliness": 5}, "submitted_at": "2026-07-28T19:26:16+00:00"}
+{"hesum_id": "9219", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 5, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-28T19:27:07+00:00"}
+{"hesum_id": "9219", "annotator_id": "amit", "task": "pairwise", "winner": "tie", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-28T19:27:18+00:00"}
+{"hesum_id": "9386", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 5, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-28T19:28:27+00:00"}
+{"hesum_id": "9497", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 5, "informativeness": 5, "cleanliness": 4}, "submitted_at": "2026-07-28T19:29:01+00:00"}
+{"hesum_id": "9497", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-28T19:29:10+00:00"}
+{"hesum_id": "9517", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 5, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-28T19:30:04+00:00"}
+{"hesum_id": "9894", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-28T19:31:09+00:00"}
+{"hesum_id": "619", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 2, "single_focus": 1, "informativeness": 2, "cleanliness": 4}, "submitted_at": "2026-07-29T15:48:23+00:00"}
+{"hesum_id": "117", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 5, "informativeness": 4, "cleanliness": 4}, "submitted_at": "2026-07-29T15:48:28+00:00"}
+{"hesum_id": "136", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 5, "single_focus": 5, "informativeness": 5, "cleanliness": 5}, "submitted_at": "2026-07-29T15:48:31+00:00"}
+{"hesum_id": "174", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 2, "informativeness": 1, "cleanliness": 4}, "submitted_at": "2026-07-29T15:48:35+00:00"}
+{"hesum_id": "390", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 3, "single_focus": 1, "informativeness": 2, "cleanliness": 4}, "submitted_at": "2026-07-29T15:48:38+00:00"}
+{"hesum_id": "833", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 3, "single_focus": 5, "informativeness": 3, "cleanliness": 5}, "submitted_at": "2026-07-29T15:48:44+00:00"}
+{"hesum_id": "1063", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 3, "single_focus": 2, "informativeness": 2, "cleanliness": 5}, "submitted_at": "2026-07-29T15:49:01+00:00"}
+{"hesum_id": "1794", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 3, "single_focus": 1, "informativeness": 2, "cleanliness": 4}, "submitted_at": "2026-07-29T15:49:08+00:00"}
+{"hesum_id": "1967", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 3, "single_focus": 1, "informativeness": 3, "cleanliness": 5}, "submitted_at": "2026-07-29T15:49:14+00:00"}
+{"hesum_id": "3011", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 3, "single_focus": 1, "informativeness": 2, "cleanliness": 4}, "submitted_at": "2026-07-29T15:49:23+00:00"}
+{"hesum_id": "3499", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 3, "single_focus": 2, "informativeness": 2, "cleanliness": 4}, "submitted_at": "2026-07-29T15:49:28+00:00"}
+{"hesum_id": "4330", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 3, "single_focus": 4, "informativeness": 3, "cleanliness": 4}, "submitted_at": "2026-07-29T15:49:31+00:00"}
+{"hesum_id": "5479", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 3, "single_focus": 2, "informativeness": 3, "cleanliness": 4}, "submitted_at": "2026-07-29T15:49:38+00:00"}
+{"hesum_id": "6756", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 3, "single_focus": 5, "informativeness": 3, "cleanliness": 5}, "submitted_at": "2026-07-29T15:49:51+00:00"}
+{"hesum_id": "6859", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 3, "informativeness": 3, "cleanliness": 4}, "submitted_at": "2026-07-29T15:49:55+00:00"}
+{"hesum_id": "7734", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 1, "informativeness": 3, "cleanliness": 4}, "submitted_at": "2026-07-29T15:50:04+00:00"}
+{"hesum_id": "7826", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 3, "informativeness": 3, "cleanliness": 4}, "submitted_at": "2026-07-29T15:50:08+00:00"}
+{"hesum_id": "7967", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 2, "informativeness": 3, "cleanliness": 5}, "submitted_at": "2026-07-29T15:50:13+00:00"}
+{"hesum_id": "8138", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 3, "single_focus": 1, "informativeness": 2, "cleanliness": 4}, "submitted_at": "2026-07-29T15:50:16+00:00"}
+{"hesum_id": "8348", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 3, "single_focus": 1, "informativeness": 3, "cleanliness": 4}, "submitted_at": "2026-07-29T15:50:20+00:00"}
+{"hesum_id": "8919", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 3, "single_focus": 1, "informativeness": 3, "cleanliness": 4}, "submitted_at": "2026-07-29T15:50:25+00:00"}
+{"hesum_id": "9540", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 1, "informativeness": 2, "cleanliness": 4}, "submitted_at": "2026-07-29T15:50:35+00:00"}
+{"hesum_id": "9632", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 1, "informativeness": 3, "cleanliness": 4}, "submitted_at": "2026-07-29T15:50:38+00:00"}
+{"hesum_id": "9894", "annotator_id": "amit", "task": "rubric", "scores": {"faithfulness": 4, "single_focus": 5, "informativeness": 3, "cleanliness": 5}, "submitted_at": "2026-07-29T15:50:43+00:00"}
+{"hesum_id": "765", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T15:53:44+00:00"}
+{"hesum_id": "1141", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T15:53:55+00:00"}
+{"hesum_id": "2092", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T15:54:05+00:00"}
+{"hesum_id": "2247", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T15:54:43+00:00"}
+{"hesum_id": "2282", "annotator_id": "amit", "task": "pairwise", "winner": "tie", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T15:54:56+00:00"}
+{"hesum_id": "2549", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T15:55:15+00:00"}
+{"hesum_id": "2672", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T15:55:29+00:00"}
+{"hesum_id": "3370", "annotator_id": "amit", "task": "pairwise", "winner": "tie", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T15:55:49+00:00"}
+{"hesum_id": "3701", "annotator_id": "amit", "task": "pairwise", "winner": "tie", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T15:56:01+00:00"}
+{"hesum_id": "3805", "annotator_id": "amit", "task": "pairwise", "winner": "tie", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T15:56:18+00:00"}
+{"hesum_id": "6140", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T15:56:25+00:00"}
+{"hesum_id": "6225", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T15:56:44+00:00"}
+{"hesum_id": "6741", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T15:56:56+00:00"}
+{"hesum_id": "7640", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T15:57:10+00:00"}
+{"hesum_id": "7711", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T15:57:23+00:00"}
+{"hesum_id": "7824", "annotator_id": "amit", "task": "pairwise", "winner": "tie", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T15:57:41+00:00"}
+{"hesum_id": "7882", "annotator_id": "amit", "task": "pairwise", "winner": "tie", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T15:57:56+00:00"}
+{"hesum_id": "7917", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T15:58:13+00:00"}
+{"hesum_id": "8193", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T15:58:32+00:00"}
+{"hesum_id": "9725", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T15:59:52+00:00"}
+{"hesum_id": "158", "annotator_id": "amit", "task": "pairwise", "winner": "tie", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T16:02:27+00:00"}
+{"hesum_id": "423", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T16:02:31+00:00"}
+{"hesum_id": "692", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T16:02:55+00:00"}
+{"hesum_id": "1029", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:03:07+00:00"}
+{"hesum_id": "1506", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T16:03:21+00:00"}
+{"hesum_id": "2473", "annotator_id": "amit", "task": "pairwise", "winner": "tie", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:03:26+00:00"}
+{"hesum_id": "2907", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:03:37+00:00"}
+{"hesum_id": "3812", "annotator_id": "amit", "task": "pairwise", "winner": "tie", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:04:04+00:00"}
+{"hesum_id": "4285", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T16:04:18+00:00"}
+{"hesum_id": "4306", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:04:26+00:00"}
+{"hesum_id": "4443", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T16:04:35+00:00"}
+{"hesum_id": "4593", "annotator_id": "amit", "task": "pairwise", "winner": "tie", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:04:50+00:00"}
+{"hesum_id": "4740", "annotator_id": "amit", "task": "pairwise", "winner": "tie", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:05:00+00:00"}
+{"hesum_id": "5181", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:05:26+00:00"}
+{"hesum_id": "5287", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T16:05:36+00:00"}
+{"hesum_id": "6207", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:05:58+00:00"}
+{"hesum_id": "7316", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:06:25+00:00"}
+{"hesum_id": "7402", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:06:39+00:00"}
+{"hesum_id": "8110", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T16:06:49+00:00"}
+{"hesum_id": "8169", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T16:07:29+00:00"}
+{"hesum_id": "867", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:11:24+00:00"}
+{"hesum_id": "1308", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:11:43+00:00"}
+{"hesum_id": "1823", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:12:08+00:00"}
+{"hesum_id": "2133", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T16:12:21+00:00"}
+{"hesum_id": "3199", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:13:11+00:00"}
+{"hesum_id": "3286", "annotator_id": "amit", "task": "pairwise", "winner": "tie", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:13:24+00:00"}
+{"hesum_id": "4417", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:13:35+00:00"}
+{"hesum_id": "5020", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T16:14:11+00:00"}
+{"hesum_id": "5645", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:14:50+00:00"}
+{"hesum_id": "6022", "annotator_id": "amit", "task": "pairwise", "winner": "tie", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:15:05+00:00"}
+{"hesum_id": "8036", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T16:15:17+00:00"}
+{"hesum_id": "8051", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T16:15:30+00:00"}
+{"hesum_id": "8585", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:15:46+00:00"}
+{"hesum_id": "9045", "annotator_id": "amit", "task": "pairwise", "winner": "tie", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:15:55+00:00"}
+{"hesum_id": "9164", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:16:07+00:00"}
+{"hesum_id": "9503", "annotator_id": "amit", "task": "pairwise", "winner": "a", "slot_map": {"a": "curated", "b": "original"}, "submitted_at": "2026-07-29T16:16:23+00:00"}
+{"hesum_id": "9670", "annotator_id": "amit", "task": "pairwise", "winner": "b", "slot_map": {"a": "original", "b": "curated"}, "submitted_at": "2026-07-29T16:16:32+00:00"}

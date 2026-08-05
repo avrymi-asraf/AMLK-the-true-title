@@ -1,0 +1,66 @@
+{
+  "annotators": [
+    "amit",
+    "avreymi",
+    "ofek"
+  ],
+  "completion": {
+    "split_mode": "disjoint",
+    "expected_tasks": 247,
+    "submitted_tasks": 247,
+    "missing_tasks": 0,
+    "per_annotator": {
+      "amit": {
+        "expected_tasks": 122,
+        "submitted_tasks": 122,
+        "missing_tasks": 0,
+        "complete": true
+      },
+      "avreymi": {
+        "expected_tasks": 65,
+        "submitted_tasks": 65,
+        "missing_tasks": 0,
+        "complete": true
+      },
+      "ofek": {
+        "expected_tasks": 60,
+        "submitted_tasks": 60,
+        "missing_tasks": 0,
+        "complete": true
+      }
+    },
+    "annotators": {
+      "amit": 122,
+      "avreymi": 65,
+      "ofek": 60
+    },
+    "complete": true
+  },
+  "rubric": {
+    "annotator_ids": [
+      "amit",
+      "avreymi",
+      "ofek"
+    ],
+    "split_mode": "disjoint",
+    "n_annotators": 3,
+    "n_pooled_articles": 152,
+    "judge_comparison_available": false,
+    "judge_note": "The frozen E1 rubric scores are not currently available, so judge-human agreement was not computed.",
+    "note": "Disjoint split — each annotator scored a unique subset; human–human κ not computed (no shared rows)."
+  },
+  "pairwise": {
+    "judge_comparison_available": false,
+    "note": "The frozen E3 pairwise judgments are not currently available, so judge-human pairwise agreement was not computed."
+  },
+  "pairwise_rate_pooled": {
+    "n": 95,
+    "curated": 65,
+    "original": 13,
+    "tie": 17,
+    "curated_pct": 68.4,
+    "tie_pct": 17.9,
+    "non_tie_curated_pct": 83.3,
+    "n_non_tie": 78
+  }
+}
