@@ -1,0 +1,6 @@
+stratum,criterion,n
+S0,usable source; original headline kept,2785
+S2,headline contains at least two pipe separators,2412
+S3,multiple independent items,569
+S4,headline rewritten during curation,3069
+S5,other unusable-source labels,63

@@ -42,7 +42,7 @@ python -m pipeline.reproduce_results
 
 This command detects the frozen artifacts currently available and runs every supported deterministic analysis. It never calls an API, downloads data or model checkpoints, runs inference, or trains a model. Analyses whose frozen inputs are not currently available are skipped neutrally, while malformed present artifacts and real analysis errors still cause a nonzero exit.
 
-With the artifacts currently included, the command performs a partial reproduction: it regenerates the data-curation and human-annotation summaries together with the E4 rubric, blind-pairwise, and combined summaries and the E4 figure. E4 rubric and blind-pairwise results are reproducible from the distributed frozen artifacts; analyses that require unavailable row labels, pilot outputs, or E1–E3 artifacts continue to be skipped. The human-validation JSON summarizes only the available human annotations; it does not report human–judge agreement.
+With the artifacts currently included, the command performs a partial reproduction: it regenerates the data-curation summary, curation funnel, curation-strata table, human-annotation summary, E4 rubric, blind-pairwise, and combined summaries, and the E4 figure. The curation funnel and strata table are reproducible from the distributed row ledger, and the E4 rubric and blind-pairwise results are reproducible from the distributed frozen artifacts. Analyses that require unavailable pilot or E1–E3 artifacts continue to be skipped. The human-validation JSON summarizes only the available human annotations; it does not report human–judge agreement.
 
 Generated files go only to:
 
@@ -119,6 +119,7 @@ Included now:
 - source-usability judgments: `artifacts/data_curation/source_filter_results.json`
 - headline curation/repair decisions: `artifacts/data_curation/headline_target_curation_results.json`
 - curated HeSum dataset: `artifacts/data_curation/final_clean_hesum.json`
+- unified deterministic row ledger: `artifacts/data_curation/row_labels.json`
 - frozen human-validation worklist and three completed annotation files under `artifacts/reference_experiments/human_validation/`
 - uncleaned-arm E4 predictions: `artifacts/training_experiment/predictions_uncleaned.jsonl`
 - curated-arm E4 predictions: `artifacts/training_experiment/predictions_curated.jsonl`
@@ -128,7 +129,6 @@ Included now:
 
 Documented canonical destinations for frozen files that are not distributed in this repository:
 
-- `artifacts/data_curation/row_labels.json`
 - `artifacts/reference_experiments/rubric_pilot.json`
 - `artifacts/reference_experiments/e1_rubric_scores.jsonl`
 - `artifacts/reference_experiments/e2_repair_summary.json`
