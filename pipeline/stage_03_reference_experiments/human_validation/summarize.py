@@ -364,11 +364,6 @@ def build_summary(
         rubric_block["judge_human"] = judge_human
         rubric_block["judge_human_pooled"] = judge_human_kappa(judge_scores, pooled_human)
         rubric_block["judge_human_pooled_detail"] = judge_human_closeness(judge_scores, pooled_human)
-    else:
-        rubric_block["judge_note"] = (
-            "The frozen E1 rubric scores are not currently available, so judge-human "
-            "agreement was not computed."
-        )
 
     if split_mode:
         rubric_block["note"] = (
@@ -400,11 +395,6 @@ def build_summary(
         for aid in annotator_ids:
             summary["pairwise"][aid] = pairwise_agreement(by_annotator[aid], judge_pairwise)
         summary["pairwise"]["pooled"] = pairwise_agreement(records, judge_pairwise)
-    else:
-        summary["pairwise"]["note"] = (
-            "The frozen E3 pairwise judgments are not currently available, so "
-            "judge-human pairwise agreement was not computed."
-        )
     summary["pairwise_rate_pooled"] = pairwise_curated_rate(records)
 
     return summary

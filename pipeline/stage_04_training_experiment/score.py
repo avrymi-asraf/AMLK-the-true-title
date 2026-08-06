@@ -1,7 +1,7 @@
 """Score or summarize the final E4 uncleaned-versus-curated comparison.
 
 The CLI performs the expensive Gemini rubric and blind pairwise calls. The
-``summarize_frozen`` function is API-free and is what ``reproduce_results`` uses.
+``summarize_frozen`` function provides an API-free summary path for saved scoring artifacts.
 """
 
 from __future__ import annotations

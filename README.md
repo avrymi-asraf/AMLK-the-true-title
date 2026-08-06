@@ -1,8 +1,14 @@
 # Auditing HeSum: Reference Quality Defects in a Hebrew News Summarization Corpus
 
-This repository contains the paper-aligned research pipeline and frozen evidence for auditing and curating the HeSum Hebrew news summarization corpus. It separates expensive or non-deterministic research artifacts from deterministic figures, tables, and summaries.
+This repository contains the final research code and selected frozen artifacts for auditing and curating the HeSum Hebrew news summarization corpus.
 
 The submitted paper is available at [`Auditing_HeSum.pdf`](Auditing_HeSum.pdf).
+
+This `main` branch is the cleaned final version of the project. The complete research and development history is preserved on `archive/research-complete`.
+
+### Dataset redistribution note
+
+`artifacts/data_curation/final_clean_hesum.json` is a curated derivative of the publicly hosted [`biunlp/HeSum`](https://huggingface.co/datasets/biunlp/HeSum) dataset and is included to support academic review and reproducibility of this project. The official HeSum dataset card does not currently specify an explicit dataset license. This repository does not claim ownership of, relicense, or grant additional rights to the underlying article text; users intending to redistribute or reuse that text should consult the official HeSum dataset page and the applicable original-source terms.
 
 ## Repository structure
 
@@ -14,12 +20,11 @@ pipeline/
   stage_03_reference_experiments/      E1, E2, E3, and human-validation analyses
   stage_04_training_experiment/        matched E4 LoRA preparation, HF Jobs run, scoring, and figure
   stage_05_supplementary/lead_bias/    article-length and lead-bias analysis
-  reproduce_results.py                 reviewer-facing deterministic orchestrator
 artifacts/                              frozen API-, model-, and human-produced inputs
-results/                                deterministic figures, tables, and summaries
+results/                                locally generated, gitignored figures, tables, and summaries
 ```
 
-The historical research repository—including paper source, planning documents, abandoned experiments, notebooks, viewers, and development utilities—remains on `archive/research-complete` and is intentionally excluded from this branch.
+Generated outputs are created locally by the relevant scripts and are not version-controlled. The submitted PDF contains the final reported figures and results.
 
 ## Installation
 
@@ -30,29 +35,9 @@ python -m venv .venv
 python -m pip install -r requirements.txt
 ```
 
-The reviewer-facing reproduction command uses only local frozen artifacts. Dataset rebuilding and expensive experiment reruns have additional network, credential, and hardware requirements described below.
-
 ## Execution levels
 
-### 1. Reproduce results from frozen artifacts
-
-```bash
-python -m pipeline.reproduce_results
-```
-
-This command detects the frozen artifacts currently available and runs every supported deterministic analysis. It never calls an API, downloads data or model checkpoints, runs inference, or trains a model. Analyses whose frozen inputs are not currently available are skipped neutrally, while malformed present artifacts and real analysis errors still cause a nonzero exit.
-
-With the artifacts currently included, the command performs a partial reproduction: it regenerates the data-curation summary, curation funnel, curation-strata table, human-annotation summary, E4 rubric, blind-pairwise, and combined summaries, and the E4 figure. The curation funnel and strata table are reproducible from the distributed row ledger, and the E4 rubric and blind-pairwise results are reproducible from the distributed frozen artifacts. Analyses that require unavailable pilot or E1–E3 artifacts continue to be skipped. The human-validation JSON summarizes only the available human annotations; it does not report human–judge agreement.
-
-Generated files go only to:
-
-- `results/figures/`
-- `results/tables/`
-- `results/summaries/`
-
-The eight final-paper figures are committed at canonical paths. A partial run leaves a figure unchanged when its frozen inputs are unavailable; when those inputs are supplied, the command regenerates that same path.
-
-### 2. Rebuild the curated dataset
+### 1. Rebuild the curated dataset
 
 ```bash
 python -m pipeline.stage_01_data_curation.run
@@ -70,9 +55,7 @@ It may access Hugging Face and load the `dicta-il/dictalm2.0-instruct` tokenizer
 python -m pipeline.stage_01_data_curation.build_row_ledger
 ```
 
-### 3. Rerun expensive stages individually
-
-Expensive stages are exposed only where the archived repository provides the corresponding execution path. E1, E2, and E3 are reproduced from saved artifacts rather than rerun through a synthetic full-pipeline command.
+### 2. Rerun expensive stages individually
 
 Model-assisted curation:
 
@@ -108,7 +91,7 @@ python -m pipeline.stage_04_training_experiment.submit --arm curated
 python -m pipeline.stage_04_training_experiment.score
 ```
 
-These commands may require `OPENAI_API_KEY`, `GEMINI_API_KEY`, `HF_TOKEN`, GPU-backed Hugging Face Jobs, and significant time or cost. They are not part of normal result reproduction.
+These commands may require `OPENAI_API_KEY`, `GEMINI_API_KEY`, `HF_TOKEN`, GPU-backed Hugging Face Jobs, and significant time or cost.
 
 ## Frozen artifacts
 
@@ -127,23 +110,11 @@ Included now:
 - E4 blind-pairwise judgments: `artifacts/training_experiment/pairwise_judgments.jsonl`
 - E4 frozen summary: `artifacts/training_experiment/summary.json`
 
-Documented canonical destinations for frozen files that are not distributed in this repository:
-
-- `artifacts/reference_experiments/rubric_pilot.json`
-- `artifacts/reference_experiments/e1_rubric_scores.jsonl`
-- `artifacts/reference_experiments/e2_repair_summary.json`
-- `artifacts/reference_experiments/e3_pairwise.jsonl`
-- `artifacts/reference_experiments/e3_pairwise_summary.json`
-
-No placeholder data are committed for unavailable artifacts.
-
-### Dataset redistribution note
-
-`artifacts/data_curation/final_clean_hesum.json` is a curated derivative of the publicly hosted [`biunlp/HeSum`](https://huggingface.co/datasets/biunlp/HeSum) dataset and is included to support academic review and reproducibility of this project. The official HeSum dataset card does not currently specify an explicit dataset license. This repository does not claim ownership of, relicense, or grant additional rights to the underlying article text; users intending to redistribute or reuse that text should consult the official HeSum dataset page and the applicable original-source terms.
-
 ## Research workflow and models
 
 The paper studies data curation, a four-dimensional reference-quality instrument, E1 flagged-strata analysis, E2 paired repair, E3 blind preference, human validation, E4 matched fine-tuning, and supplementary lead-bias analysis.
+
+Additional project-related datasets, training runs, and model repositories are preserved under the `avreymi` Hugging Face account. The repositories used directly in the reported E4 experiment are listed below.
 
 - Dataset: [`biunlp/HeSum`](https://huggingface.co/datasets/biunlp/HeSum)
 - Curator: `gpt-5.6-luna`
