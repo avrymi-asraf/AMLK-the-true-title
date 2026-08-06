@@ -42,7 +42,7 @@ python -m pipeline.reproduce_results
 
 This command detects the frozen artifacts currently available and runs every supported deterministic analysis. It never calls an API, downloads data or model checkpoints, runs inference, or trains a model. Analyses whose frozen inputs are not currently available are skipped neutrally, while malformed present artifacts and real analysis errors still cause a nonzero exit.
 
-With the artifacts currently included, the command performs a partial reproduction: it regenerates `results/summaries/data_curation.json` and `results/summaries/human_validation.json` and skips analyses that require unavailable E1–E4 artifacts. The human-validation JSON summarizes only the available human annotations; it does not report human–judge agreement.
+With the artifacts currently included, the command performs a partial reproduction: it regenerates the data-curation and human-annotation summaries together with the E4 rubric, blind-pairwise, and combined summaries and the E4 figure. E4 rubric and blind-pairwise results are reproducible from the distributed frozen artifacts; analyses that require unavailable row labels, pilot outputs, or E1–E3 artifacts continue to be skipped. The human-validation JSON summarizes only the available human annotations; it does not report human–judge agreement.
 
 Generated files go only to:
 
@@ -120,6 +120,11 @@ Included now:
 - headline curation/repair decisions: `artifacts/data_curation/headline_target_curation_results.json`
 - curated HeSum dataset: `artifacts/data_curation/final_clean_hesum.json`
 - frozen human-validation worklist and three completed annotation files under `artifacts/reference_experiments/human_validation/`
+- uncleaned-arm E4 predictions: `artifacts/training_experiment/predictions_uncleaned.jsonl`
+- curated-arm E4 predictions: `artifacts/training_experiment/predictions_curated.jsonl`
+- E4 rubric scores: `artifacts/training_experiment/rubric_scores.jsonl`
+- E4 blind-pairwise judgments: `artifacts/training_experiment/pairwise_judgments.jsonl`
+- E4 frozen summary: `artifacts/training_experiment/summary.json`
 
 Documented canonical destinations for frozen files that are not distributed in this repository:
 
@@ -129,7 +134,6 @@ Documented canonical destinations for frozen files that are not distributed in t
 - `artifacts/reference_experiments/e2_repair_summary.json`
 - `artifacts/reference_experiments/e3_pairwise.jsonl`
 - `artifacts/reference_experiments/e3_pairwise_summary.json`
-- E4 predictions, rubric scores, pairwise judgments, and summary under `artifacts/training_experiment/`
 
 No placeholder data are committed for unavailable artifacts.
 

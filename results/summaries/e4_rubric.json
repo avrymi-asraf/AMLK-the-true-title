@@ -1,0 +1,105 @@
+{
+  "instrument": "rubric_v1",
+  "judge_model": "gemini-2.5-flash-lite",
+  "judge_temperature": 0.0,
+  "dimensions": [
+    "faithfulness",
+    "single_focus",
+    "informativeness",
+    "cleanliness"
+  ],
+  "n_pairs": 120,
+  "pointwise": {
+    "n_pairs_attempted": 120,
+    "by_dimension": {
+      "faithfulness": {
+        "n_pairs": 120,
+        "raw_mean": 3.6,
+        "curated_mean": 4.092,
+        "mean_delta_curated_minus_raw": 0.492,
+        "cliffs_delta_curated_vs_raw": 0.2011,
+        "cliffs_ci": [
+          0.0719,
+          0.3381
+        ],
+        "ci_excludes_0": true
+      },
+      "single_focus": {
+        "n_pairs": 120,
+        "raw_mean": 3.85,
+        "curated_mean": 3.958,
+        "mean_delta_curated_minus_raw": 0.108,
+        "cliffs_delta_curated_vs_raw": 0.0309,
+        "cliffs_ci": [
+          -0.1017,
+          0.151
+        ],
+        "ci_excludes_0": false
+      },
+      "informativeness": {
+        "n_pairs": 120,
+        "raw_mean": 3.9,
+        "curated_mean": 4.333,
+        "mean_delta_curated_minus_raw": 0.433,
+        "cliffs_delta_curated_vs_raw": 0.1923,
+        "cliffs_ci": [
+          0.063,
+          0.3224
+        ],
+        "ci_excludes_0": true
+      },
+      "cleanliness": {
+        "n_pairs": 120,
+        "raw_mean": 3.117,
+        "curated_mean": 2.925,
+        "mean_delta_curated_minus_raw": -0.192,
+        "cliffs_delta_curated_vs_raw": -0.0603,
+        "cliffs_ci": [
+          -0.1951,
+          0.0777
+        ],
+        "ci_excludes_0": false
+      }
+    },
+    "raw_faithfulness_mean": 3.6,
+    "curated_faithfulness_mean": 4.092,
+    "faithfulness_mean_delta_curated_minus_raw": 0.492,
+    "faithfulness_cliffs_delta_curated_vs_raw": 0.2011,
+    "faithfulness_cliffs_ci": [
+      0.0719,
+      0.3381
+    ],
+    "faithfulness_ci_excludes_0": true,
+    "n_faithfulness_pairs": 120,
+    "raw_single_focus_mean": 3.85,
+    "curated_single_focus_mean": 3.958,
+    "single_focus_mean_delta_curated_minus_raw": 0.108,
+    "single_focus_cliffs_delta_curated_vs_raw": 0.0309,
+    "single_focus_cliffs_ci": [
+      -0.1017,
+      0.151
+    ],
+    "single_focus_ci_excludes_0": false,
+    "n_single_focus_pairs": 120,
+    "raw_informativeness_mean": 3.9,
+    "curated_informativeness_mean": 4.333,
+    "informativeness_mean_delta_curated_minus_raw": 0.433,
+    "informativeness_cliffs_delta_curated_vs_raw": 0.1923,
+    "informativeness_cliffs_ci": [
+      0.063,
+      0.3224
+    ],
+    "informativeness_ci_excludes_0": true,
+    "n_informativeness_pairs": 120,
+    "raw_cleanliness_mean": 3.117,
+    "curated_cleanliness_mean": 2.925,
+    "cleanliness_mean_delta_curated_minus_raw": -0.192,
+    "cleanliness_cliffs_delta_curated_vs_raw": -0.0603,
+    "cleanliness_cliffs_ci": [
+      -0.1951,
+      0.0777
+    ],
+    "cleanliness_ci_excludes_0": false,
+    "n_cleanliness_pairs": 120
+  }
+}
