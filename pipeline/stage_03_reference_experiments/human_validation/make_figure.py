@@ -1,6 +1,6 @@
-"""F6 appendix figure: pooled human-vs-judge rubric closeness (upper panel only).
+"""Generate the final human-versus-judge rubric-agreement figure.
 
-Reads `human_validation_summary.json` and renders within ±1 ordinal point and exact-match
+Reads `results/summaries/human_validation.json` and renders within ±1 ordinal point and exact-match
 agreement between three pooled annotators (disjoint subsets) and the automated rubric judge.
 Pairwise preference is not plotted here — paper Figure 5 (E3 win rate) is the sole pairwise
 figure. Local, CPU-only — Plotly + kaleido.
@@ -87,7 +87,8 @@ def build_f6_human_validation(summary: dict) -> go.Figure:
 def main() -> None:
     if not SUMMARY_PATH.exists():
         raise SystemExit(
-            f"Missing {SUMMARY_PATH}. Run human_validation_results.py after annotations are collected."
+            f"Missing {SUMMARY_PATH}. Run "
+            "`python -m pipeline.stage_03_reference_experiments.human_validation.summarize`."
         )
     summary = load_json(SUMMARY_PATH)
     fig = build_f6_human_validation(summary)

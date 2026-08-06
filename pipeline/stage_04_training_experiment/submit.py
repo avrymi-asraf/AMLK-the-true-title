@@ -1,7 +1,8 @@
 """Submit one final-paper E4 LoRA arm to Hugging Face Jobs.
 
 This is the only supported E4 launcher. It submits the self-contained
-``train_and_generate.py`` body with the exact matched-arm configuration.
+`pipeline.stage_04_training_experiment.train_and_generate` body with the exact matched-arm
+configuration.
 """
 
 from __future__ import annotations

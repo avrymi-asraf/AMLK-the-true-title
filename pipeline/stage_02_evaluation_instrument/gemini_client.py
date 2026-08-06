@@ -1,7 +1,7 @@
-"""
-Shared Gemini API helpers for the evaluation pipeline (predict.py, evaluate.py,
-error_analysis.py). Kept separate from predict.py so judge/baseline code can import
-call_with_retry and GEMINI_MODEL without pulling in datasets (load_from_disk).
+"""Provide shared Gemini API configuration and retry support.
+
+The retained rubric, pairwise evaluation instrument, and expensive E4 scoring stages use these
+helpers without importing dataset preparation or model-training dependencies.
 
 Execution environment: local machine with GEMINI_API_KEY set.
 """
@@ -11,8 +11,8 @@ import time
 
 # gemini-2.5-flash-lite, not 2.5-flash: full 2.5-flash "thinks" before answering (~7s/call
 # measured), which makes the ~4000-call evaluation battery take ~10h on HF Jobs. The -lite
-# variant has no thinking step (~1s/call measured), ~6x faster, and is still a capable
-# advanced baseline + judge.
+# variant has no thinking step (~1s/call measured), ~6x faster, and retains the required judge
+# capability.
 GEMINI_MODEL = "gemini-2.5-flash-lite"
 # Per-request deadline (seconds) for every generate_content call.
 GEMINI_TIMEOUT = 60
@@ -22,7 +22,7 @@ JUDGE_GENERATION_CONFIG = {"temperature": 0.0}
 
 
 def strip_think(text: str) -> str:
-    """Drop Qwen3 reasoning blocks so metrics score the summary, not the reasoning.
+    """Drop reasoning blocks so metrics score the summary rather than hidden reasoning.
 
     Only well-formed (closed) blocks are removed. A truncated, unclosed block is left as-is
     so its low score reflects that real failure instead of being hidden.

@@ -133,6 +133,10 @@ Documented canonical destinations for frozen files that are not distributed in t
 
 No placeholder data are committed for unavailable artifacts.
 
+### Dataset redistribution note
+
+`artifacts/data_curation/final_clean_hesum.json` is a curated derivative of the publicly hosted [`biunlp/HeSum`](https://huggingface.co/datasets/biunlp/HeSum) dataset and is included to support academic review and reproducibility of this project. The official HeSum dataset card does not currently specify an explicit dataset license. This repository does not claim ownership of, relicense, or grant additional rights to the underlying article text; users intending to redistribute or reuse that text should consult the official HeSum dataset page and the applicable original-source terms.
+
 ## Research workflow and models
 
 The paper studies data curation, a four-dimensional reference-quality instrument, E1 flagged-strata analysis, E2 paired repair, E3 blind preference, human validation, E4 matched fine-tuning, and supplementary lead-bias analysis.

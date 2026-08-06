@@ -83,7 +83,7 @@ def apply_house_style(
 ) -> go.Figure:
     """Apply the shared editorial layout: bold left-aligned title, optional muted subtitle
     directly beneath it, optional small source note pinned bottom-right. Every figure in
-    `figures.py` should route through this instead of setting layout ad hoc.
+    retained figure builders should call this instead of setting layout ad hoc.
     """
     title_spec: dict = {"text": f"<b>{title}</b>"}
     if subtitle:

@@ -1,10 +1,8 @@
-"""Hebrew E4 summarization prompt and DictaLM chat-template helpers.
-Preprocess stores raw `build_prompt` text; train and inference wrap with
-`format_chat_prompt` (dictalm2.0-instruct needs [INST]…[/INST]). Single source of truth
-for instruct formatting — no per-arm branches. Free of datasets/transformers imports so
-API-only scripts can import build_prompt on minimal builds.
+"""Define the Hebrew summarization prompt and DictaLM chat-template helpers used by E4.
 
-Execution environment: imported locally by preprocess, train, and evaluation helpers.
+`pipeline.stage_04_training_experiment.prepare_data` stores raw `build_prompt` text, while the
+self-contained training job mirrors `format_chat_prompt` for training and inference. The shared
+prompt has no per-arm branches and this module remains free of dataset and Transformers imports.
 """
 # Fine-tuned student budget used by both final E4 arms. The earlier
 # 15-word / 1-sentence winner was tuned on the zero-shot base; at 15 words a fine-tuned model

@@ -1,6 +1,8 @@
-"""E3 forced-choice judge: blind head-to-head comparison of two headlines for the same article.
-Shared by `repair_pairwise_run.py` (E3) and future E4 arm comparisons. Family-separated from
-the curator (OpenAI) and training bases, same as `rubric_judge.py`. Local, API-bound, CPU-only.
+"""Provide the blind pairwise judge used by the retained E3 and E4 scoring workflows.
+
+The Gemini judge compares two headlines for the same article without provenance labels. It belongs
+to a different model family than the OpenAI curator and the DictaLM E4 training base. Execution is
+local, API-bound, and CPU-only.
 """
 
 from __future__ import annotations

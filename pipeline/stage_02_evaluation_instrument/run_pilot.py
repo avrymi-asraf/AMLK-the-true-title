@@ -1,12 +1,13 @@
-"""Pilot the Reference Quality Rubric judge on a stratified sample before the full E1 pass.
+"""Evaluate the Reference Quality Rubric judge on the stratified pilot sample.
 
 It samples across the four testable analysis strata (S0 clean, S2 multi_pipe_headline, S3
 multiple_independent_items, S4 headline_rewritten), scores each row's ORIGINAL headline once, then
 re-scores a subsample at nonzero temperature for test-retest reliability (quadratically weighted
 kappa per dimension).
 Reports per-dimension score distributions so a degenerate rubric (e.g. everything a 4 or 5) is caught
-before spending judge budget at scale. Anchor rows (`rubric_anchors.ANCHOR_HESUM_IDS`) are excluded
-from sampling so they cannot validate an instrument they were used to build. Local, API-bound
+before corpus-scale scoring. Anchor rows
+(`pipeline.stage_02_evaluation_instrument.rubric_anchors.ANCHOR_HESUM_IDS`) are excluded from
+sampling so they cannot validate an instrument they were used to build. Local, API-bound
 (GEMINI_API_KEY required), CPU-only — no GPU, no local model load.
 
 Run:

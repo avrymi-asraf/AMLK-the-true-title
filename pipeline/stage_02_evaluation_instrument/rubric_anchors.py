@@ -1,10 +1,10 @@
-"""Hand-picked Hebrew worked examples (score levels 1/3/5) for each rubric dimension, consumed by
-`evaluation/rubric_judge.py` to build the judge prompt for E1-E4. Per the design spec (section 10,
-step 3) and the rubric doc's "Hebrew anchor examples" protocol, anchors must be drawn from rows
-**excluded from every downstream analysis** so they cannot leak into the numbers they help produce.
-`ANCHOR_HESUM_IDS` is the exclusion list that `data_curation/analysis/rubric_pilot.py` and the future
-full E1 pass must both filter out of `row_labels.json` before sampling. Local, no GPU/API — this
-module is pure data.
+"""Define Hebrew worked examples for the four-dimensional reference-quality rubric.
+
+`pipeline.stage_02_evaluation_instrument.rubric_judge` uses score-level 1/3/5 examples to build the
+judge prompt. Anchor rows must be excluded from every downstream evaluation so they cannot leak
+into the results they help calibrate. `ANCHOR_HESUM_IDS` supplies that exclusion set to
+`pipeline.stage_02_evaluation_instrument.run_pilot` and the retained E1 analysis workflow under
+`pipeline.stage_03_reference_experiments`. This module is pure data and requires no API or GPU.
 
 Each of the 9 source rows was read in full from the tail-trimmed HeSum working data
 (ids: 1, 4, 54, 94, 126, 228, 419, 1639, 1727) before being summarized here; `article_context` is a
@@ -207,8 +207,7 @@ ANCHORS: dict[str, dict[int, dict[str, str]]] = {
 }
 
 # Every hesum_id used as an anchor, across all dimensions and levels, deduplicated. These rows must
-# be excluded from every E1-E4 analysis pass so the anchor set can never leak into a result it helped
-# calibrate.
+# be excluded from downstream evaluation so the anchor set cannot leak into a result it calibrated.
 ANCHOR_HESUM_IDS: frozenset[str] = frozenset(
     example["hesum_id"]
     for levels in ANCHORS.values()

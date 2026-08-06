@@ -92,7 +92,7 @@ def validate_train_dataset(
     validation: hf_datasets.Dataset,
     test: hf_datasets.Dataset,
 ) -> None:
-    """Keep the archived schema, pairing, and leakage checks."""
+    """Validate the final E4 schema, pairing, and leakage safeguards."""
     for split_name, dataset in (("train", train), ("validation", validation), ("test", test)):
         if len(dataset) == 0:
             raise ValueError(f"{split_name} split is empty")

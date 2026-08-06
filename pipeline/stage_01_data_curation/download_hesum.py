@@ -1,9 +1,8 @@
 """Download and normalize the original HeSum dataset.
 
-This is stage 1 of the data-curation pipeline (see `CURATION_ROADMAP.md`): the entry point that
-turns the external `biunlp/HeSum` Hub dataset into the stable, locally-owned `raw_hesum.json`
-every later stage (tail trimming, the two deterministic filters, model curation) builds on.
-Runs locally, CPU-only, network-bound.
+This acquisition entry point turns the external `biunlp/HeSum` Hub dataset into the normalized
+working file consumed by tail trimming, deterministic filtering, and model-assisted curation.
+It runs locally, is CPU-only, and requires network access.
 
 Run:
     python -m pipeline.stage_01_data_curation.download_hesum

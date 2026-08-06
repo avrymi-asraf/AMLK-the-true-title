@@ -1,8 +1,7 @@
 """Materialize the leakage-safe uncleaned E4 training pool.
 
-Sibling to data/download.py (which is curated-only by design). The paper's E4
-compares two SFT runs that differ only in which corpus they train on; this module
-builds the uncleaned arm's source for the shared E4 preprocessing stage.
+The paper's E4 compares two SFT runs that differ only in their training corpus. This module builds
+the uncleaned-arm input for the shared preprocessing stage.
 
 Reads the curation working copy of raw HeSum, excludes curated val+test hesum_ids
 (so raw train never sees evaluation articles), drops exact-duplicate texts, samples
@@ -104,13 +103,13 @@ def curated_held_out_ids(
 ) -> set[str]:
     """Reproduce the curated 80/10/10 split on ids only; return val ∪ test ids.
 
-    preprocess.build_train_dataset drops hesum_id, so we cannot read held-out ids
-    from saved Arrow splits. train_test_split partitions by index from the seed,
+    `pipeline.stage_04_training_experiment.prepare_data.build_train_dataset` drops `hesum_id`, so
+    held-out ids cannot be read from saved Arrow splits. `train_test_split` partitions by index from the seed,
     so a Dataset with the same row order and seed yields the same partition
     regardless of which columns it carries.
     """
     path = curated_path if curated_path is not None else resolve_curated_json()
-    # Same filter/order as data.download.load_curated_json.
+    # Use the same normalization and row order as `prepare_curated_data.load_curated_json`.
     recs = load_curated_json(path)
     if not recs:
         raise ValueError(f"No usable curated records in {path}")

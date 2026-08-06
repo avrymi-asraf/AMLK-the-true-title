@@ -1,16 +1,12 @@
 """Normalize the curated HeSum artifact for the E4 curated training arm.
 
-The only training corpus is the main-branch data_curation product
-(`final_clean_hesum.json`: rows of {hesum_id, text, headline}). This module
-loads that JSON, normalizes each row to the pipeline contract
-{text, summary, source, hesum_id}, and writes
-`outputs/training_experiment/curated/curated_records.jsonl` for the next stage.
-The default input is `artifacts/data_curation/final_clean_hesum.json`.
+This module reads `artifacts/data_curation/final_clean_hesum.json`, whose rows contain
+`{hesum_id, text, headline}`, normalizes them to the E4 training contract
+`{text, summary, source, hesum_id}`, and writes
+`outputs/training_experiment/curated/curated_records.jsonl`.
 
-Curation itself (source filter + headline target rewrite) is NOT re-run here —
-those artifacts live on the main worktree / were supplied offline. This repo
-only consumes the clean result and turns it into a HuggingFace training dataset
-via `prepare_data`.
+Curation itself is not rerun here. The normalized records become the curated-arm input to
+`pipeline.stage_04_training_experiment.prepare_data`.
 
 Run: python -m pipeline.stage_04_training_experiment.prepare_curated_data
 Execution environment: local development machine, CPU only.

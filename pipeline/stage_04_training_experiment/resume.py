@@ -1,8 +1,7 @@
-"""
-Hub / local full-Trainer checkpoint helpers for cross-job resume.
+"""Provide Hub and local full-Trainer checkpoint helpers for cross-job resume.
 
-Role: pure-Python API used by submit.py and mirrored inside the self-contained
-remote job body. Code flow: list Hub files →
+This pure-Python API is used by `pipeline.stage_04_training_experiment.submit` and mirrored inside
+the self-contained remote job body. The flow is: list Hub files →
 filter complete checkpoint-* dirs → pick auto/exact name → materialize or train
 with resume_from_checkpoint. Execution environment: local CLI and HF Jobs CPU
 submit path; no GPU required.

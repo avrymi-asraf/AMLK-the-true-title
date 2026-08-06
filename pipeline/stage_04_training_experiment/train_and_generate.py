@@ -12,13 +12,13 @@
 #     "wandb",
 # ]
 # ///
-"""
-Final E4 job body: self-contained LoRA fine-tuning of
-dicta-il/dictalm2.0-instruct on Hugging Face Jobs.
+"""Run the self-contained final E4 LoRA training and prediction job.
+
+The job fine-tunes `dicta-il/dictalm2.0-instruct` on Hugging Face Jobs.
 Never run directly. All settings arrive as environment variables.
 
 Hyperparameters come from the TRAIN_CONFIG and LORA_CONFIG values serialized by
-``submit.py``.
+`pipeline.stage_04_training_experiment.submit`.
 Train and serve both apply the model chat template (C0); generation tokenizes with
 add_special_tokens=False to avoid double-BOS (C1).
 
@@ -68,7 +68,7 @@ INFERENCE_ONLY = os.environ.get("INFERENCE_ONLY", "0") == "1"
 #   "checkpoint-N" → that exact dir
 RESUME_FROM = (os.environ.get("RESUME_FROM") or "").strip()
 PRED_SUFFIX = os.environ.get("PRED_SUFFIX", "")
-# One epoch per run by default (override via EPOCHS env / train.py --epochs).
+# One epoch per run by default; `pipeline.stage_04_training_experiment.submit` supplies EPOCHS.
 EPOCHS = int(os.environ.get("EPOCHS") or 1)
 if EPOCHS != 1:
     raise ValueError("The final E4 configuration uses exactly one training epoch")
@@ -77,7 +77,8 @@ OUTPUT_DIR = os.environ.get("OUTPUT_DIR") or "/data/output"
 # Dataset download directory on Hugging Face Jobs.
 DATA_DIR = os.environ.get("DATA_DIR") or "./data"
 # Base checkpoint and slug are duplicated because this file is submitted as a
-# self-contained remote job. submit.py passes both values through the environment.
+# self-contained remote job. `pipeline.stage_04_training_experiment.submit` passes both values
+# through the environment.
 # Do NOT derive the slug with .replace(".", "-") alone: dictalm2.0-instruct would
 # become dictalm2-0-instruct and drift from wandb/Hub naming.
 MODEL_ID = os.environ.get("BASE_MODEL") or "dicta-il/dictalm2.0-instruct"
@@ -88,7 +89,8 @@ WANDB_RUN_NAME = os.environ.get("WANDB_RUN_NAME") or "_".join(
 )
 os.environ["WANDB_PROJECT"] = WANDB_PROJECT
 
-# Defaults match the final LoRA configuration serialized by submit.py.
+# Defaults match the final LoRA configuration serialized by
+# `pipeline.stage_04_training_experiment.submit`.
 _DEFAULT_TRAIN = {
     "quantize": False,
     "use_lora": True,
@@ -125,7 +127,8 @@ use_lora = bool(TRAIN_CFG["use_lora"])
 if quantize or not use_lora:
     raise ValueError("Training must use the final bf16 LoRA configuration")
 # Inference-only always 4-bit: bf16 7B + gen batch left no KV headroom on a10g (22 GB) —
-# dual-arm OOM'd on first batch (job 6a678afb, GEN_BATCH_SIZE=8). Matches infer.py quantize=True.
+# dual-arm OOM'd on first batch (job 6a678afb, GEN_BATCH_SIZE=8). This matches the final
+# inference-only configuration.
 if INFERENCE_ONLY:
     quantize = True
 
@@ -335,13 +338,14 @@ if TEST_SUBSET_N and TEST_SUBSET_N < len(test_ds):
 tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
-# Self-contained equivalent of prompts.prepare_tokenizer_for_templated_prompts.
+# Self-contained equivalent of
+# `pipeline.stage_04_training_experiment.prompts.prepare_tokenizer_for_templated_prompts`.
 if getattr(tokenizer, "chat_template", None) and hasattr(tokenizer, "add_bos_token"):
     tokenizer.add_bos_token = False
 
 
 def format_chat_prompt(prompt: str) -> str:
-    """Self-contained equivalent of prompts.format_chat_prompt.
+    """Mirror `pipeline.stage_04_training_experiment.prompts.format_chat_prompt`.
 
     Applies the model chat template for train and both inference arms. Does not
     inject family-specific control tokens; enable_thinking=False is attempted for
@@ -454,7 +458,7 @@ else:
         hub_model_id=OUTPUT_REPO,
         # all_checkpoints (not every_save): every_save only copies adapter weights to the
         # repo root; resume needs checkpoint-N/{optimizer,trainer_state,adapter}. SoftHub
-        # wraps push so Hub I/O OSError cannot kill the epoch (E4 curated death mode).
+        # wraps push so Hub I/O OSError cannot kill the epoch (the observed curated-arm failure).
         hub_strategy="all_checkpoints",
         hub_private_repo=True,
         num_train_epochs=n_epochs,

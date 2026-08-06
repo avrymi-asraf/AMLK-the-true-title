@@ -1,12 +1,11 @@
-"""The Reference Quality Rubric judge used as the measurement instrument behind E1-E4.
+"""Implement the shared four-dimensional Reference Quality Rubric judge.
 
-Reads a Hebrew article
-and one headline, blind to stratum or provenance, and returns four ordinal 1-to-5 sub-scores -
-faithfulness, single-focus, informativeness, cleanliness - plus a one-sentence justification per
-dimension. Reused unchanged across the dataset-review scripts (`data_curation/analysis/rubric_pilot.py`
-today, the full E1-E3 passes later) and E4's model-output scoring, so dataset quality and model
-quality land on one axis. Family separation: the judge is Gemini, distinct from the curator
-(`gpt-5.6-luna`, OpenAI) and from the Qwen/DictaLM training base models.
+The judge reads a Hebrew article and one headline, blind to stratum or provenance, and returns
+ordinal 1-to-5 scores for faithfulness, single focus, informativeness, and cleanliness, plus a
+one-sentence justification per dimension. The retained evaluation instrument and E4 scoring
+workflow use the same rubric so reference and model-output quality share one measurement scale.
+The Gemini judge belongs to a different model family than both the OpenAI curator and the DictaLM
+E4 training base.
 
 Execution environment: local machine with GEMINI_API_KEY set. API-bound but CPU-only (no GPU, no
 local model load), per the design spec's compute-placement rules.
@@ -66,10 +65,9 @@ DIMENSION_QUESTIONS = {
     "cleanliness": "Is it free of scraping artifacts?",
 }
 
-# Character cap on the article text sent to the judge, matching the existing judge-prompt convention
-# in evaluation/evaluate.py (JUDGE_PROMPT truncates to 6000 chars). Gemini's context window does not
-# require this, but every one of 10,000 rows repeats the ~1,400-word anchor block below, so capping
-# article length keeps per-call cost and latency predictable at that scale.
+# Character cap on the article text sent to the judge. Gemini's context window does not require
+# this, but every scored row repeats the ~1,400-word anchor block, so capping article length keeps
+# per-call cost and latency predictable at corpus scale.
 ARTICLE_CHAR_LIMIT = 6000
 
 _JSON_OBJECT_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -133,7 +131,7 @@ def _parse_judge_reply(raw: str) -> dict:
 
     Returns an empty dict (rather than raising) on any parse failure, so one bad reply skips that
     row at run time instead of crashing a 10,000-row pass; callers are expected to check for missing
-    dimensions and report a scored/attempted count, the same convention as evaluation/evaluate.py.
+    dimensions and report a scored/attempted count.
     """
     match = _JSON_OBJECT_RE.search(raw)
     if not match:
@@ -157,8 +155,8 @@ def _parse_judge_reply(raw: str) -> dict:
 def score_headline(article: str, headline: str, model=None, temperature: float | None = None) -> dict:
     """Score one (article, headline) pair on all four rubric dimensions.
 
-    `model` accepts an already-constructed `genai.GenerativeModel` so callers scoring many rows (the
-    pilot, the full E1 pass) build it once instead of per call. Returns
+    `model` accepts an already-constructed `genai.GenerativeModel` so callers scoring many rows
+    build it once instead of per call. Returns
     {dimension: {"score": int, "justification": str}} for every dimension the judge answered; a
     dimension is simply absent if parsing failed for it, never a default score. Also returns {} (no
     retry) if Gemini's safety filter blocks the prompt (empty `response.candidates`, seen in practice
